@@ -1,4 +1,5 @@
 import { LogoFull, LogoMark } from "@/components/Logo";
+import { FlowSection } from "@/components/FlowSection";
 import { BASKETS, formatWeight } from "@/lib/baskets";
 
 const PILLARS = [
@@ -192,6 +193,9 @@ export default function Page() {
           </div>
         </div>
       </section>
+
+      {/* ======================================================== [03] Flow */}
+      <FlowSection />
     </>
   );
 }
