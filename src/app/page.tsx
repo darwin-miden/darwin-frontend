@@ -38,6 +38,44 @@ const PILLARS = [
   },
 ];
 
+const MILESTONES = [
+  {
+    id: "M1",
+    title: "Core Layer",
+    desc: "Private Execution Account · Pragma Oracle · AggLayer · 3 baskets on testnet.",
+    progress: "10 / 10  ▰▰▰▰▰▰▰▰▰▰",
+    status: { label: "Shipped", cls: "live" },
+  },
+  {
+    id: "M2",
+    title: "Near Intent + Audit",
+    desc: "Relay wallet (Miden Guardian) · in-protocol DEX rebalancing · third-party audit.",
+    progress: "07 / 10  ▰▰▰▰▰▰▰▱▱▱",
+    status: { label: "In flight", cls: "live" },
+  },
+  {
+    id: "M3",
+    title: "Mainnet + Frontend",
+    desc: "Day-one mainnet deploy · client-side proving in the browser · public launch.",
+    progress: "02 / 10  ▰▰▱▱▱▱▱▱▱▱",
+    status: { label: "Next", cls: "next" },
+  },
+];
+
+const MARQUEE_TOKENS = [
+  "DCC · Core Crypto",
+  "DAG · Aggressive",
+  "DCO · Conservative",
+  "WBTC / USD",
+  "ETH / USD",
+  "USDT / USD",
+  "DAI / USD",
+  "Pragma Oracle",
+  "AggLayer ▸ ETH ▸ Miden",
+  "Near Intent",
+  "Miden Guardian",
+];
+
 export default function Page() {
   return (
     <>
@@ -196,6 +234,93 @@ export default function Page() {
 
       {/* ======================================================== [03] Flow */}
       <FlowSection />
+
+      {/* ======================================================== [04] Roadmap */}
+      <section className="block" id="roadmap">
+        <div className="container">
+          <div className="block-header">
+            <div className="left rise d1">
+              <span className="section-tag"><span className="tag-num">[04]</span> Roadmap</span>
+            </div>
+            <div className="rise d2">
+              <h2 className="headline">From M1 to mainnet.</h2>
+              <p className="lead" style={{ marginTop: 16 }}>
+                Three milestones from the Darwin × Miden grant. Spec, build, audit, ship.
+              </p>
+            </div>
+          </div>
+
+          <div className="milestones rise d3">
+            {MILESTONES.map((m) => (
+              <div key={m.id} className="milestone">
+                <span className="milestone-id">{m.id}</span>
+                <span className="milestone-title">
+                  {m.title}
+                  <span className="desc">{m.desc}</span>
+                </span>
+                <span className="progress">{m.progress}</span>
+                <span className={`status ${m.status.cls}`}>{m.status.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ======================================================== marquee */}
+      <div className="marquee" aria-hidden>
+        <div className="marquee-track">
+          {[...MARQUEE_TOKENS, ...MARQUEE_TOKENS].map((t, i) => (
+            <span className="marquee-item" key={i}>
+              <span className="dot" /> {t}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* ======================================================== footer */}
+      <footer>
+        <div className="container">
+          <div className="footer-grid">
+            <div className="footer-brand">
+              <LogoFull style={{ height: 26 }} />
+              <p>
+                Confidential basket protocol on Miden. Built for the Darwin × Miden
+                grant, M1 → M3.
+              </p>
+            </div>
+            <div className="footer-col">
+              <h4>Protocol</h4>
+              <ul>
+                <li><a href="#protocol">What</a></li>
+                <li><a href="#baskets">Baskets</a></li>
+                <li><a href="#flow">Flow</a></li>
+                <li><a href="#roadmap">Roadmap</a></li>
+              </ul>
+            </div>
+            <div className="footer-col">
+              <h4>Source</h4>
+              <ul>
+                <li><a href="https://github.com/darwin-miden" target="_blank" rel="noreferrer">GitHub org ↗</a></li>
+                <li><a href="https://github.com/darwin-miden/darwin-docs" target="_blank" rel="noreferrer">darwin-docs ↗</a></li>
+                <li><a href="https://github.com/darwin-miden/darwin-protocol" target="_blank" rel="noreferrer">darwin-protocol ↗</a></li>
+                <li><a href="https://github.com/darwin-miden/darwin-sdk" target="_blank" rel="noreferrer">darwin-sdk ↗</a></li>
+              </ul>
+            </div>
+            <div className="footer-col">
+              <h4>Contact</h4>
+              <ul>
+                <li><a href="https://t.me/dyonisos10" target="_blank" rel="noreferrer">Telegram</a></li>
+                <li><a href="mailto:hello@darwin.xyz">hello@darwin.xyz</a></li>
+                <li><a href="https://miden.xyz" target="_blank" rel="noreferrer">miden.xyz ↗</a></li>
+              </ul>
+            </div>
+          </div>
+          <div className="footer-bottom">
+            <span>© 2026 Darwin Protocol</span>
+            <span>Confidential by default</span>
+          </div>
+        </div>
+      </footer>
     </>
   );
 }
