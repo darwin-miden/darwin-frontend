@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+
 import { NavBar } from "../../../components/NavBar";
 import { DepositPanel } from "../../../components/DepositPanel";
 import {
@@ -12,9 +13,11 @@ import {
 import {
   DEPLOYED_ACCOUNTS,
   MIDENSCAN_BASE,
-  POOL_FUNDING,
 } from "../../../lib/testnet-state";
-import { basketBySymbolUpper } from "../../../lib/contracts";
+import {
+  basketBySymbolUpper,
+  sepoliaAddressUrl,
+} from "../../../lib/contracts";
 
 export function generateStaticParams() {
   return BASKETS.map((b) => ({ symbol: b.symbol.toLowerCase() }));
@@ -38,19 +41,32 @@ export async function generateMetadata({
   }
 }
 
-function midenscanAccount(id: string) {
-  return `${MIDENSCAN_BASE}/account/${id}`;
-}
+const ASSET_DISPLAY: Record<string, { label: string; emoji: string }> = {
+  "darwin-eth": { label: "Ethereum", emoji: "Ξ" },
+  "darwin-wbtc": { label: "Bitcoin", emoji: "₿" },
+  "darwin-usdt": { label: "USDT", emoji: "$" },
+  "darwin-dai": { label: "DAI", emoji: "$" },
+};
 
-function txUrl(id: string) {
-  return `${MIDENSCAN_BASE}/tx/${id}`;
-}
-
-const ASSET_TO_FAUCET_ALIAS: Record<string, string> = {
-  dWBTC: "darwin-wbtc",
-  dETH: "darwin-eth",
-  dUSDT: "darwin-usdt",
-  dDAI: "darwin-dai",
+const FLAVOUR: Record<
+  BasketSymbol,
+  { tagline: string; risk: string; riskColor: string }
+> = {
+  DCC: {
+    tagline: "Blue-chip BTC + ETH with a stable buffer",
+    risk: "balanced",
+    riskColor: "#3aa05a",
+  },
+  DAG: {
+    tagline: "Pure BTC + ETH, full crypto exposure",
+    risk: "aggressive",
+    riskColor: "#d23f3f",
+  },
+  DCO: {
+    tagline: "Mostly stables, light crypto. Capital preservation.",
+    risk: "conservative",
+    riskColor: "#3a6aa0",
+  },
 };
 
 export default async function BasketDetailPage({
@@ -60,26 +76,19 @@ export default async function BasketDetailPage({
 }) {
   const { symbol } = await params;
   const symU = symbol.toUpperCase();
-
   if (symU !== "DCC" && symU !== "DAG" && symU !== "DCO") {
     notFound();
   }
   const basket = basketBySymbol(symU as BasketSymbol);
+  const flavour = FLAVOUR[basket.symbol];
+  const ethBasket = basketBySymbolUpper(basket.symbol);
 
-  const tokenFaucet = DEPLOYED_ACCOUNTS.find(
-    (a) => a.role === "basket-faucet" && a.symbol === basket.symbol,
+  const v2Controller = DEPLOYED_ACCOUNTS.find((a) =>
+    a.label.includes("v2 controller"),
   );
-  const stubController = DEPLOYED_ACCOUNTS.find(
-    (a) => a.role === "controller" && a.symbol === basket.symbol,
+  const v4Controller = DEPLOYED_ACCOUNTS.find((a) =>
+    a.label.includes("v4 controller"),
   );
-  const v2Controller = DEPLOYED_ACCOUNTS.find(
-    (a) => a.label.includes("v2 controller"),
-  );
-  const v3Controller = DEPLOYED_ACCOUNTS.find(
-    (a) => a.label.includes("v3 controller"),
-  );
-
-  const funding = POOL_FUNDING.filter((p) => p.basket === basket.symbol);
 
   return (
     <>
@@ -97,205 +106,82 @@ export default async function BasketDetailPage({
           ← all baskets
         </Link>
 
-        <div className="section-tag" style={{ marginTop: 18 }}>
-          <span className="tag-num">{basket.symbol}</span>
-          {basket.name}
-        </div>
-
-        <h1
-          style={{
-            fontSize: "clamp(2rem, 4vw, 3rem)",
-            margin: "20px 0 8px",
-            letterSpacing: "-0.015em",
-            lineHeight: 1.05,
-          }}
-        >
-          {basket.name}{" "}
-          <em style={{ color: "var(--ink-3)", fontWeight: 400 }}>
-            ({basket.symbol})
-          </em>
-        </h1>
-        <p
-          style={{
-            color: "var(--ink-2)",
-            maxWidth: 720,
-            fontSize: 17,
-            lineHeight: 1.55,
-            margin: "8px 0 0",
-          }}
-        >
-          {basket.description}
-        </p>
-
-        {/* Deposit panel (real Sepolia tx via wagmi). Skipped if the
-            basket isn't in the Sepolia BasketRegistry (shouldn't
-            happen for DCC/DAG/DCO). */}
-        {(() => {
-          const ethBasket = basketBySymbolUpper(basket.symbol);
-          return ethBasket ? <DepositPanel basket={ethBasket} /> : null;
-        })()}
-
-        {/* Constituents */}
-        <section style={{ marginTop: 56 }}>
-          <h2
-            style={{
-              fontSize: 14,
-              fontFamily: "var(--font-mono-stack)",
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-              borderBottom: "1px solid var(--ink)",
-              paddingBottom: 8,
-              marginBottom: 20,
-            }}
-          >
-            Target weights
-          </h2>
+        {/* Header */}
+        <div style={{ marginTop: 22 }}>
           <div
             style={{
               display: "flex",
-              height: 32,
-              border: "1px solid var(--ink)",
-              overflow: "hidden",
+              alignItems: "baseline",
+              gap: 14,
+              marginBottom: 8,
+              flexWrap: "wrap",
             }}
           >
-            {basket.constituents.map((c, i) => (
-              <div
-                key={c.faucetAlias}
-                title={`${c.faucetAlias} ${formatWeight(c.targetWeightBps)}`}
-                style={{
-                  flexGrow: c.targetWeightBps,
-                  flexBasis: 0,
-                  background:
-                    i % 2 === 0
-                      ? "var(--ink)"
-                      : "color-mix(in srgb, var(--orange) 80%, var(--ink) 20%)",
-                  color: "var(--paper)",
-                  fontFamily: "var(--font-mono-stack)",
-                  fontSize: 11,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  letterSpacing: "0.05em",
-                }}
-              >
-                {c.faucetAlias.replace("darwin-", "")} {formatWeight(c.targetWeightBps)}
-              </div>
-            ))}
+            <h1
+              style={{
+                fontSize: "clamp(2rem, 4vw, 3rem)",
+                margin: 0,
+                letterSpacing: "-0.015em",
+                lineHeight: 1.05,
+              }}
+            >
+              {basket.name}
+            </h1>
+            <span
+              style={{
+                fontFamily: "var(--font-mono-stack)",
+                fontSize: 14,
+                color: "var(--ink-3)",
+              }}
+            >
+              {basket.symbol}
+            </span>
+            <span
+              style={{
+                fontFamily: "var(--font-mono-stack)",
+                fontSize: 11,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                color: flavour.riskColor,
+                border: `1px solid ${flavour.riskColor}`,
+                padding: "2px 8px",
+                borderRadius: 2,
+              }}
+            >
+              {flavour.risk}
+            </span>
+          </div>
+          <p
+            style={{
+              color: "var(--ink-2)",
+              maxWidth: 720,
+              fontSize: 17,
+              lineHeight: 1.55,
+              margin: "8px 0 0",
+            }}
+          >
+            {flavour.tagline}.
+          </p>
+        </div>
+
+        {/* Two-column layout: deposit panel + what's inside */}
+        <div
+          style={{
+            marginTop: 40,
+            display: "grid",
+            gridTemplateColumns: "1.3fr 1fr",
+            gap: 32,
+          }}
+        >
+          <div>
+            {ethBasket ? (
+              <DepositPanel basket={ethBasket} />
+            ) : (
+              <p style={{ color: "var(--ink-3)" }}>Deposit not yet wired for this basket.</p>
+            )}
           </div>
 
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: 14,
-              marginTop: 20,
-            }}
-          >
-            <thead>
-              <tr
-                style={{
-                  borderBottom: "1px solid var(--rule)",
-                  color: "var(--ink-3)",
-                  fontSize: 11,
-                  fontFamily: "var(--font-mono-stack)",
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
-                }}
-              >
-                <th style={{ textAlign: "left", padding: "10px 12px" }}>
-                  Asset
-                </th>
-                <th style={{ textAlign: "left", padding: "10px 12px" }}>
-                  Pragma pair
-                </th>
-                <th style={{ textAlign: "right", padding: "10px 12px" }}>
-                  Weight
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {basket.constituents.map((c) => (
-                <tr
-                  key={c.faucetAlias}
-                  style={{ borderBottom: "1px solid var(--rule-2)" }}
-                >
-                  <td style={{ padding: "12px" }}>
-                    <code>{c.faucetAlias}</code>
-                  </td>
-                  <td style={{ padding: "12px" }}>
-                    <code>{c.pragmaPair}</code>
-                  </td>
-                  <td
-                    style={{
-                      padding: "12px",
-                      textAlign: "right",
-                      fontFamily: "var(--font-mono-stack)",
-                    }}
-                  >
-                    {formatWeight(c.targetWeightBps)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-
-        {/* Deployed accounts */}
-        <section style={{ marginTop: 56 }}>
-          <h2
-            style={{
-              fontSize: 14,
-              fontFamily: "var(--font-mono-stack)",
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-              borderBottom: "1px solid var(--ink)",
-              paddingBottom: 8,
-              marginBottom: 20,
-            }}
-          >
-            On-chain backing
-          </h2>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-              gap: 16,
-            }}
-          >
-            {tokenFaucet && (
-              <DeployCard
-                title="Basket-token faucet"
-                subtitle={tokenFaucet.label}
-                id={tokenFaucet.accountId}
-              />
-            )}
-            {stubController && (
-              <DeployCard
-                title="v1 controller (stub)"
-                subtitle="header-only, M1 deliverable #1"
-                id={stubController.accountId}
-              />
-            )}
-            {v2Controller && (
-              <DeployCard
-                title="v2 controller (shared)"
-                subtitle="real bodies + receive_asset"
-                id={v2Controller.accountId}
-              />
-            )}
-            {v3Controller && (
-              <DeployCard
-                title="v3 controller (storage-aware)"
-                subtitle="M2 read_pool_position"
-                id={v3Controller.accountId}
-              />
-            )}
-          </div>
-        </section>
-
-        {/* Pool funding for this basket */}
-        {funding.length > 0 && (
-          <section style={{ marginTop: 56 }}>
+          <aside>
             <h2
               style={{
                 fontSize: 14,
@@ -304,16 +190,152 @@ export default async function BasketDetailPage({
                 textTransform: "uppercase",
                 borderBottom: "1px solid var(--ink)",
                 paddingBottom: 8,
-                marginBottom: 20,
+                marginBottom: 16,
+                marginTop: 0,
               }}
             >
-              Pool funding — primary mints
+              What&apos;s inside
             </h2>
+
+            {/* Weight bar */}
+            <div
+              style={{
+                display: "flex",
+                height: 28,
+                border: "1px solid var(--ink)",
+                overflow: "hidden",
+                marginBottom: 12,
+              }}
+            >
+              {basket.constituents.map((c, i) => (
+                <div
+                  key={c.faucetAlias}
+                  title={`${ASSET_DISPLAY[c.faucetAlias]?.label ?? c.faucetAlias} ${formatWeight(c.targetWeightBps)}`}
+                  style={{
+                    flexGrow: c.targetWeightBps,
+                    flexBasis: 0,
+                    background:
+                      i % 2 === 0
+                        ? "var(--ink)"
+                        : "color-mix(in srgb, var(--orange) 80%, var(--ink) 20%)",
+                    color: "var(--paper)",
+                    fontFamily: "var(--font-mono-stack)",
+                    fontSize: 11,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  {formatWeight(c.targetWeightBps)}
+                </div>
+              ))}
+            </div>
+
+            <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0 }}>
+              {basket.constituents.map((c) => {
+                const meta = ASSET_DISPLAY[c.faucetAlias] ?? {
+                  label: c.faucetAlias,
+                  emoji: "•",
+                };
+                return (
+                  <li
+                    key={c.faucetAlias}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      padding: "8px 0",
+                      borderBottom: "1px solid var(--rule-2)",
+                      fontSize: 15,
+                    }}
+                  >
+                    <span>
+                      <span
+                        style={{
+                          display: "inline-block",
+                          width: 22,
+                          color: "var(--orange)",
+                          fontFamily: "var(--font-mono-stack)",
+                          fontSize: 16,
+                        }}
+                      >
+                        {meta.emoji}
+                      </span>
+                      {meta.label}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: "var(--font-mono-stack)",
+                        color: "var(--ink-2)",
+                      }}
+                    >
+                      {formatWeight(c.targetWeightBps)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </aside>
+        </div>
+
+        {/* Collapsible technical details */}
+        <details style={{ marginTop: 56 }}>
+          <summary
+            style={{
+              cursor: "pointer",
+              fontFamily: "var(--font-mono-stack)",
+              fontSize: 12,
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              color: "var(--ink-3)",
+              paddingBottom: 12,
+              borderBottom: "1px solid var(--rule)",
+            }}
+          >
+            ▸ Technical details (for grant reviewers + developers)
+          </summary>
+
+          <div style={{ marginTop: 24 }}>
+            <h3 style={{ fontSize: 14, margin: "0 0 12px" }}>On-chain contracts</h3>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                gap: 16,
+              }}
+            >
+              {ethBasket && (
+                <ContractCard
+                  title="Sepolia ERC20"
+                  subtitle={`${basket.symbol} (the token your wallet sees)`}
+                  address={ethBasket.tokenAddress}
+                  href={sepoliaAddressUrl(ethBasket.tokenAddress)}
+                />
+              )}
+              {v2Controller && (
+                <ContractCard
+                  title="Miden v2 controller"
+                  subtitle="Real-bodies controller (Flow A receive_asset)"
+                  address={v2Controller.accountId}
+                  href={`${MIDENSCAN_BASE}/account/${v2Controller.accountId}`}
+                />
+              )}
+              {v4Controller && (
+                <ContractCard
+                  title="Miden v4 controller"
+                  subtitle="Rebalance-aware (Flow B execute_rebalance_step)"
+                  address={v4Controller.accountId}
+                  href={`${MIDENSCAN_BASE}/account/${v4Controller.accountId}`}
+                />
+              )}
+            </div>
+
+            <h3 style={{ fontSize: 14, margin: "32px 0 12px" }}>Pragma pair mapping</h3>
             <table
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
-                fontSize: 13.5,
+                fontSize: 13,
               }}
             >
               <thead>
@@ -327,95 +349,88 @@ export default async function BasketDetailPage({
                     textTransform: "uppercase",
                   }}
                 >
-                  <th style={{ textAlign: "left", padding: "10px 12px" }}>
-                    Asset
-                  </th>
-                  <th style={{ textAlign: "right", padding: "10px 12px" }}>
-                    Amount
-                  </th>
-                  <th style={{ textAlign: "left", padding: "10px 12px" }}>
-                    Mint tx
-                  </th>
+                  <th style={{ textAlign: "left", padding: "8px 12px" }}>Asset</th>
+                  <th style={{ textAlign: "left", padding: "8px 12px" }}>Pragma pair</th>
+                  <th style={{ textAlign: "right", padding: "8px 12px" }}>Target weight</th>
                 </tr>
               </thead>
               <tbody>
-                {funding.map((p) => {
-                  const alias = ASSET_TO_FAUCET_ALIAS[p.asset];
-                  return (
-                    <tr
-                      key={p.mintTx}
-                      style={{ borderBottom: "1px solid var(--rule-2)" }}
+                {basket.constituents.map((c) => (
+                  <tr
+                    key={c.faucetAlias}
+                    style={{ borderBottom: "1px solid var(--rule-2)" }}
+                  >
+                    <td style={{ padding: "10px 12px" }}>
+                      <code>{c.faucetAlias}</code>
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <code>{c.pragmaPair}</code>
+                    </td>
+                    <td
+                      style={{
+                        padding: "10px 12px",
+                        textAlign: "right",
+                        fontFamily: "var(--font-mono-stack)",
+                      }}
                     >
-                      <td style={{ padding: "10px 12px" }}>
-                        {p.asset}
-                        {alias && (
-                          <span
-                            style={{
-                              marginLeft: 8,
-                              fontFamily: "var(--font-mono-stack)",
-                              fontSize: 11,
-                              color: "var(--ink-3)",
-                            }}
-                          >
-                            {alias}
-                          </span>
-                        )}
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px 12px",
-                          textAlign: "right",
-                          fontFamily: "var(--font-mono-stack)",
-                        }}
-                      >
-                        {p.amount.toLocaleString()}
-                      </td>
-                      <td style={{ padding: "10px 12px" }}>
-                        <a
-                          href={txUrl(p.mintTx)}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{
-                            fontFamily: "var(--font-mono-stack)",
-                            fontSize: 12,
-                            borderBottom: "1px dotted var(--rule)",
-                          }}
-                        >
-                          {p.mintTx.slice(0, 18)}…
-                        </a>
-                      </td>
-                    </tr>
-                  );
-                })}
+                      {formatWeight(c.targetWeightBps)}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
-          </section>
-        )}
+
+            <p
+              style={{
+                marginTop: 16,
+                fontSize: 12,
+                color: "var(--ink-3)",
+                lineHeight: 1.55,
+              }}
+            >
+              Operator drift dashboard + rebalance trigger live at{" "}
+              <Link
+                href="/admin/drift"
+                style={{ borderBottom: "1px dotted var(--rule)" }}
+              >
+                /admin/drift
+              </Link>
+              . Every Sepolia + Miden account at{" "}
+              <Link href="/accounts" style={{ borderBottom: "1px dotted var(--rule)" }}>
+                /accounts
+              </Link>
+              .
+            </p>
+          </div>
+        </details>
       </main>
     </>
   );
 }
 
-function DeployCard({
+function ContractCard({
   title,
   subtitle,
-  id,
+  address,
+  href,
 }: {
   title: string;
   subtitle: string;
-  id: string;
+  address: string;
+  href: string;
 }) {
   return (
     <a
-      href={midenscanAccount(id)}
+      href={href}
       target="_blank"
       rel="noreferrer"
       style={{
         display: "block",
-        padding: "16px 18px",
+        padding: "14px 16px",
         background: "var(--paper-2)",
         borderLeft: "3px solid var(--orange)",
         textDecoration: "none",
+        color: "inherit",
       }}
     >
       <div
@@ -423,32 +438,25 @@ function DeployCard({
           fontFamily: "var(--font-mono-stack)",
           fontSize: 11,
           letterSpacing: "0.1em",
-          color: "var(--ink-3)",
           textTransform: "uppercase",
+          color: "var(--ink-3)",
         }}
       >
         {title}
       </div>
-      <div
-        style={{
-          marginTop: 4,
-          fontSize: 14.5,
-          fontWeight: 500,
-          color: "var(--ink)",
-        }}
-      >
+      <div style={{ marginTop: 2, fontSize: 13, color: "var(--ink)" }}>
         {subtitle}
       </div>
       <div
         style={{
-          marginTop: 8,
+          marginTop: 6,
           fontFamily: "var(--font-mono-stack)",
-          fontSize: 12,
+          fontSize: 11.5,
           color: "var(--ink-2)",
           wordBreak: "break-all",
         }}
       >
-        {id}
+        {address}
       </div>
     </a>
   );
