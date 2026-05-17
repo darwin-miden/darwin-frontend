@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { NavBar } from "../../components/NavBar";
+import { LiveNavBadge } from "../../components/LiveNavBadge";
 import { BASKETS, type Basket, formatWeight } from "../../lib/baskets";
 
 export const metadata: Metadata = {
@@ -177,6 +178,9 @@ function BasketCard({ basket }: { basket: Basket }) {
       <p style={{ margin: 0, color: "var(--ink-2)", fontSize: 14, lineHeight: 1.5 }}>
         {flavour.tagline}.
       </p>
+      <div style={{ marginTop: 10 }}>
+        <LiveNavBadge symbol={basket.symbol} />
+      </div>
 
       <div style={{ marginTop: 20 }}>
         <div
