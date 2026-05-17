@@ -16,11 +16,13 @@
  */
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { BASKETS, type Basket, formatWeight } from "../../lib/baskets";
 import {
   planRebalance,
   type ConstituentSnapshot,
 } from "../../lib/rebalance";
+import { NavBar } from "../../components/NavBar";
 
 const ORACLE_PRICES_X1E8: Record<string, bigint> = {
   "darwin-eth": 200_000_000_000n,
@@ -77,6 +79,8 @@ export default function BasketsPage() {
   }, [skew]);
 
   return (
+    <>
+    <NavBar active="baskets" />
     <main
       style={{
         minHeight: "100vh",
@@ -143,7 +147,15 @@ export default function BasketsPage() {
               }}
             >
               <div>
-                <strong style={{ fontSize: "1.1rem" }}>{basket.name}</strong>
+                <Link
+                  href={`/baskets/${basket.symbol.toLowerCase()}`}
+                  style={{
+                    color: "inherit",
+                    borderBottom: "1px dotted var(--rule)",
+                  }}
+                >
+                  <strong style={{ fontSize: "1.1rem" }}>{basket.name}</strong>
+                </Link>
                 <code
                   style={{
                     marginLeft: "0.6rem",
@@ -152,6 +164,16 @@ export default function BasketsPage() {
                 >
                   {basket.symbol}
                 </code>
+                <Link
+                  href={`/baskets/${basket.symbol.toLowerCase()}`}
+                  style={{
+                    marginLeft: "0.8rem",
+                    fontSize: "0.8rem",
+                    color: "#666",
+                  }}
+                >
+                  view detail →
+                </Link>
               </div>
               <div style={{ color: status.color, fontWeight: 600 }}>
                 {status.emoji} {status.label} — max drift {maxDrift} bps
@@ -243,5 +265,6 @@ export default function BasketsPage() {
         from each controller's StorageMap slot 2 (Track C).
       </footer>
     </main>
+    </>
   );
 }
