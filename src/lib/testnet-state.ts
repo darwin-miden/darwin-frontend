@@ -316,3 +316,104 @@ export const M1_DELIVERABLES: M1Deliverable[] = [
     ],
   },
 ];
+
+export const M2_DELIVERABLES: M1Deliverable[] = [
+  {
+    id: "1",
+    title: "Near Intent + relay wallet (Miden Guardian) functional on testnet",
+    status: "in-flight",
+    evidence: [
+      "substituted by Darwin's own darwin-relay (escrow + Rust service) since Near Intents has no Miden destination chain + Guardian is a state coordinator, not a relay",
+      "DarwinRelayDeposit.sol live on Sepolia at 0x7e5279AD…7c93",
+      "Miden relay wallet provisioned: 0x9e7c22c3…fa41",
+      "5 autonomous live runs recorded — last one (200 USDC → DAG) settled in 65s with zero retries",
+      "clarification email sent to Miden team on the Guardian-as-relay reading",
+    ],
+  },
+  {
+    id: "2",
+    title: "Rebalancing live on Miden: drift detection → DEX swap → portfolio updated",
+    status: "in-flight",
+    evidence: [
+      "rebalance_bot --live reads real Pragma prices for all 3 baskets",
+      "Flow B trigger note 0x6d77db31… consumed by v4 controller, block 782152",
+      "v4 controller's execute_rebalance_step at MAST root 0xddff122f…84c53",
+      "swap execution leg waits on Miden in-protocol DEX or a Uniswap/1inch fallback on the ETH side",
+    ],
+  },
+  {
+    id: "3",
+    title: "Flow A + B + C fully functional on testnet",
+    status: "shipped",
+    evidence: [
+      "Flow A atomic note 0xb4407ef8…3b36563, consume tx 0x2e211adf… block 703322",
+      "Flow B trigger note 0x6d77db31…1e27fe, consume tx 0xaf8521f24c… block 782152",
+      "Flow C atomic redeem 0xb9797a4b…655cb0, consume tx 0x005c4eec… block 777149",
+      "Flow A ETH-user variant via darwin-relay autonomous Sepolia → Mock-Miden Settled (65s)",
+    ],
+  },
+  {
+    id: "4",
+    title: "Full end-to-end test report (Flows A + B + C)",
+    status: "shipped",
+    evidence: [
+      "darwin-docs/docs/m2-status.md, 200+ lines",
+      "262 green tests across all repos (Foundry + Rust + Vitest)",
+      "Cross-flow trace table with note ids + tx hashes",
+      "Tag v0.2.0-m2 pushed on every M2 repo",
+    ],
+  },
+];
+
+/**
+ * ETH-side deployment registry (Sepolia). Mirrors
+ * darwin-relay/state/sepolia.toml.
+ */
+export interface SepoliaContract {
+  label: string;
+  address: string;
+  role: "relay" | "stablecoin" | "strategy" | "basket-token";
+  notes?: string;
+}
+
+export const SEPOLIA_CONTRACTS: SepoliaContract[] = [
+  {
+    label: "DarwinRelayDeposit",
+    role: "relay",
+    address: "0x7e5279AD0d9F7fB8884562C336Fa6d78DCbf7c93",
+    notes:
+      "ETH-side escrow. User deposits, relay claims + bridges + confirms.",
+  },
+  {
+    label: "MockUSDC",
+    role: "stablecoin",
+    address: "0x6dAb940a4E1d434965E22e9F6d624fF68F6922a0",
+    notes:
+      "6-decimal stable mirror for the deposit currency. Permissionless mint via .mint(to, amount).",
+  },
+  {
+    label: "DarwinStrategy",
+    role: "strategy",
+    address: "0x635E19c61CD09d145D57A88cE8185Ddf27fA356F",
+    notes:
+      "Per-basket strategy registry: token list, target weights (bps), fees, drift threshold.",
+  },
+  {
+    label: "DarwinBasketToken DCC",
+    role: "basket-token",
+    address: "0x1EB7Bd808402824232853e66DF6843D68462B7A4",
+    notes: "ERC20 minted by the relay on a successful deposit into DCC.",
+  },
+  {
+    label: "DarwinBasketToken DAG",
+    role: "basket-token",
+    address: "0x73F18087dd45d180e75cADcD383479624326E336",
+    notes: "ERC20 minted by the relay on a successful deposit into DAG.",
+  },
+  {
+    label: "DarwinBasketToken DCO",
+    role: "basket-token",
+    address: "0x6344469eB35Ff00d5892fD368727ad3C9E45677c",
+    notes: "ERC20 minted by the relay on a successful deposit into DCO.",
+  },
+];

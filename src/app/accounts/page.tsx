@@ -4,6 +4,7 @@ import {
   DEPLOYED_ACCOUNTS,
   MIDENSCAN_BASE,
   MIDEN_RPC,
+  SEPOLIA_CONTRACTS,
   TESTNET_SNAPSHOT_TAKEN_AT,
   type DeployedAccount,
 } from "../../lib/testnet-state";
@@ -226,6 +227,102 @@ export default function AccountsPage() {
             </table>
           </section>
         ))}
+
+        <section style={{ marginTop: 64 }}>
+          <h2
+            style={{
+              fontSize: 14,
+              fontFamily: "var(--font-mono-stack)",
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              color: "var(--ink)",
+              borderBottom: "1px solid var(--ink)",
+              paddingBottom: 8,
+              marginBottom: 0,
+            }}
+          >
+            Sepolia stack · {SEPOLIA_CONTRACTS.length}
+          </h2>
+          <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 8 }}>
+            ETH-side contracts the relay reads + writes. M2 deliverable #1
+            (basket-token mint/burn + strategy storage + fees) +
+            DarwinRelayDeposit (the M2 substitution for Near Intent + Guardian).
+          </p>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: 14,
+            }}
+          >
+            <thead>
+              <tr
+                style={{
+                  borderBottom: "1px solid var(--rule)",
+                  color: "var(--ink-3)",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono-stack)",
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                }}
+              >
+                <th style={{ textAlign: "left", padding: "10px 12px" }}>Contract</th>
+                <th style={{ textAlign: "left", padding: "10px 12px" }}>Role</th>
+                <th style={{ textAlign: "left", padding: "10px 12px" }}>Address</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SEPOLIA_CONTRACTS.map((c) => (
+                <tr
+                  key={c.address}
+                  style={{ borderBottom: "1px solid var(--rule-2)" }}
+                >
+                  <td style={{ padding: "14px 12px", verticalAlign: "top" }}>
+                    <div style={{ fontWeight: 500 }}>{c.label}</div>
+                    {c.notes && (
+                      <div
+                        style={{
+                          fontSize: 12.5,
+                          color: "var(--ink-3)",
+                          marginTop: 4,
+                          maxWidth: 480,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {c.notes}
+                      </div>
+                    )}
+                  </td>
+                  <td
+                    style={{
+                      padding: "14px 12px",
+                      verticalAlign: "top",
+                      fontFamily: "var(--font-mono-stack)",
+                      fontSize: 12,
+                      color: "var(--ink-2)",
+                    }}
+                  >
+                    {c.role}
+                  </td>
+                  <td style={{ padding: "14px 12px", verticalAlign: "top" }}>
+                    <a
+                      href={`https://sepolia.etherscan.io/address/${c.address}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        fontFamily: "var(--font-mono-stack)",
+                        fontSize: 12.5,
+                        borderBottom: "1px dotted var(--rule)",
+                      }}
+                    >
+                      {c.address}
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
 
         <section style={{ marginTop: 64 }}>
           <div className="section-tag">

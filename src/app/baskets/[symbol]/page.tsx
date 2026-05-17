@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { NavBar } from "../../../components/NavBar";
+import { DepositPanel } from "../../../components/DepositPanel";
 import {
   BASKETS,
   basketBySymbol,
@@ -13,6 +14,7 @@ import {
   MIDENSCAN_BASE,
   POOL_FUNDING,
 } from "../../../lib/testnet-state";
+import { basketBySymbolUpper } from "../../../lib/contracts";
 
 export function generateStaticParams() {
   return BASKETS.map((b) => ({ symbol: b.symbol.toLowerCase() }));
@@ -124,6 +126,14 @@ export default async function BasketDetailPage({
         >
           {basket.description}
         </p>
+
+        {/* Deposit panel (real Sepolia tx via wagmi). Skipped if the
+            basket isn't in the Sepolia BasketRegistry (shouldn't
+            happen for DCC/DAG/DCO). */}
+        {(() => {
+          const ethBasket = basketBySymbolUpper(basket.symbol);
+          return ethBasket ? <DepositPanel basket={ethBasket} /> : null;
+        })()}
 
         {/* Constituents */}
         <section style={{ marginTop: 56 }}>

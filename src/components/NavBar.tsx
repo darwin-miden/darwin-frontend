@@ -1,4 +1,8 @@
+"use client";
+
 import Link from "next/link";
+import { ConnectKitButton } from "connectkit";
+
 import { LogoFull } from "./Logo";
 
 /**
@@ -6,7 +10,13 @@ import { LogoFull } from "./Logo";
  * .nav-logo, .nav-links, .nav-cta). The active page is passed in so
  * we can highlight it without a router subscription on the server.
  */
-export type NavKey = "home" | "baskets" | "accounts" | "flows" | "status";
+export type NavKey =
+  | "home"
+  | "baskets"
+  | "accounts"
+  | "flows"
+  | "status"
+  | "portfolio";
 
 export function NavBar({ active }: { active?: NavKey }) {
   const link = (key: NavKey, href: string, label: string) => (
@@ -31,18 +41,27 @@ export function NavBar({ active }: { active?: NavKey }) {
         </Link>
         <nav className="nav-links">
           {link("baskets", "/baskets", "Baskets")}
+          {link("portfolio", "/portfolio", "Portfolio")}
           {link("accounts", "/accounts", "Accounts")}
           {link("flows", "/flows", "Flows")}
           {link("status", "/status", "Status")}
         </nav>
-        <a
-          className="nav-cta"
-          href="https://github.com/darwin-miden"
-          target="_blank"
-          rel="noreferrer"
-        >
-          GitHub →
-        </a>
+        <ConnectKitButton.Custom>
+          {({ isConnected, isConnecting, show, address, ensName }) => (
+            <button
+              onClick={show}
+              className="nav-cta"
+              type="button"
+              style={{ minWidth: 140, textAlign: "center" }}
+            >
+              {isConnecting
+                ? "Connecting…"
+                : isConnected
+                ? (ensName ?? `${address?.slice(0, 6)}…${address?.slice(-4)}`)
+                : "Connect wallet"}
+            </button>
+          )}
+        </ConnectKitButton.Custom>
       </div>
     </header>
   );
