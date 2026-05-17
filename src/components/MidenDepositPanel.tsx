@@ -17,10 +17,15 @@
  */
 
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
-import { useSend, useSyncState } from "@miden-sdk/react";
+import {
+  useCompile,
+  useSyncState,
+  useTransaction,
+} from "@miden-sdk/react";
 import { useMemo, useState } from "react";
 
 import type { Basket } from "../lib/baskets";
+import { buildDarwinNoteRequest } from "../lib/midenNote";
 
 interface Props {
   basket: Basket;
@@ -47,7 +52,8 @@ const BASKET_CONTROLLER_ID: Record<string, string> = {
 export function MidenDepositPanel({ basket }: Props) {
   const { connected, address } = useMidenFiWallet();
   const { syncHeight } = useSyncState();
-  const { send, isLoading, stage, result, error } = useSend();
+  const compile = useCompile();
+  const tx = useTransaction();
 
   const assetOptions = useMemo(
     () =>
@@ -94,24 +100,31 @@ export function MidenDepositPanel({ basket }: Props) {
   const controllerId = BASKET_CONTROLLER_ID[basket.symbol];
 
   async function handleSend() {
-    if (!asset || !controllerId) return;
+    if (!asset || !controllerId || !address) return;
     const base = 10n ** BigInt(asset.decimals);
-    // parseFloat * 1e6 keeps 6 digits of precision then we scale to
-    // the asset's decimals — avoids losing dust on 18-dp tokens.
     const microHuman = BigInt(Math.floor(parseFloat(amount || "0") * 1_000_000));
     const units = (microHuman * base) / 1_000_000n;
     try {
-      await send({
-        from: address!,
-        to: controllerId,
-        assetId: asset.id,
-        amount: units,
-        noteType: "private",
+      await tx.execute({
+        accountId: address,
+        request: async () =>
+          buildDarwinNoteRequest(compile, {
+            kind: "atomic-deposit",
+            sender: address,
+            controller: controllerId,
+            faucetId: asset.id,
+            amount: units,
+          }),
       });
     } catch (e) {
-      console.error("miden send failed", e);
+      console.error("miden deposit failed", e);
     }
   }
+
+  const isLoading = tx.isLoading;
+  const stage = tx.stage;
+  const result = tx.result;
+  const error = tx.error;
 
   return (
     <div
@@ -133,10 +146,11 @@ export function MidenDepositPanel({ basket }: Props) {
           marginBottom: 14,
         }}
       >
-        Sign a P2ID note from your Miden wallet (
-        <code>{address.slice(0, 10)}…</code>) to the {basket.symbol} controller
-        (<code>{controllerId?.slice(0, 14)}…</code>). The controller consumes
-        the note and credits your basket-token position privately.
+        Compile <code>atomic_deposit_note.masm</code> in your browser,
+        wrap your asset, and submit a STARK-proved transaction from your
+        Miden wallet (<code>{address.slice(0, 10)}…</code>) to the{" "}
+        {basket.symbol} controller (
+        <code>{controllerId?.slice(0, 14)}…</code>).
       </p>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -191,9 +205,9 @@ export function MidenDepositPanel({ basket }: Props) {
           : `Deposit ${amount} ${asset?.label ?? ""} → ${basket.symbol}`}
       </button>
 
-      {result?.txId && (
+      {result?.transactionId && (
         <p style={{ marginTop: 10, fontSize: 12, color: "var(--ink-3)" }}>
-          Tx submitted: <code>{result.txId.slice(0, 16)}…</code>
+          Tx submitted: <code>{result.transactionId.slice(0, 16)}…</code>
         </p>
       )}
 

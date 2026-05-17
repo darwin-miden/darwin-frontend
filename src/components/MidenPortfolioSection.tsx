@@ -22,11 +22,16 @@
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import {
   useAccount,
+  useCompile,
   useConsume,
   useNotes,
+  useTransaction,
   useTransactionHistory,
   useSyncState,
 } from "@miden-sdk/react";
+import { useState } from "react";
+
+import { buildDarwinNoteRequest } from "../lib/midenNote";
 
 import {
   basketBySymbol,
@@ -125,6 +130,9 @@ export function MidenPortfolioSection() {
   const prices = usePrices();
   const notesQuery = useNotes({ accountId: address ?? undefined });
   const { consume, isLoading: consuming, stage: consumeStage } = useConsume();
+  const compile = useCompile();
+  const redeemTx = useTransaction();
+  const [burningSymbol, setBurningSymbol] = useState<string | null>(null);
 
   const basketBalances = BASKET_TOKEN_FAUCETS.map((b) => {
     const amount = accountResult.getBalance(b.id);
@@ -314,30 +322,123 @@ export function MidenPortfolioSection() {
         </tbody>
       </table>
 
-      <div
+      <h3
         style={{
-          marginTop: 24,
-          padding: "16px 20px",
-          background: "var(--paper-2)",
-          borderLeft: "3px solid var(--ink-3)",
+          marginTop: 32,
+          fontSize: 12,
+          fontFamily: "var(--font-mono-stack)",
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: "var(--ink-3)",
+          marginBottom: 10,
         }}
       >
-        <h3 style={{ margin: 0, fontSize: 14 }}>Redeem</h3>
-        <p
+        Redeem (burn basket-token, controller emits payout notes)
+      </h3>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: 10,
+        }}
+      >
+        {basketBalances.map((b) => {
+          const isBurning = burningSymbol === b.symbol && redeemTx.isLoading;
+          return (
+            <button
+              key={b.symbol}
+              disabled={b.amount === 0n || redeemTx.isLoading}
+              onClick={async () => {
+                if (!address || !b.controller) return;
+                setBurningSymbol(b.symbol);
+                try {
+                  // Burn the whole position as a first iteration —
+                  // partial redeems land once the note accepts a
+                  // user-supplied amount via advice inputs.
+                  await redeemTx.execute({
+                    accountId: address,
+                    request: () =>
+                      buildDarwinNoteRequest(compile, {
+                        kind: "atomic-redeem",
+                        sender: address,
+                        controller: b.controller!,
+                        faucetId: b.id,
+                        amount: b.amount,
+                      }),
+                  });
+                } catch (e) {
+                  console.error("miden redeem failed", e);
+                }
+              }}
+              style={{
+                padding: "10px 12px",
+                background:
+                  b.amount === 0n
+                    ? "var(--paper-2)"
+                    : isBurning
+                      ? "var(--ink-3)"
+                      : "var(--ink)",
+                color:
+                  b.amount === 0n
+                    ? "var(--ink-3)"
+                    : "var(--paper)",
+                border:
+                  b.amount === 0n
+                    ? "1px solid var(--rule)"
+                    : 0,
+                cursor: b.amount === 0n ? "not-allowed" : "pointer",
+                fontSize: 12,
+                textAlign: "left",
+              }}
+            >
+              <div style={{ fontWeight: 500 }}>
+                Burn all {b.symbol}
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  marginTop: 2,
+                  fontFamily: "var(--font-mono-stack)",
+                  opacity: 0.85,
+                }}
+              >
+                {isBurning
+                  ? `${redeemTx.stage ?? "redeeming"}…`
+                  : b.amount === 0n
+                    ? "no position"
+                    : `${fmtUnits(b.amount, b.decimals)} units`}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {redeemTx.error && (
+        <pre
           style={{
-            color: "var(--ink-2)",
-            fontSize: 13,
-            lineHeight: 1.55,
-            margin: "8px 0 0",
+            marginTop: 10,
+            padding: 10,
+            background: "#fff0f0",
+            fontSize: 11,
+            overflowX: "auto",
+            color: "#a01a1a",
           }}
         >
-          The browser-side redeem flow burns the basket-token and asks
-          the basket controller to emit one private payout note per
-          constituent. Wiring the custom note (compiled from
-          <code> RedeemNote.masp</code>, shipped via{" "}
-          <code>useCompile</code>) lands in the next release.
+          {String(redeemTx.error.message ?? redeemTx.error)}
+        </pre>
+      )}
+      {redeemTx.result?.transactionId && (
+        <p
+          style={{
+            marginTop: 8,
+            fontSize: 11,
+            color: "var(--ink-3)",
+            fontFamily: "var(--font-mono-stack)",
+          }}
+        >
+          redeem tx <code>{redeemTx.result.transactionId.slice(0, 18)}…</code>{" "}
+          — payout notes land in the Inbox below once committed.
         </p>
-      </div>
+      )}
 
       <section style={{ marginTop: 32 }}>
         <h3
