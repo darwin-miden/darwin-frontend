@@ -58,10 +58,12 @@ const BASKET_TOKEN_FAUCETS: { symbol: string; id: string; decimals: number }[] =
   { symbol: "DCO", id: "0xbe4efc6729eb3220423b7d6d6a0942", decimals: 8 },
 ];
 
-// v2 real-bodies controller — the one with a working `receive_asset`
-// that the atomic note's `call.X` resolves to. End-to-end verified
-// on testnet 2026-05-17 (tx 0xcffbb40778…200256ff @ block 792539).
-const REAL_BODIES_CONTROLLER_ID = "0x171f46fecf1bca8005ae068a8dfe77";
+// v2 real-bodies controller — the one with a working `receive_asset`.
+// Flow A end-to-end verified on testnet 2026-05-17:
+//   user tx     0x7116c2f0…45dc995 (block 792643)
+//   consumer tx 0xde449dfc…39e689ac (block 792643)
+//   note        0x24d9b1fc…7e22f09b
+const REAL_BODIES_CONTROLLER_ID = "0xa25aa0b00007688024b74b05a52aab";
 const BASKET_CONTROLLER_ID: Record<string, string> = {
   DCC: REAL_BODIES_CONTROLLER_ID,
   DAG: REAL_BODIES_CONTROLLER_ID,
