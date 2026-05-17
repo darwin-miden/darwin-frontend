@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { NavBar } from "../../components/NavBar";
 import {
   FLOW_A_EVENTS,
+  FLOW_B_EVENTS,
   FLOW_C_EVENTS,
   MIDENSCAN_BASE,
   POOL_FUNDING,
@@ -203,6 +204,26 @@ export default function FlowsPage() {
             Flow A · Atomic deposit · 100 dETH → v2 controller
           </h2>
           {FLOW_A_EVENTS.map((ev, i) => (
+            <EventCard key={ev.txId} ev={ev} n={i + 1} />
+          ))}
+        </section>
+
+        <section style={{ marginTop: 56 }}>
+          <h2
+            style={{
+              fontSize: 14,
+              fontFamily: "var(--font-mono-stack)",
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              color: "var(--ink)",
+              borderBottom: "1px solid var(--ink)",
+              paddingBottom: 8,
+              marginBottom: 20,
+            }}
+          >
+            Flow B · Rebalance trigger · zero-asset note → v4 controller
+          </h2>
+          {FLOW_B_EVENTS.map((ev, i) => (
             <EventCard key={ev.txId} ev={ev} n={i + 1} />
           ))}
         </section>
