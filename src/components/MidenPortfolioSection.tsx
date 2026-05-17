@@ -27,16 +27,30 @@ import {
 } from "@miden-sdk/react";
 
 // Same source of truth as MidenDepositPanel: testnet faucet IDs from
-// darwin-baskets/state/testnet.toml. Symbol + decimals make the
-// table render without an extra round-trip to `useAssetMetadata`.
+// the 2026-05-14 deploy (miden_testnet_state.md). Hardcoding symbol
+// + decimals avoids an extra round-trip to `useAssetMetadata`.
 const FAUCETS: { label: string; id: string; decimals: number }[] = [
-  { label: "dETH",  id: "0xa095d9b3831e96206ff70c2218a6a9", decimals: 6 },
-  { label: "dWBTC", id: "0x7a45cb24ada22120246bcf54196e12", decimals: 6 },
-  { label: "dUSDT", id: "0xd3789f451ddd4720602ba9eb1a268d", decimals: 6 },
-  { label: "dDAI",  id: "0xb526deb0408a29207e4f27ed57bf1a", decimals: 6 },
+  { label: "dETH",  id: "0xa095d9b3831e96206ff70c2218a6a9", decimals: 18 },
+  { label: "dWBTC", id: "0x7a45cb24ada22120246bcf54196e12", decimals: 8  },
+  { label: "dUSDT", id: "0xd3789f451ddd4720602ba9eb1a268d", decimals: 6  },
+  { label: "dDAI",  id: "0xb526deb0408a29207e4f27ed57bf1a", decimals: 18 },
 ];
 
-const V2_CONTROLLER_ID = "0xa25aa0b00007688024b74b05a52aab";
+// Basket-token faucets — what gets minted to the user when their
+// deposit settles. Reading these tells the user how much of each
+// basket they own on the Miden side.
+const BASKET_TOKEN_FAUCETS: { symbol: string; id: string; decimals: number }[] = [
+  { symbol: "DCC", id: "0x2066f2da1f91ba202af5251d39101c", decimals: 8 },
+  { symbol: "DAG", id: "0xfb6811fd6399df206d44f62800620d", decimals: 8 },
+  { symbol: "DCO", id: "0xbe4efc6729eb3220423b7d6d6a0942", decimals: 8 },
+];
+
+// Per-basket M1 controllers (RegularAccountUpdatable, private).
+const BASKET_CONTROLLER_ID: Record<string, string> = {
+  DCC: "0xaa20da7d98c2e29022510aa786948f",
+  DAG: "0x53c54781b7b091905a948b5e3f92fe",
+  DCO: "0xa3a0e023381d709060a19527e73f95",
+};
 
 function fmtUnits(amount: bigint, decimals: number): string {
   const base = 10n ** BigInt(decimals);
@@ -98,6 +112,12 @@ export function MidenPortfolioSection() {
   const balances = FAUCETS.map((f) => ({
     ...f,
     amount: accountResult.getBalance(f.id),
+  }));
+
+  const basketBalances = BASKET_TOKEN_FAUCETS.map((b) => ({
+    ...b,
+    amount: accountResult.getBalance(b.id),
+    controller: BASKET_CONTROLLER_ID[b.symbol],
   }));
 
   return (
@@ -183,6 +203,80 @@ export function MidenPortfolioSection() {
         </tbody>
       </table>
 
+      <h3
+        style={{
+          marginTop: 32,
+          fontSize: 12,
+          fontFamily: "var(--font-mono-stack)",
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: "var(--ink-3)",
+          marginBottom: 10,
+        }}
+      >
+        Basket positions (Miden basket-token faucets)
+      </h3>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+        <thead>
+          <tr
+            style={{
+              borderBottom: "1px solid var(--rule)",
+              color: "var(--ink-3)",
+              fontSize: 11,
+              fontFamily: "var(--font-mono-stack)",
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+            }}
+          >
+            <th style={{ textAlign: "left", padding: "10px 12px" }}>Basket</th>
+            <th style={{ textAlign: "right", padding: "10px 12px" }}>
+              Position
+            </th>
+            <th style={{ textAlign: "left", padding: "10px 12px" }}>
+              Controller
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {basketBalances.map((b) => (
+            <tr key={b.id} style={{ borderBottom: "1px solid var(--rule-2)" }}>
+              <td style={{ padding: "14px 12px", fontWeight: 500 }}>
+                {b.symbol}
+              </td>
+              <td
+                style={{
+                  padding: "14px 12px",
+                  textAlign: "right",
+                  fontFamily: "var(--font-mono-stack)",
+                  color: b.amount > 0n ? "var(--ink)" : "var(--ink-3)",
+                }}
+              >
+                {fmtUnits(b.amount, b.decimals)}
+              </td>
+              <td
+                style={{
+                  padding: "14px 12px",
+                  fontFamily: "var(--font-mono-stack)",
+                  fontSize: 12,
+                }}
+              >
+                <a
+                  href={`https://testnet.midenscan.com/account/${b.controller}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    color: "var(--ink-3)",
+                    borderBottom: "1px dotted var(--rule)",
+                  }}
+                >
+                  {b.controller?.slice(0, 14)}…
+                </a>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
       <div
         style={{
           marginTop: 24,
@@ -191,7 +285,7 @@ export function MidenPortfolioSection() {
           borderLeft: "3px solid var(--ink-3)",
         }}
       >
-        <h3 style={{ margin: 0, fontSize: 14 }}>Redeem from controller</h3>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Redeem</h3>
         <p
           style={{
             color: "var(--ink-2)",
@@ -200,20 +294,11 @@ export function MidenPortfolioSection() {
             margin: "8px 0 0",
           }}
         >
-          The v2 controller (
-          <code>{V2_CONTROLLER_ID.slice(0, 14)}…</code>) emits a private
-          payout note per constituent on redeem. The browser-side flow
-          (custom note from <code>RedeemNote.masp</code>) lands in the
-          next release. In the meantime, hit{" "}
-          <a
-            href={`https://testnet.midenscan.com/account/${V2_CONTROLLER_ID}`}
-            target="_blank"
-            rel="noreferrer"
-            style={{ borderBottom: "1px dotted var(--rule)" }}
-          >
-            the controller on Midenscan
-          </a>{" "}
-          to inspect open positions.
+          The browser-side redeem flow burns the basket-token and asks
+          the basket controller to emit one private payout note per
+          constituent. Wiring the custom note (compiled from
+          <code> RedeemNote.masp</code>, shipped via{" "}
+          <code>useCompile</code>) lands in the next release.
         </p>
       </div>
 

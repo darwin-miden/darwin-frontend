@@ -26,20 +26,23 @@ interface Props {
   basket: Basket;
 }
 
-// Asset faucet ids on Miden testnet, mirror of
-// darwin-baskets/state/testnet.toml. `useSend.assetId` accepts any
-// `AccountRef` form (hex, bech32, AccountId object).
-const ASSET_FAUCETS: Record<string, { label: string; id: string }> = {
-  "darwin-eth":  { label: "dETH",  id: "0xa095d9b3831e96206ff70c2218a6a9" },
-  "darwin-wbtc": { label: "dWBTC", id: "0x7a45cb24ada22120246bcf54196e12" },
-  "darwin-usdt": { label: "dUSDT", id: "0xd3789f451ddd4720602ba9eb1a268d" },
-  "darwin-dai":  { label: "dDAI",  id: "0xb526deb0408a29207e4f27ed57bf1a" },
+// Asset faucet ids on Miden testnet (deploy 2026-05-14), with real
+// decimals. `useSend.assetId` accepts any `AccountRef` form (hex,
+// bech32, AccountId object).
+const ASSET_FAUCETS: Record<string, { label: string; id: string; decimals: number }> = {
+  "darwin-eth":  { label: "dETH",  id: "0xa095d9b3831e96206ff70c2218a6a9", decimals: 18 },
+  "darwin-wbtc": { label: "dWBTC", id: "0x7a45cb24ada22120246bcf54196e12", decimals: 8  },
+  "darwin-usdt": { label: "dUSDT", id: "0xd3789f451ddd4720602ba9eb1a268d", decimals: 6  },
+  "darwin-dai":  { label: "dDAI",  id: "0xb526deb0408a29207e4f27ed57bf1a", decimals: 18 },
 };
 
-// v2 controller is the one with `receive_asset`; the M3 deposit
-// targets it directly (Flow A Path 2). Source:
-// darwin-baskets/state/testnet.toml.
-const V2_CONTROLLER_ID = "0xa25aa0b00007688024b74b05a52aab";
+// Per-basket M1 controllers on Miden testnet (RegularAccountUpdatable,
+// private storage). Source: miden_testnet_state.md (2026-05-14).
+const BASKET_CONTROLLER_ID: Record<string, string> = {
+  DCC: "0xaa20da7d98c2e29022510aa786948f",
+  DAG: "0x53c54781b7b091905a948b5e3f92fe",
+  DCO: "0xa3a0e023381d709060a19527e73f95",
+};
 
 export function MidenDepositPanel({ basket }: Props) {
   const { connected, address } = useMidenFiWallet();
@@ -50,7 +53,9 @@ export function MidenDepositPanel({ basket }: Props) {
     () =>
       basket.constituents
         .map((c) => ASSET_FAUCETS[c.faucetAlias])
-        .filter((a): a is { label: string; id: string } => Boolean(a)),
+        .filter((a): a is { label: string; id: string; decimals: number } =>
+          Boolean(a),
+        ),
     [basket],
   );
 
@@ -86,21 +91,24 @@ export function MidenDepositPanel({ basket }: Props) {
     );
   }
 
+  const controllerId = BASKET_CONTROLLER_ID[basket.symbol];
+
   async function handleSend() {
-    if (!asset) return;
+    if (!asset || !controllerId) return;
+    const base = 10n ** BigInt(asset.decimals);
+    // parseFloat * 1e6 keeps 6 digits of precision then we scale to
+    // the asset's decimals — avoids losing dust on 18-dp tokens.
+    const microHuman = BigInt(Math.floor(parseFloat(amount || "0") * 1_000_000));
+    const units = (microHuman * base) / 1_000_000n;
     try {
-      // Faucets are 6-decimal mocks; convert the human input to base
-      // units before passing to `send`.
       await send({
         from: address!,
-        to: V2_CONTROLLER_ID,
+        to: controllerId,
         assetId: asset.id,
-        amount: BigInt(Math.floor(parseFloat(amount || "0") * 1_000_000)),
+        amount: units,
         noteType: "private",
       });
     } catch (e) {
-      // useSend already surfaces this through `error`; the throw is
-      // for the browser console only.
       console.error("miden send failed", e);
     }
   }
@@ -126,9 +134,9 @@ export function MidenDepositPanel({ basket }: Props) {
         }}
       >
         Sign a P2ID note from your Miden wallet (
-        <code>{address.slice(0, 10)}…</code>) to the v2 basket controller.
-        The controller consumes the note and credits your basket-token
-        position privately.
+        <code>{address.slice(0, 10)}…</code>) to the {basket.symbol} controller
+        (<code>{controllerId?.slice(0, 14)}…</code>). The controller consumes
+        the note and credits your basket-token position privately.
       </p>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
