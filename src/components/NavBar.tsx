@@ -1,9 +1,27 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ConnectKitButton } from "connectkit";
 
 import { LogoFull } from "./Logo";
+
+// Loaded client-side only — the Miden SDK pulls in the WASM bundle.
+const MidenConnectButton = dynamic(
+  () => import("./MidenConnectButton").then((m) => m.MidenConnectButton),
+  {
+    ssr: false,
+    loading: () => (
+      <button
+        className="nav-cta"
+        type="button"
+        style={{ minWidth: 140, opacity: 0.5, textAlign: "center" }}
+      >
+        Miden…
+      </button>
+    ),
+  },
+);
 
 /**
  * Shared top nav. Uses globals.css design tokens (.nav, .nav-inner,
@@ -44,22 +62,25 @@ export function NavBar({ active }: { active?: NavKey }) {
           {link("accounts", "/accounts", "Accounts")}
           {link("flows", "/flows", "Flows")}
         </nav>
-        <ConnectKitButton.Custom>
-          {({ isConnected, isConnecting, show, address, ensName }) => (
-            <button
-              onClick={show}
-              className="nav-cta"
-              type="button"
-              style={{ minWidth: 140, textAlign: "center" }}
-            >
-              {isConnecting
-                ? "Connecting…"
-                : isConnected
-                ? (ensName ?? `${address?.slice(0, 6)}…${address?.slice(-4)}`)
-                : "Connect wallet"}
-            </button>
-          )}
-        </ConnectKitButton.Custom>
+        <div style={{ display: "flex", gap: 8 }}>
+          <MidenConnectButton />
+          <ConnectKitButton.Custom>
+            {({ isConnected, isConnecting, show, address, ensName }) => (
+              <button
+                onClick={show}
+                className="nav-cta"
+                type="button"
+                style={{ minWidth: 140, textAlign: "center" }}
+              >
+                {isConnecting
+                  ? "Connecting…"
+                  : isConnected
+                  ? (ensName ?? `${address?.slice(0, 6)}…${address?.slice(-4)}`)
+                  : "Connect ETH"}
+              </button>
+            )}
+          </ConnectKitButton.Custom>
+        </div>
       </div>
     </header>
   );

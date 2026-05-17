@@ -1,11 +1,21 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ConnectKitButton } from "connectkit";
 import { useAccount, useReadContracts } from "wagmi";
 import { formatUnits } from "viem";
 
 import { NavBar } from "../../components/NavBar";
+
+// Client-only — pulls in the Miden WASM bundle on hydration.
+const MidenPortfolioSection = dynamic(
+  () =>
+    import("../../components/MidenPortfolioSection").then(
+      (m) => m.MidenPortfolioSection,
+    ),
+  { ssr: false },
+);
 import {
   BASKET_TOKENS,
   DARWIN_RELAY_ADDRESS,
@@ -84,7 +94,7 @@ export default function PortfolioPage() {
           .
         </p>
 
-        {!isConnected ? (
+        {!isConnected && (
           <div
             style={{
               marginTop: 32,
@@ -123,7 +133,8 @@ export default function PortfolioPage() {
               )}
             </ConnectKitButton.Custom>
           </div>
-        ) : (
+        )}
+        {isConnected && (
           <>
             <div
               style={{
@@ -309,6 +320,8 @@ export default function PortfolioPage() {
             </p>
           </>
         )}
+
+        <MidenPortfolioSection />
       </main>
     </>
   );

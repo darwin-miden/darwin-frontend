@@ -2,10 +2,11 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConnectKitProvider } from "connectkit";
-import { ReactNode, useState } from "react";
+import { ReactNode, useMemo, useState } from "react";
 import { WagmiProvider } from "wagmi";
 
 import { wagmiConfig } from "../lib/wagmi";
+import { MidenContextProvider } from "./MidenContextProvider";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(() => new QueryClient());
@@ -19,7 +20,7 @@ export function Providers({ children }: { children: ReactNode }) {
             "--ck-accent-text-color": "#0b0b0c",
           }}
         >
-          {children}
+          <MidenContextProvider>{children}</MidenContextProvider>
         </ConnectKitProvider>
       </QueryClientProvider>
     </WagmiProvider>

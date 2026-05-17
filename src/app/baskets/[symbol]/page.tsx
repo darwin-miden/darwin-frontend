@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 
 import { NavBar } from "../../../components/NavBar";
-import { DepositPanel } from "../../../components/DepositPanel";
+import { DepositTabs } from "../../../components/DepositTabs";
 import {
   BASKETS,
   basketBySymbol,
@@ -175,7 +175,7 @@ export default async function BasketDetailPage({
         >
           <div>
             {ethBasket ? (
-              <DepositPanel basket={ethBasket} />
+              <DepositTabs basket={ethBasket} />
             ) : (
               <p style={{ color: "var(--ink-3)" }}>Deposit not yet wired for this basket.</p>
             )}
