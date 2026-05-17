@@ -42,7 +42,7 @@ export default function PortfolioPage() {
     })),
   ];
 
-  const { data, isLoading, refetch } = useReadContracts({
+  const { data, dataUpdatedAt } = useReadContracts({
     contracts,
     query: { enabled: !!address, refetchInterval: 8000 },
   });
@@ -294,21 +294,19 @@ export default function PortfolioPage() {
               </p>
             </section>
 
-            <button
-              onClick={() => refetch()}
-              disabled={isLoading}
+            <p
               style={{
                 marginTop: 24,
-                padding: "8px 14px",
-                background: "transparent",
-                border: "1px solid var(--ink-3)",
-                cursor: "pointer",
-                fontSize: 12,
-                color: "var(--ink-2)",
+                fontSize: 11,
+                color: "var(--ink-3)",
+                fontFamily: "var(--font-mono-stack)",
               }}
             >
-              {isLoading ? "Refreshing…" : "Refresh balances"}
-            </button>
+              Auto-refreshing every 8s ·{" "}
+              {dataUpdatedAt
+                ? `last update ${new Date(dataUpdatedAt).toLocaleTimeString()}`
+                : "loading…"}
+            </p>
           </>
         )}
       </main>
