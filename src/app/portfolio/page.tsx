@@ -7,6 +7,8 @@ import { useAccount, useReadContracts } from "wagmi";
 import { formatUnits } from "viem";
 
 import { NavBar } from "../../components/NavBar";
+import { basketBySymbol, type BasketSymbol } from "../../lib/baskets";
+import { basketNav, usePrices } from "../../lib/prices";
 
 // Client-only — pulls in the Miden WASM bundle on hydration.
 const MidenPortfolioSection = dynamic(
@@ -23,16 +25,6 @@ import {
   MOCK_USDC_ADDRESS,
   sepoliaAddressUrl,
 } from "../../lib/contracts";
-
-// Indicative mock prices in USD per basket-token unit. Production
-// reads these from the on-chain Pragma adapter once the controller's
-// NAV computation is wired into the basket-token. For the M3 preview
-// we anchor on the bot's last live Pragma snapshot.
-const BASKET_USD_PRICE_X1E6: Record<string, bigint> = {
-  DCC: 1_000_000n, // 1 USDC ≈ 1 DCC at the demo's mint rate
-  DAG: 1_000_000n,
-  DCO: 1_000_000n,
-};
 
 export default function PortfolioPage() {
   const { address, isConnected } = useAccount();
@@ -63,9 +55,22 @@ export default function PortfolioPage() {
     balance: (data?.[i + 1]?.result as bigint | undefined) ?? 0n,
   }));
 
-  const totalUsdCents = basketBalances.reduce((acc, { basket, balance }) => {
-    const price = BASKET_USD_PRICE_X1E6[basket.symbol] ?? 1_000_000n;
-    return acc + (balance * price) / 1_000_000n;
+  const pricesQuery = usePrices();
+  const navBySymbol: Record<string, number | null> = {};
+  for (const { basket } of basketBalances) {
+    navBySymbol[basket.symbol] = basketNav(
+      basketBySymbol(basket.symbol as BasketSymbol),
+      pricesQuery.data,
+    );
+  }
+
+  // Sum in micro-USD to avoid floating drift; basket tokens are
+  // 6-decimal on Sepolia (ERC20 mints from the relay).
+  const totalUsdMicro = basketBalances.reduce((acc, { basket, balance }) => {
+    const nav = navBySymbol[basket.symbol];
+    if (nav == null) return acc;
+    const priceMicro = BigInt(Math.round(nav * 1_000_000));
+    return acc + (balance * priceMicro) / 1_000_000n;
   }, 0n);
 
   return (
@@ -148,7 +153,7 @@ export default function PortfolioPage() {
             >
               <Stat
                 label="Total basket value"
-                value={formatUsdc(totalUsdCents)}
+                value={formatUsdc(totalUsdMicro)}
                 unit="USD"
               />
               <Stat
@@ -193,9 +198,12 @@ export default function PortfolioPage() {
                 </thead>
                 <tbody>
                   {basketBalances.map(({ basket, balance }) => {
-                    const price =
-                      BASKET_USD_PRICE_X1E6[basket.symbol] ?? 1_000_000n;
-                    const usd = (balance * price) / 1_000_000n;
+                    const nav = navBySymbol[basket.symbol];
+                    const priceMicro =
+                      nav == null
+                        ? 0n
+                        : BigInt(Math.round(nav * 1_000_000));
+                    const usd = (balance * priceMicro) / 1_000_000n;
                     return (
                       <tr
                         key={basket.symbol}
@@ -262,9 +270,19 @@ export default function PortfolioPage() {
                   lineHeight: 1.55,
                 }}
               >
-                Prices are placeholder until the controller's NAV computation
-                is wired to the on-chain Pragma adapter. Last live Pragma
-                snapshot: ETH $2,194 / BTC $78,121 / USDT $0.999 / DAI $0.999.
+                {pricesQuery.data ? (
+                  <>
+                    NAV computed live from{" "}
+                    <strong>{pricesQuery.data.source}</strong> @ ETH $
+                    {pricesQuery.data.eth.toFixed(2)} · BTC $
+                    {pricesQuery.data.wbtc.toFixed(0)} · USDT $
+                    {pricesQuery.data.usdt.toFixed(4)} · DAI $
+                    {pricesQuery.data.dai.toFixed(4)}. Mainnet NAV will read
+                    the on-chain Pragma adapter on Miden directly.
+                  </>
+                ) : (
+                  <>Fetching live prices…</>
+                )}
               </p>
             </section>
 

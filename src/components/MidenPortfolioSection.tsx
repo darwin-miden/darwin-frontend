@@ -22,9 +22,17 @@
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import {
   useAccount,
+  useConsume,
+  useNotes,
   useTransactionHistory,
   useSyncState,
 } from "@miden-sdk/react";
+
+import {
+  basketBySymbol,
+  type BasketSymbol,
+} from "../lib/baskets";
+import { basketNav, usePrices } from "../lib/prices";
 
 // Same source of truth as MidenDepositPanel: testnet faucet IDs from
 // the 2026-05-14 deploy (miden_testnet_state.md). Hardcoding symbol
@@ -114,11 +122,23 @@ export function MidenPortfolioSection() {
     amount: accountResult.getBalance(f.id),
   }));
 
-  const basketBalances = BASKET_TOKEN_FAUCETS.map((b) => ({
-    ...b,
-    amount: accountResult.getBalance(b.id),
-    controller: BASKET_CONTROLLER_ID[b.symbol],
-  }));
+  const prices = usePrices();
+  const notesQuery = useNotes({ accountId: address ?? undefined });
+  const { consume, isLoading: consuming, stage: consumeStage } = useConsume();
+
+  const basketBalances = BASKET_TOKEN_FAUCETS.map((b) => {
+    const amount = accountResult.getBalance(b.id);
+    const manifest = basketBySymbol(b.symbol as BasketSymbol);
+    const nav = basketNav(manifest, prices.data);
+    const human = Number(amount) / 10 ** b.decimals;
+    const usd = nav == null ? null : human * nav;
+    return {
+      ...b,
+      amount,
+      controller: BASKET_CONTROLLER_ID[b.symbol],
+      usd,
+    };
+  });
 
   return (
     <section style={{ marginTop: 48 }}>
@@ -232,6 +252,9 @@ export function MidenPortfolioSection() {
             <th style={{ textAlign: "right", padding: "10px 12px" }}>
               Position
             </th>
+            <th style={{ textAlign: "right", padding: "10px 12px" }}>
+              USD value
+            </th>
             <th style={{ textAlign: "left", padding: "10px 12px" }}>
               Controller
             </th>
@@ -252,6 +275,20 @@ export function MidenPortfolioSection() {
                 }}
               >
                 {fmtUnits(b.amount, b.decimals)}
+              </td>
+              <td
+                style={{
+                  padding: "14px 12px",
+                  textAlign: "right",
+                  fontFamily: "var(--font-mono-stack)",
+                  color: b.amount > 0n ? "var(--ink)" : "var(--ink-3)",
+                }}
+              >
+                {b.usd == null
+                  ? "—"
+                  : b.usd >= 1
+                    ? `$${b.usd.toFixed(2)}`
+                    : `$${b.usd.toFixed(4)}`}
               </td>
               <td
                 style={{
@@ -301,6 +338,73 @@ export function MidenPortfolioSection() {
           <code>useCompile</code>) lands in the next release.
         </p>
       </div>
+
+      <section style={{ marginTop: 32 }}>
+        <h3
+          style={{
+            fontSize: 12,
+            fontFamily: "var(--font-mono-stack)",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            color: "var(--ink-3)",
+            margin: "0 0 10px",
+          }}
+        >
+          Inbox — claimable notes ({notesQuery.consumableNotes.length})
+        </h3>
+        {notesQuery.isLoading ? (
+          <p style={{ color: "var(--ink-3)", fontSize: 12 }}>loading…</p>
+        ) : notesQuery.consumableNotes.length === 0 ? (
+          <p style={{ color: "var(--ink-3)", fontSize: 12 }}>
+            nothing to claim. Deposits and redeems will land here as
+            private notes that you sign to materialize the asset in your
+            wallet.
+          </p>
+        ) : (
+          <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+            {notesQuery.consumableNoteSummaries.slice(0, 6).map((n) => (
+              <li
+                key={n.id}
+                style={{
+                  fontFamily: "var(--font-mono-stack)",
+                  fontSize: 12,
+                  color: "var(--ink-2)",
+                  padding: "6px 0",
+                  borderBottom: "1px dotted var(--rule-2)",
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "center",
+                }}
+              >
+                <code style={{ flex: 1 }}>{n.id.slice(0, 18)}…</code>
+                <span style={{ color: "var(--ink-3)" }}>
+                  {n.assets.length} asset
+                  {n.assets.length === 1 ? "" : "s"}
+                </span>
+                <button
+                  onClick={() =>
+                    consume({
+                      accountId: address!,
+                      notes: [n.id],
+                    }).catch((e) => console.error("consume", e))
+                  }
+                  disabled={consuming}
+                  style={{
+                    padding: "4px 10px",
+                    background: consuming ? "var(--ink-3)" : "var(--ink)",
+                    color: "var(--paper)",
+                    border: 0,
+                    cursor: consuming ? "not-allowed" : "pointer",
+                    fontSize: 11,
+                  }}
+                >
+                  {consuming ? `${consumeStage ?? "claiming"}…` : "Claim"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <section style={{ marginTop: 32 }}>
         <h3

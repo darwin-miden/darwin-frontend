@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { NavBar } from "../../../components/NavBar";
 import { DepositTabs } from "../../../components/DepositTabs";
+import { LiveBasketStats } from "../../../components/LiveBasketStats";
 import {
   BASKETS,
   basketBySymbol,
@@ -163,6 +164,8 @@ export default async function BasketDetailPage({
             {flavour.tagline}.
           </p>
         </div>
+
+        <LiveBasketStats symbol={basket.symbol} />
 
         {/* Two-column layout: deposit panel + what's inside */}
         <div
