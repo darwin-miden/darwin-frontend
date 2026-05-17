@@ -61,9 +61,10 @@ export default function Page() {
                 }}
               >
                 Deposit USDC on Ethereum, hold a STARK-proven basket position
-                privately on Miden. The relay does the bridging in 65 seconds.
-                No Miden account, no Falcon-512 key, no proof-generation
-                friction.
+                privately on Miden. ETH-side users get a relay-bridged
+                ERC20 in 65 seconds. Miden-side users prove + submit
+                directly in their browser via the Miden Web SDK — no
+                relay, no AggLayer hop.
               </p>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                 <Link
@@ -146,19 +147,18 @@ export default function Page() {
               fontWeight: 500,
             }}
           >
-            Three steps, one Sepolia wallet, no Miden onboarding.
+            Two paths to the same private position.
           </h2>
           <p
             style={{
               color: "var(--ink-2)",
-              maxWidth: 680,
+              maxWidth: 720,
               fontSize: 16,
               lineHeight: 1.55,
             }}
           >
-            The flow you&apos;d run as an ETH-native user, browsable end-to-end
-            from this site. No backend in the path you don&apos;t already trust
-            (your wallet + Sepolia RPC + the Darwin escrow contract).
+            Pick the rail that matches your wallet. Both land in the same
+            on-chain controller on Miden testnet.
           </p>
           <div
             style={{
@@ -171,18 +171,18 @@ export default function Page() {
           >
             <Step
               num="1"
-              title="Connect your wallet"
-              body="Tap Connect wallet in the nav, sign with MetaMask / WalletConnect / Coinbase. We target Sepolia exclusively for the demo."
+              title="Connect a wallet"
+              body="ETH wallet (MetaMask / WalletConnect / Coinbase) via Connect ETH, or a Miden wallet (MidenFi extension, Para, Turnkey) via Connect Miden. Both buttons are in the nav."
             />
             <Step
               num="2"
               title="Pick a basket"
-              body="DCC / DAG / DCO each show their target weights, live drift, on-chain contracts, and a deposit panel that talks to the Sepolia relay."
+              body="DCC / DAG / DCO each show target weights, live NAV computed in your browser, on-chain contracts, and a tabbed deposit panel."
             />
             <Step
               num="3"
-              title="Deposit USDC"
-              body="Self-mint MockUSDC if needed, approve, deposit. The relay catches your event, claims, mints DCC ERC20 to your wallet. ~65 s."
+              title="Deposit"
+              body="ETH path: self-mint MockUSDC, approve, deposit — the relay bridges in ~65s. Miden path: sign a P2ID note straight to the controller, browser proves the STARK, ~10s."
               last
             />
           </div>
