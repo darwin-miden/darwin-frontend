@@ -58,11 +58,14 @@ const BASKET_TOKEN_FAUCETS: { symbol: string; id: string; decimals: number }[] =
   { symbol: "DCO", id: "0xbe4efc6729eb3220423b7d6d6a0942", decimals: 8 },
 ];
 
-// Per-basket M1 controllers (RegularAccountUpdatable, private).
+// v2 real-bodies controller — the one with a working `receive_asset`
+// that the atomic note's `call.X` resolves to. End-to-end verified
+// on testnet 2026-05-17 (tx 0xcffbb40778…200256ff @ block 792539).
+const REAL_BODIES_CONTROLLER_ID = "0x171f46fecf1bca8005ae068a8dfe77";
 const BASKET_CONTROLLER_ID: Record<string, string> = {
-  DCC: "0xaa20da7d98c2e29022510aa786948f",
-  DAG: "0x53c54781b7b091905a948b5e3f92fe",
-  DCO: "0xa3a0e023381d709060a19527e73f95",
+  DCC: REAL_BODIES_CONTROLLER_ID,
+  DAG: REAL_BODIES_CONTROLLER_ID,
+  DCO: REAL_BODIES_CONTROLLER_ID,
 };
 
 function fmtUnits(amount: bigint, decimals: number): string {

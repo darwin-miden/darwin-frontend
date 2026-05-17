@@ -41,12 +41,19 @@ const ASSET_FAUCETS: Record<string, { label: string; id: string; decimals: numbe
   "darwin-dai":  { label: "dDAI",  id: "0xb526deb0408a29207e4f27ed57bf1a", decimals: 18 },
 };
 
-// Per-basket M1 controllers on Miden testnet (RegularAccountUpdatable,
-// private storage). Source: miden_testnet_state.md (2026-05-14).
+// The atomic deposit note targets the v2 "real-bodies" controller —
+// the one with a working `receive_asset` proc that the note's
+// `call.0x75f6…` resolves to. Verified end-to-end on testnet on
+// 2026-05-17 (tx 0xcffbb40778e9beaca2fae65fe5c2004d14b69cdf38a6c2f805a1e4bf200256ff,
+// note 0xd06575aae82db42c246bfbb7ec24147b14c164efaf7b83fc85ec15c97db0ab45,
+// submitted at block 792539). The per-basket M1 controllers
+// (DCC/DAG/DCO at 0xaa20…/0x53c5…/0xa3a0…) carry stub bodies and
+// would no-op on note consumption — they're scaffolding for M2.
+const REAL_BODIES_CONTROLLER_ID = "0x171f46fecf1bca8005ae068a8dfe77";
 const BASKET_CONTROLLER_ID: Record<string, string> = {
-  DCC: "0xaa20da7d98c2e29022510aa786948f",
-  DAG: "0x53c54781b7b091905a948b5e3f92fe",
-  DCO: "0xa3a0e023381d709060a19527e73f95",
+  DCC: REAL_BODIES_CONTROLLER_ID,
+  DAG: REAL_BODIES_CONTROLLER_ID,
+  DCO: REAL_BODIES_CONTROLLER_ID,
 };
 
 export function MidenDepositPanel({ basket }: Props) {
