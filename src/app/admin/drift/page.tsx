@@ -12,6 +12,7 @@
  * flip the threshold colour live. End-user UI is at /baskets.
  */
 
+import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { BASKETS, type Basket, formatWeight } from "../../../lib/baskets";
 import {
@@ -19,6 +20,15 @@ import {
   type ConstituentSnapshot,
 } from "../../../lib/rebalance";
 import { NavBar } from "../../../components/NavBar";
+
+// Client-only — pulls in the Miden WASM bundle on hydration.
+const DarwinScriptsPanel = dynamic(
+  () =>
+    import("../../../components/DarwinScriptsPanel").then(
+      (m) => m.DarwinScriptsPanel,
+    ),
+  { ssr: false },
+);
 
 const ORACLE_PRICES_X1E8: Record<string, bigint> = {
   "darwin-eth": 219_427_837_701n,
@@ -366,6 +376,8 @@ cargo run -p darwin-protocol-account --bin flow_b_demo -- \\
             </div>
           </div>
         )}
+
+        <DarwinScriptsPanel />
       </main>
     </>
   );
