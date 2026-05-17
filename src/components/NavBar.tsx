@@ -15,7 +15,6 @@ export type NavKey =
   | "baskets"
   | "accounts"
   | "flows"
-  | "status"
   | "portfolio";
 
 export function NavBar({ active }: { active?: NavKey }) {
@@ -44,7 +43,6 @@ export function NavBar({ active }: { active?: NavKey }) {
           {link("portfolio", "/portfolio", "Portfolio")}
           {link("accounts", "/accounts", "Accounts")}
           {link("flows", "/flows", "Flows")}
-          {link("status", "/status", "Status")}
         </nav>
         <ConnectKitButton.Custom>
           {({ isConnected, isConnecting, show, address, ensName }) => (

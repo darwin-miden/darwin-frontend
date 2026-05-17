@@ -5,17 +5,8 @@ import { LogoMark } from "../components/Logo";
 /**
  * Darwin Protocol — landing page.
  *
- * Editorial paper/ink aesthetic from globals.css. Targets two audiences
- * at once: (a) Miden ecosystem grant reviewers who want to verify
- * what's actually on-chain, (b) future users who want to try a deposit.
- *
- * Sections (top to bottom):
- *   1. Hero with primary CTA → /baskets/dcc (deposit), secondary → /status
- *   2. Stat strip — live numbers across M1 + M2
- *   3. "Try it now" — three steps the user can run today on Sepolia
- *   4. "How it works" — the 3 atomic flows (A deposit / B rebalance / C redeem)
- *   5. "What's live" navigation grid (5 pages)
- *   6. Footer with open-source pointers
+ * Editorial paper/ink aesthetic from globals.css. Targets users
+ * arriving from socials who want to try a deposit on Sepolia.
  */
 export default function Page() {
   return (
@@ -37,7 +28,7 @@ export default function Page() {
                 className="eyebrow"
                 style={{ marginBottom: 16, color: "var(--orange)" }}
               >
-                M1 + M2 live · Miden testnet + Sepolia
+                Live on Miden testnet + Sepolia
               </div>
               <h1
                 style={{
@@ -91,7 +82,7 @@ export default function Page() {
                   <span className="arrow">→</span>
                 </Link>
                 <Link
-                  href="/status"
+                  href="/portfolio"
                   className="btn btn-ghost"
                   style={{
                     padding: "14px 22px",
@@ -99,7 +90,7 @@ export default function Page() {
                     fontFamily: "var(--font-sans-stack)",
                   }}
                 >
-                  Grant status
+                  Your portfolio
                 </Link>
               </div>
             </div>
@@ -303,12 +294,6 @@ export default function Page() {
               href="/flows"
               title="Flow A · B · C runs"
               body="Real testnet tx hashes proving the three atomic flows ran end-to-end inside the controller's tx context."
-            />
-            <PokeCard
-              num="05"
-              href="/status"
-              title="M1 + M2 deliverables"
-              body="Both milestones with status pills and evidence lists. The honest scoreboard, including external blockers (AggLayer, Near Intents Miden)."
               spansBoth
             />
           </div>
@@ -351,8 +336,7 @@ export default function Page() {
                 >
                   darwin-miden
                 </a>{" "}
-                org. Tag <code>v0.2.0-m2</code> across all repos pins the
-                shipped state.
+                org. MIT licensed.
               </p>
             </div>
             <div>

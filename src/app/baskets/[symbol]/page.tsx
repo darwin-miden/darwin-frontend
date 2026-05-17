@@ -292,7 +292,7 @@ export default async function BasketDetailPage({
               borderBottom: "1px solid var(--rule)",
             }}
           >
-            ▸ Technical details (for grant reviewers + developers)
+            ▸ Technical details
           </summary>
 
           <div style={{ marginTop: 24 }}>

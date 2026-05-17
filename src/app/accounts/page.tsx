@@ -157,10 +157,9 @@ export default function AccountsPage() {
         >
           Snapshot of <code>darwin-baskets/state/testnet.toml</code> as of{" "}
           <strong>{TESTNET_SNAPSHOT_TAKEN_AT}</strong>. The same registry the{" "}
-          <code>darwin_doctor</code> binary pings before every milestone
-          report. <strong>{totalCount}</strong> accounts —{" "}
-          <strong>{publicCount}</strong> public (fetched live from the RPC),
-          the rest private by design (controllers, wallets).
+          <code>darwin_doctor</code> binary pings. <strong>{totalCount}</strong>{" "}
+          accounts — <strong>{publicCount}</strong> public (fetched live from
+          the RPC), the rest private by design (controllers, wallets).
         </p>
         <p style={{ fontSize: 12.5, color: "var(--ink-3)" }}>
           RPC: <code>{MIDEN_RPC}</code> · Explorer:{" "}
@@ -244,9 +243,8 @@ export default function AccountsPage() {
             Sepolia stack · {SEPOLIA_CONTRACTS.length}
           </h2>
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 8 }}>
-            ETH-side contracts the relay reads + writes. M2 deliverable #1
-            (basket-token mint/burn + strategy storage + fees) +
-            DarwinRelayDeposit (the M2 substitution for Near Intent + Guardian).
+            ETH-side contracts the relay reads + writes — the basket-token
+            ERC20s, the strategy registry, and the deposit escrow.
           </p>
           <table
             style={{
