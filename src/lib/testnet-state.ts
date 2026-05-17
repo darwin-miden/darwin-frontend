@@ -144,14 +144,22 @@ export const DEPLOYED_ACCOUNTS: DeployedAccount[] = [
     notes:
       "holds dETH / dWBTC / dUSDT / dDAI + DCC / DAG / DCO basket tokens.",
   },
-  // Oracle
+  // Oracles
   {
-    label: "Mock Pragma oracle (v2)",
+    label: "Live Pragma oracle (testnet)",
+    role: "oracle",
+    accountId: "0xd0e1384e21a6350029d80128eb5c44",
+    storageMode: "public",
+    notes:
+      "Real Pragma oracle on Miden testnet (mtst1argwzw…2t3x). Darwin's oracle_query_real binary reads ETH/USD and BTC/USD live via call.0xd1aa2a8b…28e8 (get_median MAST root, computed locally by re-running Pragma's build pipeline).",
+  },
+  {
+    label: "Mock Pragma-style oracle (fallback)",
     role: "oracle",
     accountId: "0x085ba19aaebfaa002f1bc7ef8be6fd",
     storageMode: "public",
     notes:
-      "exposes get_median + get_entry. call.0x25ef3524…dd085d invoked on-chain.",
+      "Fallback oracle that mirrors Pragma's get_median + get_entry ABI. Production swap to the live Pragma adapter is a one-MAST-root edit.",
   },
 ];
 
@@ -245,12 +253,12 @@ export const M1_DELIVERABLES: M1Deliverable[] = [
   {
     id: "3",
     title: "Pragma Oracle live with 3 token pairs (with fallback)",
-    status: "in-flight",
+    status: "shipped",
     evidence: [
       "adapter + WIT + Pragma testnet snapshot live",
-      "mock Pragma-style oracle (0x085ba19a…6fd) deployed",
-      "get_median invoked on-chain via `miden client exec` — runtime proof",
-      "production swap to Pragma is one MAST-root edit",
+      "live Pragma oracle read end-to-end on testnet via oracle_query_real binary: ETH/USD = $2193.85, BTC/USD = $78,326.67",
+      "MAST root of pragma::oracle::get_median computed locally by re-running Pragma's build pipeline (pm-accounts crate) — matches deployed oracle",
+      "fallback: mock Pragma-style oracle deployed (0x085ba19a…6fd), Falcon-512 signed-attestation design ready",
     ],
   },
   {
