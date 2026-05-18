@@ -14,15 +14,17 @@ import { useQuery } from "@tanstack/react-query";
 import type { Basket } from "./baskets";
 
 export interface PricesResponse {
-  source: "coingecko" | "pragma";
+  source: "coingecko" | "pragma-miden";
   fetchedAt: number;
   eth: number;
   wbtc: number;
   usdt: number;
   dai: number;
+  /** ms it took the server to fetch + parse, end-to-end. */
+  latencyMs?: number;
 }
 
-const PRICE_KEY: Record<string, keyof Omit<PricesResponse, "source" | "fetchedAt">> = {
+const PRICE_KEY: Record<string, "eth" | "wbtc" | "usdt" | "dai"> = {
   "darwin-eth":  "eth",
   "darwin-wbtc": "wbtc",
   "darwin-usdt": "usdt",
