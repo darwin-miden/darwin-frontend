@@ -17,6 +17,7 @@
 
 import {
   AccountId,
+  Felt,
   FeltArray,
   FungibleAsset,
   Linking,
@@ -82,7 +83,22 @@ export interface BuildNoteOptions {
   controller: string;   // hex AccountId of the per-basket controller
   faucetId: string;     // hex AccountId of the fungible asset (constituent or basket-token)
   amount: bigint;       // base units, asset-decimal scaled
+  /**
+   * Optional override for the 3-felt note storage the script reads
+   * via `active_note::get_storage`:
+   *   deposit path: [deposit_value, fee_factor, nav_scale]
+   *   redeem  path: [burn_amount,  gross_release_factor, scale]
+   * If omitted, defaults match the Rust verification (200e9 / 9970 / 1e10
+   * for deposit, 100 / 9970 / 1 for redeem). The note still produces
+   * the same on-chain effect; storage drives the mint/release math.
+   */
+  storageFelts?: [bigint, bigint, bigint];
 }
+
+const DEFAULT_STORAGE: Record<DarwinNoteKind, [bigint, bigint, bigint]> = {
+  "atomic-deposit": [200_000_000_000n, 9_970n, 10_000_000_000n],
+  "atomic-redeem":  [100n, 9_970n, 1n],
+};
 
 /**
  * Compile the chosen Darwin note + assemble a one-asset Note headed
@@ -117,7 +133,15 @@ export async function buildDarwinNote(
   const asset = new FungibleAsset(faucetId, opts.amount);
   const assets = new NoteAssets([asset]);
 
-  const storage = new NoteStorage(new FeltArray());
+  // Pass the 3-felt mint/release params through note storage. The
+  // script reads them via `active_note::get_storage` and runs the
+  // multiplication + felt_div on-chain.
+  const [s0, s1, s2] = opts.storageFelts ?? DEFAULT_STORAGE[opts.kind];
+  const feltArray = new FeltArray();
+  feltArray.push(new Felt(s0));
+  feltArray.push(new Felt(s1));
+  feltArray.push(new Felt(s2));
+  const storage = new NoteStorage(feltArray);
 
   const recipient = new NoteRecipient(randomSerialNum(), script, storage);
 

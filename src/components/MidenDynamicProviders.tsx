@@ -8,7 +8,27 @@ import type { ReactNode } from "react";
 /**
  * Concrete browser-side Miden stack. Always loaded via next/dynamic
  * from `MidenContextProvider` so SSR doesn't see the WASM bundle.
+ *
+ * Custody mode:
+ *   - default (MidenFi)     — wraps children in MidenFiSignerProvider,
+ *                             which delegates signing + STARK proving
+ *                             to the MidenFi browser extension. UX-
+ *                             smooth, "client-side" from the user's
+ *                             perspective (proving happens in their
+ *                             browser via the extension).
+ *   - NEXT_PUBLIC_MIDEN_SELF_CUSTODY=1 — skip MidenFiSignerProvider so
+ *                             children can use `useCreateWallet` /
+ *                             `useSessionAccount` to generate a fresh
+ *                             key in IndexedDB and prove fully in-
+ *                             page. Pure self-custody. UX requires
+ *                             one-time wallet creation; nothing
+ *                             custodial. Not yet exposed in the UI —
+ *                             the toggle is in place for M4.
  */
+const SELF_CUSTODY =
+  typeof process !== "undefined" &&
+  process.env.NEXT_PUBLIC_MIDEN_SELF_CUSTODY === "1";
+
 export function MidenDynamicProviders({ children }: { children: ReactNode }) {
   return (
     <MidenProvider
@@ -34,13 +54,17 @@ export function MidenDynamicProviders({ children }: { children: ReactNode }) {
         </div>
       }
     >
-      <MidenFiSignerProvider
-        appName="Darwin Protocol"
-        network={WalletAdapterNetwork.Testnet}
-        autoConnect={false}
-      >
-        {children}
-      </MidenFiSignerProvider>
+      {SELF_CUSTODY ? (
+        children
+      ) : (
+        <MidenFiSignerProvider
+          appName="Darwin Protocol"
+          network={WalletAdapterNetwork.Testnet}
+          autoConnect={false}
+        >
+          {children}
+        </MidenFiSignerProvider>
+      )}
     </MidenProvider>
   );
 }

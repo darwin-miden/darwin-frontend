@@ -85,6 +85,7 @@ export function MidenPortfolioSection() {
   const { connected, address } = useMidenFiWallet();
   const { syncHeight } = useSyncState();
   const accountResult = useAccount(address ?? undefined);
+  const controllerVault = useAccount(REAL_BODIES_CONTROLLER_ID);
   const history = useTransactionHistory({});
 
   if (!connected || !address) {
@@ -326,6 +327,114 @@ export function MidenPortfolioSection() {
           ))}
         </tbody>
       </table>
+
+      <h3
+        style={{
+          marginTop: 32,
+          fontSize: 12,
+          fontFamily: "var(--font-mono-stack)",
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: "var(--ink-3)",
+          marginBottom: 10,
+        }}
+      >
+        Controller vault (aggregate state, all users)
+      </h3>
+      <p
+        style={{
+          fontSize: 12,
+          color: "var(--ink-3)",
+          fontFamily: "var(--font-mono-stack)",
+          marginTop: 0,
+          marginBottom: 10,
+        }}
+      >
+        v2 real-bodies <code>{REAL_BODIES_CONTROLLER_ID}</code> — read via
+        useAccount() from your browser-side Miden client. The controller's
+        per-user storage map lands in M4 once the controller exposes
+        addressable position slots; for now this aggregate vault state
+        is the on-chain truth.
+      </p>
+      {controllerVault.isLoading ? (
+        <p style={{ color: "var(--ink-3)", fontSize: 12 }}>loading vault…</p>
+      ) : controllerVault.assets.length === 0 ? (
+        <p style={{ color: "var(--ink-3)", fontSize: 12 }}>
+          vault is empty (no successful deposits consumed yet).
+        </p>
+      ) : (
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            fontSize: 13,
+            marginBottom: 8,
+          }}
+        >
+          <thead>
+            <tr
+              style={{
+                borderBottom: "1px solid var(--rule)",
+                color: "var(--ink-3)",
+                fontSize: 11,
+                fontFamily: "var(--font-mono-stack)",
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+              }}
+            >
+              <th style={{ textAlign: "left", padding: "8px 12px" }}>Asset</th>
+              <th style={{ textAlign: "right", padding: "8px 12px" }}>
+                Vault balance
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {controllerVault.assets.map((a) => {
+              // Try to label known faucets; fall back to short hex.
+              const knownConst = FAUCETS.find(
+                (f) => f.id.toLowerCase() === a.assetId.toLowerCase(),
+              );
+              const knownBasket = BASKET_TOKEN_FAUCETS.find(
+                (f) => f.id.toLowerCase() === a.assetId.toLowerCase(),
+              );
+              const label =
+                knownConst?.label ??
+                knownBasket?.symbol ??
+                a.assetId.slice(0, 12) + "…";
+              const decimals =
+                knownConst?.decimals ?? knownBasket?.decimals ?? 0;
+              return (
+                <tr
+                  key={a.assetId}
+                  style={{ borderBottom: "1px solid var(--rule-2)" }}
+                >
+                  <td style={{ padding: "10px 12px" }}>
+                    <span style={{ fontWeight: 500 }}>{label}</span>{" "}
+                    <span
+                      style={{
+                        color: "var(--ink-3)",
+                        fontFamily: "var(--font-mono-stack)",
+                        fontSize: 11,
+                      }}
+                    >
+                      {a.assetId.slice(0, 14)}…
+                    </span>
+                  </td>
+                  <td
+                    style={{
+                      padding: "10px 12px",
+                      textAlign: "right",
+                      fontFamily: "var(--font-mono-stack)",
+                    }}
+                  >
+                    {fmtUnits(a.amount, decimals)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
 
       <h3
         style={{
