@@ -17,7 +17,6 @@
  * exposes a parameterised deposit body.
  */
 
-import { Linking } from "@miden-sdk/miden-sdk";
 import { useCompile } from "@miden-sdk/react";
 import { useEffect, useState } from "react";
 
@@ -71,21 +70,27 @@ export function DarwinScriptsPanel() {
     setMathLoaded(true);
 
     (async () => {
-      const math = await fetch("/notes/darwin_math.masm").then((r) => r.text());
+      // Smoke-test the SDK with a trivial inline note first. If this
+      // fails the SDK itself is broken, not our source.
+      try {
+        const minimalScript = await compile.noteScript({
+          code: "@note_script\npub proc main\n  push.1 drop\nend",
+        });
+        const minRoot = (
+          minimalScript as unknown as { root: () => { toHex(): string } }
+        )
+          .root()
+          .toHex();
+        console.log("[DarwinScriptsPanel] minimal note OK, root:", minRoot);
+      } catch (err) {
+        console.error("[DarwinScriptsPanel] minimal note FAILED:", err);
+      }
 
+      // Notes inline felt_div, so no external library to load.
       for (const def of SCRIPTS) {
         try {
           const code = await fetch(def.url).then((r) => r.text());
-          const script = await compile.noteScript({
-            code,
-            libraries: [
-              {
-                namespace: "darwin::math",
-                code: math,
-                linking: Linking.Dynamic,
-              },
-            ],
-          });
+          const script = await compile.noteScript({ code });
           // NoteScript.root() returns a Word — toString() gives hex.
           const rootHex = (script as unknown as { root: () => { toHex(): string } })
             .root()

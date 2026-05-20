@@ -20,7 +20,6 @@ import {
   Felt,
   FeltArray,
   FungibleAsset,
-  Linking,
   Note,
   NoteArray,
   NoteAssets,
@@ -110,21 +109,13 @@ export async function buildDarwinNote(
   compile: NoteScriptCompiler,
   opts: BuildNoteOptions,
 ): Promise<Note> {
-  const [noteCode, mathCode] = await Promise.all([
-    getDarwinNoteSource(opts.kind),
-    getDarwinMathSource(),
-  ]);
+  // The atomic notes now inline felt_div locally (the browser SDK
+  // 0.14.x can't link external user libraries that themselves
+  // `use` std-lib modules — verified failing with a "syntax error"
+  // diagnostic at library parse time). Just feed the note source.
+  const noteCode = await getDarwinNoteSource(opts.kind);
 
-  const script = await compile.noteScript({
-    code: noteCode,
-    libraries: [
-      {
-        namespace: "darwin::math",
-        code: mathCode,
-        linking: Linking.Dynamic,
-      },
-    ],
-  });
+  const script = await compile.noteScript({ code: noteCode });
 
   const senderId = AccountId.fromHex(opts.sender);
   const controllerId = AccountId.fromHex(opts.controller);
