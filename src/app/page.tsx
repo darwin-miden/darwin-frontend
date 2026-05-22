@@ -60,11 +60,11 @@ export default function Page() {
                   margin: "0 0 32px",
                 }}
               >
-                Deposit USDC on Ethereum, hold a STARK-proven basket position
-                privately on Miden. ETH-side users get a relay-bridged
-                ERC20 in 65 seconds. Miden-side users prove + submit
-                directly in their browser via the Miden Web SDK — no
-                relay, no AggLayer hop.
+                Hold a STARK-proven basket position privately on Miden.
+                ETH wallet holders bridge in via NEAR Intents 1Click — assets
+                land on Miden in ~40 s, then mint the basket-token natively.
+                Miden wallet holders prove + submit directly in their
+                browser via the Miden Web SDK.
               </p>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                 <Link
@@ -79,7 +79,7 @@ export default function Page() {
                     gap: 10,
                   }}
                 >
-                  Try a deposit on Sepolia{" "}
+                  Try a deposit{" "}
                   <span className="arrow">→</span>
                 </Link>
                 <Link
@@ -128,7 +128,7 @@ export default function Page() {
             <Stat n="6" label="Sepolia contracts" />
             <Stat n="3" label="atomic flows on-chain" />
             <Stat n="290" label="green tests" />
-            <Stat n="65s" label="ETH → basket" />
+            <Stat n="40s" label="ETH → basket" />
           </div>
         </section>
 
@@ -182,7 +182,7 @@ export default function Page() {
             <Step
               num="3"
               title="Deposit"
-              body="ETH path: self-mint MockUSDC, approve, deposit — the relay bridges in ~65s. Miden path: sign a P2ID note straight to the controller, browser proves the STARK, ~10s."
+              body="ETH wallet: bridge Sepolia ETH to Miden via NEAR Intents 1Click (~40 s) — a Darwin relay wallet on Miden picks it up and mints your basket-token. Miden wallet: sign an atomic deposit note straight to the controller, browser proves the STARK in <1 s."
               last
             />
           </div>

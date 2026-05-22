@@ -1,18 +1,30 @@
 "use client";
 
 /**
- * Tabbed deposit interface: ETH (via the relay) on the left,
- * Miden-native (browser-proving via the Miden Web SDK) on the right.
+ * Two deposit paths, converging on the same private basket position
+ * on Miden:
  *
- * Both paths land in the same v2 controller on Miden — the ETH path
- * via the relay's bridged stable, the Miden path via a direct
- * P2ID note carrying one of the basket constituents.
+ *   1. **ETH user** -> NEAR Intents 1Click bridge (Sepolia ETH ->
+ *      Miden P2ID note) -> a custodial relay wallet on Miden submits
+ *      the atomic_deposit_note to the controller on the user's behalf.
+ *      This is the grant proposal's "ETH user via Near Intent + relay
+ *      wallet" path; we use Brian Seong's mock 1Click bridge as the
+ *      NEAR-Intent-shaped front-end.
+ *
+ *   2. **Miden-native user** -> direct atomic_deposit_note via the
+ *      Miden Web SDK in this tab. No bridge, no relay -- the user's
+ *      own Miden wallet sends straight to the controller.
+ *
+ * The earlier Sepolia ESCROW + wDCC ERC20 path (darwin-relay v1) is
+ * deprecated. It was a workaround built during M2 when NEAR Intent
+ * didn't support Miden. With Brian's mock now live, the proposal's
+ * native architecture is reachable, and we no longer need a Sepolia-
+ * side wrapped basket token.
  */
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
 
-import { DepositPanel } from "./DepositPanel";
 import type { BasketDef } from "../lib/contracts";
 import {
   basketBySymbol,
@@ -44,13 +56,12 @@ const OneClickDepositPanel = dynamic(
   { ssr: false },
 );
 
-type Tab = "eth" | "miden" | "oneclick";
+type Tab = "oneclick" | "miden";
 
 export function DepositTabs({ basket }: { basket: BasketDef }) {
-  const [tab, setTab] = useState<Tab>("eth");
-
-  // Resolve the underlying basket manifest so MidenDepositPanel can
-  // see the constituent list (faucet aliases).
+  // ETH user path is the default — most casual visitors have an ETH wallet
+  // and no Miden wallet, so 1Click is the entry point.
+  const [tab, setTab] = useState<Tab>("oneclick");
   const manifest = basketBySymbol(basket.symbol as BasketSymbol);
 
   return (
@@ -65,28 +76,21 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
         }}
       >
         <TabButton
-          active={tab === "eth"}
-          onClick={() => setTab("eth")}
-          label="Ethereum (Sepolia)"
-          subtitle="USDC → wDCC via the relay"
+          active={tab === "oneclick"}
+          onClick={() => setTab("oneclick")}
+          label="ETH wallet"
+          subtitle="Sepolia → Miden via NEAR Intents 1Click"
         />
         <TabButton
           active={tab === "miden"}
           onClick={() => setTab("miden")}
-          label="Miden native"
-          subtitle="P2ID note, browser-proven"
-        />
-        <TabButton
-          active={tab === "oneclick"}
-          onClick={() => setTab("oneclick")}
-          label="NEAR Intents 1Click"
-          subtitle="Sepolia → Miden bridge (mock)"
+          label="Miden wallet"
+          subtitle="Atomic deposit note, browser-proven"
         />
       </div>
 
-      {tab === "eth" && <DepositPanel basket={basket} />}
-      {tab === "miden" && <MidenDepositPanel basket={manifest} />}
       {tab === "oneclick" && <OneClickDepositPanel basket={basket} />}
+      {tab === "miden" && <MidenDepositPanel basket={manifest} />}
     </div>
   );
 }
