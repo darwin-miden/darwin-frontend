@@ -39,7 +39,12 @@ const MidenDepositPanel = dynamic(
   },
 );
 
-type Tab = "eth" | "miden";
+const OneClickDepositPanel = dynamic(
+  () => import("./OneClickDepositPanel").then((m) => m.OneClickDepositPanel),
+  { ssr: false },
+);
+
+type Tab = "eth" | "miden" | "oneclick";
 
 export function DepositTabs({ basket }: { basket: BasketDef }) {
   const [tab, setTab] = useState<Tab>("eth");
@@ -71,13 +76,17 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
           label="Miden native"
           subtitle="P2ID note, browser-proven"
         />
+        <TabButton
+          active={tab === "oneclick"}
+          onClick={() => setTab("oneclick")}
+          label="NEAR Intents 1Click"
+          subtitle="Sepolia → Miden bridge (mock)"
+        />
       </div>
 
-      {tab === "eth" ? (
-        <DepositPanel basket={basket} />
-      ) : (
-        <MidenDepositPanel basket={manifest} />
-      )}
+      {tab === "eth" && <DepositPanel basket={basket} />}
+      {tab === "miden" && <MidenDepositPanel basket={manifest} />}
+      {tab === "oneclick" && <OneClickDepositPanel basket={basket} />}
     </div>
   );
 }
