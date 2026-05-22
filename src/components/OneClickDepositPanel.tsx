@@ -1,22 +1,25 @@
 "use client";
 
 /**
- * NEAR Intents 1Click deposit path.
+ * NEAR Intents 1Click deposit path, brokered by darwin-relay v2.
  *
- * Third deposit rail next to "Ethereum (Sepolia)" (darwin-relay) and
- * "Miden native" (custom note via Web SDK). Speaks the 1Click API
- * shape from `BrianSeong99/miden-testnet-bridge` -- a NEAR Intents-
- * grade mock the Miden DevRel team published for builder testing.
+ * Flow (proposal §Flow A, ETH-user variant):
  *
- *   1. Fetch a quote        POST /v0/quote
- *   2. User wallet sends    cast send <depositAddress> ...
- *   3. Notify the bridge    POST /v0/deposit/submit
- *   4. Poll status          GET  /v0/status?depositAddress=...
- *   5. Bridge mints a       P2ID note on Miden -> user picks it up
- *      in the Inbox section of /portfolio.
+ *   1. POST /v0/intents       (relay v2) — declares basket symbol + amount
+ *                              and gets back correlation_id + the relay's
+ *                              Miden recipient address.
+ *   2. POST /v0/quote         (1Click) — recipient = relay's Miden address
+ *   3. wallet.sendTransaction (Sepolia) — user funds the deposit address
+ *   4. POST /v0/deposit/submit (1Click) — txHash + depositAddress
+ *   5. POST /v0/intents/:id/deposit (relay v2) — hand the relay the same
+ *                              two values so it can drive its own polling
+ *                              and mark the intent KNOWN_DEPOSIT_TX
+ *   6. GET  /v0/intents/:id   (relay v2) — single source of truth for UI
+ *      state, walks QUOTED → KNOWN_DEPOSIT_TX → PROCESSING →
+ *      ONECLICK_SUCCESS → POSITION_CREDITED
  *
- * When NEAR ships the hosted 1Click endpoint for Miden,
- * `NEXT_PUBLIC_ONECLICK_URL` flips and this path becomes prod.
+ * The user never has to enter a Miden recipient — the relay holds the
+ * basket position on their behalf, keyed by their EVM address.
  */
 
 import { useAccount, useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
@@ -25,13 +28,19 @@ import { parseEther } from "viem";
 
 import type { BasketDef } from "../lib/contracts";
 import {
-  getStatus,
   ONE_CLICK_BRIDGE_URL,
   quote,
   submitDeposit,
   type OneClickQuoteResponse,
-  type OneClickStatusResponse,
 } from "../lib/oneClick";
+import {
+  attachDeposit,
+  createIntent,
+  getIntent,
+  RELAY_V2_URL,
+  type RelayIntent,
+  type RelayIntentCreateResponse,
+} from "../lib/relayV2";
 
 interface Props {
   basket: BasketDef;
@@ -39,10 +48,11 @@ interface Props {
 
 type Stage =
   | "idle"
+  | "claiming-intent"
   | "quoting"
   | "awaiting-tx"
   | "tx-sent"
-  | "notifying-bridge"
+  | "notifying"
   | "polling"
   | "success"
   | "error";
@@ -51,10 +61,10 @@ export function OneClickDepositPanel({ basket }: Props) {
   const { address, isConnected } = useAccount();
   const [amountEth, setAmountEth] = useState<string>("0.00001");
   const [stage, setStage] = useState<Stage>("idle");
+  const [intentInit, setIntentInit] = useState<RelayIntentCreateResponse | null>(null);
   const [quoteResp, setQuoteResp] = useState<OneClickQuoteResponse | null>(null);
-  const [statusResp, setStatusResp] = useState<OneClickStatusResponse | null>(null);
+  const [relayIntent, setRelayIntent] = useState<RelayIntent | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [midenRecipient, setMidenRecipient] = useState<string>("0xed3cd5befa3207805f8529207cfc0d");
 
   const sendTx = useSendTransaction();
   const wait = useWaitForTransactionReceipt({
@@ -62,33 +72,40 @@ export function OneClickDepositPanel({ basket }: Props) {
     query: { enabled: !!sendTx.data },
   });
 
-  // Once the deposit tx lands, notify the bridge and start polling.
+  // Once the Sepolia tx lands, notify both 1Click and the relay.
   useEffect(() => {
-    if (stage !== "tx-sent" || !wait.data || !quoteResp) return;
-    setStage("notifying-bridge");
-    submitDeposit({
-      txHash: wait.data.transactionHash,
-      depositAddress: quoteResp.quote.depositAddress,
-    })
-      .then(() => setStage("polling"))
-      .catch((e) => {
+    if (stage !== "tx-sent" || !wait.data || !quoteResp || !intentInit) return;
+    setStage("notifying");
+    (async () => {
+      try {
+        await submitDeposit({
+          txHash: wait.data.transactionHash,
+          depositAddress: quoteResp.quote.depositAddress,
+        });
+        await attachDeposit(intentInit.correlation_id, {
+          deposit_address: quoteResp.quote.depositAddress,
+          sepolia_tx: wait.data.transactionHash,
+        });
+        setStage("polling");
+      } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setStage("error");
-      });
-  }, [stage, wait.data, quoteResp]);
+      }
+    })();
+  }, [stage, wait.data, quoteResp, intentInit]);
 
-  // Poll status every 5s while not terminal.
+  // Poll the relay's view of the intent until terminal.
   useEffect(() => {
-    if (stage !== "polling" || !quoteResp) return;
+    if (stage !== "polling" || !intentInit) return;
     let cancel = false;
     const tick = async () => {
       try {
-        const s = await getStatus(quoteResp.quote.depositAddress);
+        const s = await getIntent(intentInit.correlation_id);
         if (cancel) return;
-        setStatusResp(s);
-        if (s.status === "SUCCESS") setStage("success");
-        else if (s.status === "REFUNDED" || s.status === "FAILED") {
-          setError(`bridge ${s.status}`);
+        setRelayIntent(s);
+        if (s.stage === "POSITION_CREDITED") setStage("success");
+        else if (s.stage === "ERROR") {
+          setError(s.error || "relay reported ERROR");
           setStage("error");
         }
       } catch (e) {
@@ -103,20 +120,32 @@ export function OneClickDepositPanel({ basket }: Props) {
       cancel = true;
       clearInterval(t);
     };
-  }, [stage, quoteResp]);
+  }, [stage, intentInit]);
 
   async function go() {
     setError(null);
+    setIntentInit(null);
     setQuoteResp(null);
-    setStatusResp(null);
+    setRelayIntent(null);
     if (!address) {
       setError("connect an ETH wallet first");
       setStage("error");
       return;
     }
-    setStage("quoting");
     try {
       const amountWei = parseEther(amountEth || "0").toString();
+
+      // 1. Claim an intent on the relay — get back correlation_id + relay Miden addr.
+      setStage("claiming-intent");
+      const intent = await createIntent({
+        user_evm_addr: address,
+        basket_symbol: basket.symbol,
+        amount_in_wei: amountWei,
+      });
+      setIntentInit(intent);
+
+      // 2. Quote 1Click — recipient = relay's Miden account, refundTo = user.
+      setStage("quoting");
       const q = await quote({
         dry: false,
         depositMode: "SIMPLE",
@@ -128,13 +157,14 @@ export function OneClickDepositPanel({ basket }: Props) {
         amount: amountWei,
         refundTo: address,
         refundType: "ORIGIN_CHAIN",
-        recipient: midenRecipient,
+        recipient: intent.relay_miden_address,
         recipientType: "DESTINATION_CHAIN",
         deadline: "2027-01-01T00:00:00Z",
       });
       setQuoteResp(q);
+
+      // 3. Wallet sends ETH to the bridge's deposit address.
       setStage("awaiting-tx");
-      // Trigger wagmi: send ETH to the deposit address.
       sendTx.sendTransaction({
         to: q.quote.depositAddress as `0x${string}`,
         value: BigInt(q.quote.amountIn),
@@ -148,12 +178,15 @@ export function OneClickDepositPanel({ basket }: Props) {
 
   const stageLabel: Record<Stage, string> = {
     idle: "Ready",
-    quoting: "Requesting quote from bridge…",
+    "claiming-intent": "Claiming intent on darwin-relay…",
+    quoting: "Requesting 1Click quote…",
     "awaiting-tx": "Confirm in your wallet",
     "tx-sent": `Waiting for Sepolia confirmation (${sendTx.data?.slice(0, 10)}…)`,
-    "notifying-bridge": "Notifying bridge with tx hash…",
-    polling: "Bridge processing — polling /v0/status",
-    success: "🎯 Bridge SUCCESS — P2ID note minted on Miden",
+    notifying: "Notifying 1Click + relay…",
+    polling: relayIntent
+      ? `Relay → ${relayIntent.stage}`
+      : "Polling relay…",
+    success: `🎯 Position credited — ${relayIntent?.basket_amount_minted ?? ""} ${basket.symbol}`,
     error: "Error",
   };
 
@@ -166,7 +199,7 @@ export function OneClickDepositPanel({ basket }: Props) {
       }}
     >
       <h3 style={{ margin: 0, fontSize: 16 }}>
-        NEAR Intents 1Click → {basket.symbol}
+        ETH wallet → {basket.symbol} (via 1Click + darwin-relay)
       </h3>
       <p
         style={{
@@ -177,17 +210,18 @@ export function OneClickDepositPanel({ basket }: Props) {
           marginBottom: 6,
         }}
       >
-        Sepolia → Miden testnet bridge via the{" "}
+        Bridge Sepolia ETH to Miden via{" "}
         <a
           href="https://github.com/BrianSeong99/miden-testnet-bridge"
           target="_blank"
           rel="noreferrer"
           style={{ borderBottom: "1px dotted var(--rule)" }}
         >
-          BrianSeong99/miden-testnet-bridge
-        </a>{" "}
-        mock (Miden DevRel). API shape matches NEAR Intents 1Click verbatim;
-        production swap is the hosted endpoint URL.
+          NEAR Intents 1Click
+        </a>
+        ; the darwin-relay custodial Miden wallet receives it and runs the
+        atomic deposit so the basket position lives natively on Miden.
+        You stay on your ETH wallet — no Miden key required.
       </p>
       <p
         style={{
@@ -197,7 +231,7 @@ export function OneClickDepositPanel({ basket }: Props) {
           margin: "0 0 12px",
         }}
       >
-        target: <code>{ONE_CLICK_BRIDGE_URL}</code>
+        1Click: <code>{ONE_CLICK_BRIDGE_URL}</code> · relay: <code>{RELAY_V2_URL}</code>
       </p>
 
       <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
@@ -221,25 +255,6 @@ export function OneClickDepositPanel({ basket }: Props) {
             }}
           />
         </label>
-        <label style={{ fontSize: 12, color: "var(--ink-3)" }}>
-          Miden recipient (your private wallet)
-          <input
-            type="text"
-            value={midenRecipient}
-            onChange={(e) => setMidenRecipient(e.target.value)}
-            disabled={stage !== "idle" && stage !== "error" && stage !== "success"}
-            style={{
-              display: "block",
-              marginTop: 4,
-              width: "100%",
-              padding: "10px 12px",
-              fontFamily: "var(--font-mono-stack)",
-              fontSize: 12,
-              background: "var(--paper)",
-              border: "1px solid var(--rule)",
-            }}
-          />
-        </label>
       </div>
 
       <button
@@ -253,7 +268,7 @@ export function OneClickDepositPanel({ basket }: Props) {
           padding: "12px 16px",
           background: !isConnected
             ? "var(--paper-2)"
-            : stage === "polling" || stage === "notifying-bridge"
+            : stage === "polling" || stage === "notifying" || stage === "claiming-intent"
               ? "var(--ink-3)"
               : "var(--ink)",
           color: !isConnected ? "var(--ink-3)" : "var(--paper)",
@@ -267,7 +282,7 @@ export function OneClickDepositPanel({ basket }: Props) {
           fontWeight: 500,
         }}
       >
-        {!isConnected ? "Connect ETH wallet first" : `Bridge ${amountEth} ETH → Miden`}
+        {!isConnected ? "Connect ETH wallet first" : `Deposit ${amountEth} ETH → ${basket.symbol}`}
       </button>
 
       <p
@@ -281,9 +296,16 @@ export function OneClickDepositPanel({ basket }: Props) {
         {stageLabel[stage]}
       </p>
 
+      {intentInit && (
+        <p style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono-stack)" }}>
+          intent: <code>{intentInit.correlation_id.slice(0, 18)}…</code>
+          {" · "}relay: <code>{intentInit.relay_miden_address.slice(0, 14)}…</code>
+        </p>
+      )}
+
       {quoteResp && (
         <p style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono-stack)" }}>
-          correlationId: <code>{quoteResp.correlationId.slice(0, 18)}…</code>
+          1Click correlationId: <code>{quoteResp.correlationId.slice(0, 18)}…</code>
           {" · "}deposit: <code>{quoteResp.quote.depositAddress.slice(0, 14)}…</code>
         </p>
       )}
@@ -302,10 +324,10 @@ export function OneClickDepositPanel({ basket }: Props) {
         </p>
       )}
 
-      {statusResp && statusResp.swapDetails.destinationChainTxHashes.length > 0 && (
+      {relayIntent?.atomic_deposit_tx && (
         <p style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono-stack)" }}>
-          miden tx:{" "}
-          <code>{statusResp.swapDetails.destinationChainTxHashes[0].hash.slice(0, 18)}…</code>
+          miden atomic_deposit:{" "}
+          <code>{relayIntent.atomic_deposit_tx.slice(0, 18)}…</code>
         </p>
       )}
 
