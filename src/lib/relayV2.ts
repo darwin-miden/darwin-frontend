@@ -144,4 +144,37 @@ export function redeem(args: {
   });
 }
 
+export interface RelayRedemption {
+  redemption_id: string;
+  user_evm_addr: string;
+  basket_symbol: string;
+  basket_amount: string;
+  stage: string;
+  oneclick_correlation: string | null;
+  miden_redeem_tx: string | null;
+  miden_bridge_out_tx: string | null;
+  sepolia_release_tx: string | null;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export function getRedemption(id: string): Promise<RelayRedemption> {
+  return http<RelayRedemption>(`/v0/redeem/${encodeURIComponent(id)}`);
+}
+
+interface RawRedemptionsResp {
+  user: string;
+  redemptions: RelayRedemption[];
+}
+
+export async function listRedemptionsForUser(
+  userEvmAddr: string,
+): Promise<RelayRedemption[]> {
+  const r = await http<RawRedemptionsResp>(
+    `/v0/redemptions/${encodeURIComponent(userEvmAddr)}`,
+  );
+  return r.redemptions;
+}
+
 export const RELAY_V2_URL = BASE;
