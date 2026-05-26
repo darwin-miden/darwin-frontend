@@ -1,32 +1,39 @@
 /**
- * Helpers for reading the v5 Darwin controller's on-chain state.
+ * Helpers for reading the live Darwin controller's on-chain state.
  *
- * The v5 controller (deployed 2026-05-26, account
- * 0x9419f2044acb77800a4c91a0cb50e5) has three storage maps the
- * frontend cares about:
+ * The v6 controller (account 0x2a3ea0a268d97b80497d6a966e3141) is a
+ * strict superset of v5 — adds slot 11 (fee_recipient) and a
+ * receive_and_credit compound proc — and is the current default
+ * across worker + relay. The storage maps the frontend cares about
+ * are unchanged from v5:
  *
  *   slot 3 (target_weights)  basket_id -> [w0, w1, w2, 0] bps
  *   slot 4 (fees)            basket_id -> [mint, redeem, mgmt, 0] bps
  *   slot 10 (user_positions) (user_id || basket_id) -> [amount, 0, 0, 0]
+ *   slot 11 (fee_recipient)  account_id_word                       (v6 only)
  *
- * All reads go through `get_*` procs that wrap the raw storage map
- * lookup. The MAST roots are baked at compile time and pinned here
- * so the tx-scripts the frontend builds can call them directly.
+ * MAST roots are pinned here so the tx-scripts the frontend builds
+ * can call them directly. Read-side (`get_*`) roots differ from v5
+ * because procedure adjacency in v6 changes the merkle hashing;
+ * write-side (`set_*` / `receive_asset`) roots are byte-identical
+ * to v5 so atomic notes built against v5 still consume cleanly.
  *
- * Mast roots match what `build_v5_full_storage_controller` emits;
- * if the v5 MASM changes, regenerate these and the deploy.
+ * Roots come from `cargo run --bin build_v6_fee_routing_controller`.
  */
 
-export const V5_CONTROLLER_ID = "0x9419f2044acb77800a4c91a0cb50e5";
+export const CONTROLLER_ID = "0x2a3ea0a268d97b80497d6a966e3141";
 
-export const V5_MAST_ROOTS = {
-  get_target_weights: "0xbb1bbfeee50296c8a111353ca4017ea213b1619bd9bfaa49682d4e219b576486",
-  get_fees:            "0xc503631687186cf924f1933b51e97c25034dfa8d2e3bc4df950d009a1ae550ee",
-  get_user_position:   "0x82ee7b22eab6b559ca4ea979753ff04303f561658f461936f98a70875150522c",
+export const MAST_ROOTS = {
+  get_target_weights: "0xd63bb900370d555c4a73142cc101b1d0c8bc47cf25c7ec8ee61002891608e3c6",
+  get_fees:            "0xfed5e0d0b487e48aec20a2bcd91995303f2b0cddb18ea8cb85424bdeec96dd0b",
+  get_user_position:   "0xc9ccec5458661be113ea48c9d8947d10bfe4705a53a7aeee76c273733f88bf38",
+  get_fee_recipient:   "0x1190c4fb84061506d07c85fa3e1fcfbad1f568f68fa6c3f3ad2a6209054a9da8",
   set_target_weights:  "0x57a8ef319a2fe090f649760c4db4fdfc698496778daaea8f496cc46070e4057c",
   set_fees:            "0xf2624ee2a579f81446f60cba7fdb06058c36fa2a06fc1b67accaafdd0d86e3f8",
   set_user_position:   "0xa017ac3e12d53bad11bfb8b4289a3bd2c4deef4c67a5209c53703dacbbe2d335",
+  set_fee_recipient:   "0x6721d6156a7a78b8eea224963e4375ee7423ac2d2f79d58a1c5af542f370d9a4",
   receive_asset:       "0x75f638c65584d058542bcf4674b066ae394183021bc9b44dc2fdd97d52f9bcfb",
+  receive_and_credit:  "0xeae9e249a88021a2fb6bcae39148f528ee98d5fc884290a42f961b9a536c763e",
 } as const;
 
 const FELT_MASK = (1n << 63n) - 1n;
@@ -64,7 +71,7 @@ function leBytesToBigInt(b: Uint8Array): bigint {
 
 /**
  * Build the tx-script source that calls `get_user_position` against
- * the v5 controller and leaves the position word on the stack.
+ * the current controller and leaves the position word on the stack.
  *
  * The key layout matches the worker's set_user_position payload:
  *   key = (user_id_suffix, user_id_prefix, 0, 0)
@@ -74,14 +81,12 @@ function leBytesToBigInt(b: Uint8Array): bigint {
  */
 export function buildUserPositionScript(userEvmAddr: string): string {
   const { suffix, prefix } = evmToUserIdFelts(userEvmAddr);
-  // Push key word in the order set_map_item expects: suffix on top,
-  // matching the call site for get_user_position.
   return `use miden::core::sys
 
 begin
   push.0 push.0
   push.${prefix.toString()} push.${suffix.toString()}
-  call.${V5_MAST_ROOTS.get_user_position}
+  call.${MAST_ROOTS.get_user_position}
   exec.sys::truncate_stack
 end
 `;

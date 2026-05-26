@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Reads the connected EVM wallet's on-Miden position from the v5
+ * Reads the connected EVM wallet's on-Miden position from the v6
  * controller's slot 10 (user_positions StorageMap). Bypasses the
  * relay's off-chain SQL accounting — the on-chain controller state
  * is the source of truth.
  *
- * Driven by useExecuteProgram against the v5 controller, calling
+ * Driven by useExecuteProgram against the controller, calling
  * `get_user_position` via its MAST root and reading the top of the
  * resulting stack as the position amount.
  *
@@ -17,12 +17,9 @@ import { useAccount as useWagmiAccount } from "wagmi";
 import { useCompile, useExecuteProgram } from "@miden-sdk/react";
 import { useCallback, useEffect, useState } from "react";
 
-import {
-  V5_CONTROLLER_ID,
-  buildUserPositionScript,
-} from "../lib/midenV5Controller";
+import { CONTROLLER_ID, buildUserPositionScript } from "../lib/midenController";
 
-export function V5UserPositionPanel() {
+export function UserPositionPanel() {
   const { address, isConnected } = useWagmiAccount();
   const compile = useCompile();
   const exec = useExecuteProgram();
@@ -37,7 +34,7 @@ export function V5UserPositionPanel() {
         code: buildUserPositionScript(address),
       });
       const result = await exec.execute({
-        accountId: V5_CONTROLLER_ID,
+        accountId: CONTROLLER_ID,
         script,
       });
       // Stack top after get_user_position = first felt of the
@@ -82,11 +79,11 @@ export function V5UserPositionPanel() {
           marginBottom: 14,
         }}
       >
-        On-chain position (v5 controller slot 10)
+        On-chain position (controller slot 10)
       </h2>
 
       <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
-        Authoritative per-user position read from the v5 controller's
+        Authoritative per-user position read from the controller's
         on-chain StorageMap (slot 10). Bypasses the relay's off-chain
         SQL — the controller is the source of truth.
       </p>
@@ -100,7 +97,7 @@ export function V5UserPositionPanel() {
         }}
       >
         <div style={{ marginBottom: 6 }}>
-          controller: <code>{V5_CONTROLLER_ID}</code>
+          controller: <code>{CONTROLLER_ID}</code>
         </div>
         <div style={{ marginBottom: 6 }}>
           user:       <code>{address}</code>

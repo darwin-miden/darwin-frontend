@@ -46,10 +46,10 @@ const BaliDepositPanel = dynamic(
     ),
   { ssr: false },
 );
-const V5UserPositionPanel = dynamic(
+const UserPositionPanel = dynamic(
   () =>
-    import("../../components/V5UserPositionPanel").then(
-      (m) => m.V5UserPositionPanel,
+    import("../../components/UserPositionPanel").then(
+      (m) => m.UserPositionPanel,
     ),
   { ssr: false },
 );
@@ -389,7 +389,7 @@ export default function PortfolioPage() {
         )}
 
         <RelayPositionsPanel />
-        <V5UserPositionPanel />
+        <UserPositionPanel />
         <RelayRedemptionsPanel />
         <BaliDepositPanel />
         <SelfCustodyWalletPanel />
