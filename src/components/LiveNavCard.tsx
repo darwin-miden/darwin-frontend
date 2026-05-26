@@ -1,15 +1,18 @@
 "use client";
 
 /**
- * Live NAV card for a basket. Refreshes every 10s, shows the
+ * Live target-NAV card for a basket. Refreshes every 10s, shows the
  * measured client-side latency next to the figure so the proposal
  * claim ("Private NAV calc using oracle prices <200ms") is visible
  * directly in the UI.
  *
  * Source-of-truth tag (pragma-miden | coingecko) is shown verbatim
  * so users can see when the route is in Pragma-direct mode versus
- * fallback. The figure itself is computed by the same math the
- * v6 controller will run on-chain (lib/navOffchain).
+ * fallback. The figure is the *target* NAV (Σ target_weight × price),
+ * not the controller's on-chain compute_nav (which divides actual
+ * vault value by supply); they match immediately after a rebalance
+ * and drift otherwise. See lib/navOffchain for the precise
+ * relationship.
  */
 import type { BasketSymbol } from "../lib/baskets";
 import { useNavLive } from "../lib/useNavLive";
@@ -54,7 +57,7 @@ export function LiveNavCard({ symbol }: { symbol: BasketSymbol }) {
             color: "var(--ink-3)",
           }}
         >
-          Live NAV / unit
+          Target NAV / unit
         </div>
         <div
           style={{

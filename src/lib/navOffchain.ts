@@ -1,22 +1,29 @@
 /**
- * Off-chain NAV evaluator — mirrors the on-chain `compute_nav` math
- * from the v6 controller (`darwin::nav` proc) so the answer the UI
- * shows is the same number the controller will write into slot 0
- * when `compute_nav` runs inside a tx.
+ * Off-chain TARGET NAV evaluator.
  *
- * Source of truth for prices is still Pragma (the values come from
- * `/api/prices` which calls `pragma_prices_json` against testnet);
- * we just don't burn an on-chain tx + foreign-account-read for a
- * read-only view. Prices flow:
+ * Computes `Σ (target_weight_bps / 10_000) × oracle_price_usd` for a
+ * basket — i.e. what one basket-token is worth at current oracle
+ * prices *assuming the vault matches its target composition*.
+ * Immediately after a rebalance, target NAV == actual NAV; between
+ * rebalances they drift apart by the constituent price moves
+ * weighted by the current vs target deltas.
+ *
+ * This is NOT the same shape as the controller's on-chain
+ * `compute_nav` (asm/lib/nav.masm), which evaluates
+ * `Σ price_i × quantity_i / supply` using the controller's current
+ * vault holdings + the basket-faucet's live supply. That number is
+ * structurally slower to read (foreign account + storage map +
+ * felt_div inside a tx), and is what the controller writes into
+ * slot 0 when `compute_nav` executes on-chain.
+ *
+ * For the read-only UI badge ("Target NAV / unit") this target
+ * approximation is the right thing — fast, oracle-anchored, and
+ * matches what the basket is *trying* to be worth. Source of truth
+ * for prices is still Pragma:
  *
  *   Pragma testnet ──► pragma_prices_json (Rust, get_median)
  *                    ──► /api/prices (server-side warm cache, 15s)
  *                      ──► navFromPrices() (pure TS, this file)
- *
- * The on-chain math is `Σ (weight_bps * price_1e8) / 10000`, with
- * all intermediate values as u64 felts. We replicate it with
- * `bigint` so we never lose a single felt in rounding — the test
- * suite asserts byte-for-byte parity with the controller's NAV.
  */
 import type { Basket } from "./baskets";
 import type { PricesResponse } from "./prices";
@@ -37,6 +44,7 @@ export interface NavBreakdown {
 
 export interface NavResult {
   basket: string;
+  /** Target NAV: Σ (target_weight × oracle_price). See module docstring. */
   navUsd: number;
   breakdown: NavBreakdown[];
   /** Snapshot of where the price data came from + when. */
@@ -45,7 +53,7 @@ export interface NavResult {
 }
 
 /**
- * Compute NAV in USD for one basket given a price snapshot.
+ * Compute target NAV in USD for one basket given a price snapshot.
  *
  * Returns null if any constituent is missing a price (means the
  * caller should treat the snapshot as incomplete, not as zero).
