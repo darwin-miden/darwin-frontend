@@ -39,6 +39,13 @@ const RelayRedemptionsPanel = dynamic(
     ),
   { ssr: false },
 );
+const BaliDepositPanel = dynamic(
+  () =>
+    import("../../components/BaliDepositPanel").then(
+      (m) => m.BaliDepositPanel,
+    ),
+  { ssr: false },
+);
 import {
   BASKET_TOKENS,
   DARWIN_RELAY_ADDRESS,
@@ -376,6 +383,7 @@ export default function PortfolioPage() {
 
         <RelayPositionsPanel />
         <RelayRedemptionsPanel />
+        <BaliDepositPanel />
         <SelfCustodyWalletPanel />
         <MidenPortfolioSection />
       </main>
