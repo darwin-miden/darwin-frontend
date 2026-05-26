@@ -1,7 +1,7 @@
 /**
  * USD price feed for the four Darwin basket constituents.
  *
- * Two data sources, picked at request time:
+ * Data sources, picked at request time:
  *
  *   1. **pragma-miden** (preferred): shells out to the
  *      `pragma_prices_json` binary built from darwin-protocol with
@@ -16,8 +16,14 @@
  *      `DARWIN_PRAGMA_BIN` is unset, the binary fails, or the
  *      shell-out times out.
  *
- * The response's `source` field tags which path produced the
- * numbers so the UI badge can update without a code change.
+ *   3. **pragma-miden+fallback** (mixed): when Pragma returns
+ *      clearly-broken values for known stablecoin pairs (USDT/USD
+ *      testnet publisher currently posts at 1e6 scale, ~100×
+ *      below dollar peg), the route keeps the healthy pragma
+ *      readings and substitutes CoinGecko spot for the broken
+ *      pair(s) only. The `source` field tags this as mixed so the
+ *      UI shows the provenance honestly — we don't silently
+ *      rescale broken feeds.
  *
  * Node runtime (not edge) because we need `child_process` to
  * invoke the Rust binary.
@@ -31,14 +37,18 @@ export const revalidate = 30;
 
 const execP = promisify(exec);
 
+type PriceSource = "coingecko" | "pragma-miden" | "pragma-miden+fallback";
+
 interface PricesResponse {
-  source: "coingecko" | "pragma-miden";
+  source: PriceSource;
   fetchedAt: number;
   eth: number;
   wbtc: number;
   usdt: number;
   dai: number;
   latencyMs?: number;
+  /** Pairs whose pragma value was replaced by CoinGecko. Empty unless source=mixed. */
+  fallbackPairs?: ReadonlyArray<"eth" | "wbtc" | "usdt" | "dai">;
 }
 
 const CG_URL =
@@ -47,6 +57,30 @@ const CG_URL =
 const PRAGMA_BIN = process.env.DARWIN_PRAGMA_BIN;
 const PRAGMA_TIMEOUT_MS = 8_000;
 
+// Per-pair sanity ranges (USD). A reading outside [min, max] is
+// treated as a broken upstream feed and triggers the CoinGecko
+// fallback for that pair only.
+//
+// Stablecoin bounds are tight ([0.5, 2.0]) because any pegged-dollar
+// asset breaking those bounds is by definition off-peg — even a
+// genuine $0.50 de-peg is news, but our M3 demo wants a usable
+// figure for the NAV display. The crypto bounds are wide enough to
+// accommodate any realistic price move; we're only catching
+// scale-of-magnitude bugs (e.g. publisher posts wei instead of
+// 1e8-scaled USD).
+const SANITY: Record<"eth" | "wbtc" | "usdt" | "dai", { min: number; max: number }> = {
+  eth:  { min: 100, max: 100_000 },
+  wbtc: { min: 1_000, max: 1_000_000 },
+  usdt: { min: 0.5, max: 2 },
+  dai:  { min: 0.5, max: 2 },
+};
+
+function isSane(key: keyof typeof SANITY, v: number): boolean {
+  if (!Number.isFinite(v) || v <= 0) return false;
+  const r = SANITY[key];
+  return v >= r.min && v <= r.max;
+}
+
 let cache: { at: number; body: PricesResponse } | null = null;
 const CACHE_TTL_MS = 30_000;
 
@@ -54,10 +88,6 @@ const CACHE_TTL_MS = 30_000;
 // cache is always fresh, and a user request never pays the cold
 // shell-out cost. Pragma stays the source of truth — this is just a
 // memoised snapshot of its last reading, not a publisher relay.
-//
-// Disabled when DARWIN_PRAGMA_BIN is unset (no oracle path to warm)
-// or when running in the build/edge phase (`globalThis.window` is
-// undefined but `process.env.NEXT_PHASE` flags non-runtime invocations).
 const WARM_INTERVAL_MS = 15_000;
 declare global {
   // eslint-disable-next-line no-var
@@ -69,11 +99,9 @@ if (
   && !globalThis.__DARWIN_PRICES_WARMER__
 ) {
   const tick = async () => {
-    const body = await fetchPragma();
+    const body = await fetchPragmaWithFallback();
     if (body) cache = { at: Date.now(), body };
   };
-  // Fire-and-forget initial warm + recurring interval. `unref()` so
-  // the timer doesn't keep Node alive during graceful shutdown.
   void tick();
   globalThis.__DARWIN_PRICES_WARMER__ = setInterval(tick, WARM_INTERVAL_MS);
   globalThis.__DARWIN_PRICES_WARMER__.unref?.();
@@ -113,6 +141,48 @@ async function fetchCoinGecko(): Promise<PricesResponse> {
   };
 }
 
+/**
+ * Pull from Pragma first; per-pair sanity-check; backfill any
+ * unhealthy pair from CoinGecko. Returns null only if BOTH sources
+ * fail completely. The `source` tag is:
+ *
+ *   - "pragma-miden"           — all 4 pairs healthy from Pragma
+ *   - "pragma-miden+fallback"  — ≥1 pair backfilled from CoinGecko
+ *   - "coingecko"              — Pragma totally unreachable, all CG
+ */
+async function fetchPragmaWithFallback(): Promise<PricesResponse | null> {
+  const pragma = await fetchPragma();
+  if (!pragma) return null;
+
+  const bad: Array<keyof typeof SANITY> = [];
+  for (const k of ["eth", "wbtc", "usdt", "dai"] as const) {
+    if (!isSane(k, pragma[k])) bad.push(k);
+  }
+  if (bad.length === 0) return pragma;
+
+  // Pragma is partially broken — fetch CG once and substitute the
+  // bad pairs.
+  let cg: PricesResponse | null = null;
+  try {
+    cg = await fetchCoinGecko();
+  } catch {
+    cg = null;
+  }
+  if (!cg) {
+    // Pragma broken on some pairs + CG unreachable: keep pragma's
+    // (broken) numbers, but flag the source so the UI shows it.
+    return { ...pragma, source: "pragma-miden+fallback", fallbackPairs: bad };
+  }
+
+  const merged: PricesResponse = {
+    ...pragma,
+    source: "pragma-miden+fallback",
+    fallbackPairs: bad,
+  };
+  for (const k of bad) merged[k] = cg[k];
+  return merged;
+}
+
 export async function GET() {
   if (cache && Date.now() - cache.at < CACHE_TTL_MS) {
     return Response.json(cache.body, {
@@ -122,7 +192,7 @@ export async function GET() {
     });
   }
 
-  let body: PricesResponse | null = await fetchPragma();
+  let body: PricesResponse | null = await fetchPragmaWithFallback();
   if (!body) {
     try {
       body = await fetchCoinGecko();
@@ -142,4 +212,4 @@ export async function GET() {
   });
 }
 
-export type { PricesResponse };
+export type { PricesResponse, PriceSource };

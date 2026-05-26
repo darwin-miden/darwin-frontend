@@ -62,9 +62,12 @@ test.describe("basket browser", () => {
     await expect(value).not.toHaveText("…", { timeout: 15_000 });
     await expect(value).toHaveText(/^\$\d/);
     // Source label is the provenance — must read Pragma when
-    // DARWIN_PRAGMA_BIN is wired, falls back to coingecko otherwise.
+    // DARWIN_PRAGMA_BIN is wired, with optional per-pair CoinGecko
+    // backfill ("pragma-miden+fallback") when a Pragma publisher
+    // is clearly broken; plain "coingecko" when Pragma is
+    // completely unreachable.
     const src = page.getByTestId("live-nav-source");
-    await expect(src).toHaveText(/via (pragma-miden|coingecko)/);
+    await expect(src).toHaveText(/via (pragma-miden(\+fallback)?|coingecko)/);
   });
 });
 
@@ -87,7 +90,7 @@ test.describe("api", () => {
     };
     expect(j.basket).toBe("DCC");
     expect(j.navUsd).toBeGreaterThan(0);
-    expect(["pragma-miden", "coingecko"]).toContain(j.source);
+    expect(["pragma-miden", "pragma-miden+fallback", "coingecko"]).toContain(j.source);
     expect(j.breakdown.length).toBeGreaterThanOrEqual(2);
     // Proposal target = 200ms. We give playwright transport some
     // headroom but assert well under 1s.
