@@ -5,6 +5,7 @@ import Link from "next/link";
 import { NavBar } from "../../../components/NavBar";
 import { DepositTabs } from "../../../components/DepositTabs";
 import { LiveBasketStats } from "../../../components/LiveBasketStats";
+import { NavHistoryChart } from "../../../components/NavHistoryChart";
 import {
   BASKETS,
   basketBySymbol,
@@ -166,6 +167,24 @@ export default async function BasketDetailPage({
         </div>
 
         <LiveBasketStats symbol={basket.symbol} />
+
+        <div style={{ marginTop: 32 }}>
+          <h3
+            style={{
+              fontSize: 12,
+              fontFamily: "var(--font-mono-stack)",
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              color: "var(--ink-3)",
+              borderBottom: "1px solid var(--rule)",
+              paddingBottom: 6,
+              marginBottom: 12,
+            }}
+          >
+            NAV — 30 day history
+          </h3>
+          <NavHistoryChart basket={basket.symbol} />
+        </div>
 
         {/* Two-column layout: deposit panel + what's inside */}
         <div
