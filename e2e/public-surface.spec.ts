@@ -48,6 +48,51 @@ test.describe("basket browser", () => {
       page.getByText(/source: (sqlite|synthetic)/),
     ).toBeVisible({ timeout: 15_000 });
   });
+
+  test("/baskets/dcc shows live NAV from Pragma quickly", async ({ page }) => {
+    const r = await page.goto("/baskets/dcc");
+    expect(r?.status()).toBe(200);
+    // LiveNavCard hits /api/nav?basket=DCC client-side; it should
+    // settle to a non-placeholder figure quickly (well under the
+    // proposal's 200ms target on the warm path; we give the cold
+    // path some headroom for the first server-side Pragma fetch).
+    const value = page.getByTestId("live-nav-value");
+    await expect(value).toBeVisible({ timeout: 15_000 });
+    await expect(value).not.toHaveText("—", { timeout: 15_000 });
+    await expect(value).not.toHaveText("…", { timeout: 15_000 });
+    await expect(value).toHaveText(/^\$\d/);
+    // Source label is the provenance — must read Pragma when
+    // DARWIN_PRAGMA_BIN is wired, falls back to coingecko otherwise.
+    const src = page.getByTestId("live-nav-source");
+    await expect(src).toHaveText(/via (pragma-miden|coingecko)/);
+  });
+});
+
+test.describe("api", () => {
+  test("/api/nav?basket=DCC returns NAV under 200ms warm", async ({ request }) => {
+    // Hit twice so the second call is guaranteed to be on the warm
+    // path (first request after a long idle may trigger a fresh
+    // pragma_prices_json shell-out).
+    await request.get("/api/nav?basket=DCC");
+    const t0 = Date.now();
+    const r = await request.get("/api/nav?basket=DCC");
+    const ms = Date.now() - t0;
+    expect(r.status()).toBe(200);
+    const j = (await r.json()) as {
+      basket: string;
+      navUsd: number;
+      source: string;
+      servedMs: number;
+      breakdown: Array<{ faucetAlias: string; priceUsd: number }>;
+    };
+    expect(j.basket).toBe("DCC");
+    expect(j.navUsd).toBeGreaterThan(0);
+    expect(["pragma-miden", "coingecko"]).toContain(j.source);
+    expect(j.breakdown.length).toBeGreaterThanOrEqual(2);
+    // Proposal target = 200ms. We give playwright transport some
+    // headroom but assert well under 1s.
+    expect(ms).toBeLessThan(800);
+  });
 });
 
 test.describe("portfolio", () => {

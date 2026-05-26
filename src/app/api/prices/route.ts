@@ -50,6 +50,35 @@ const PRAGMA_TIMEOUT_MS = 8_000;
 let cache: { at: number; body: PricesResponse } | null = null;
 const CACHE_TTL_MS = 30_000;
 
+// Background warm-up: re-poll Pragma every WARM_INTERVAL_MS so the
+// cache is always fresh, and a user request never pays the cold
+// shell-out cost. Pragma stays the source of truth — this is just a
+// memoised snapshot of its last reading, not a publisher relay.
+//
+// Disabled when DARWIN_PRAGMA_BIN is unset (no oracle path to warm)
+// or when running in the build/edge phase (`globalThis.window` is
+// undefined but `process.env.NEXT_PHASE` flags non-runtime invocations).
+const WARM_INTERVAL_MS = 15_000;
+declare global {
+  // eslint-disable-next-line no-var
+  var __DARWIN_PRICES_WARMER__: NodeJS.Timeout | undefined;
+}
+if (
+  PRAGMA_BIN
+  && process.env.NEXT_PHASE !== "phase-production-build"
+  && !globalThis.__DARWIN_PRICES_WARMER__
+) {
+  const tick = async () => {
+    const body = await fetchPragma();
+    if (body) cache = { at: Date.now(), body };
+  };
+  // Fire-and-forget initial warm + recurring interval. `unref()` so
+  // the timer doesn't keep Node alive during graceful shutdown.
+  void tick();
+  globalThis.__DARWIN_PRICES_WARMER__ = setInterval(tick, WARM_INTERVAL_MS);
+  globalThis.__DARWIN_PRICES_WARMER__.unref?.();
+}
+
 async function fetchPragma(): Promise<PricesResponse | null> {
   if (!PRAGMA_BIN) return null;
   const start = Date.now();

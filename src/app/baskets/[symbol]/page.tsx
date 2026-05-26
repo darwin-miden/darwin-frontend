@@ -5,6 +5,7 @@ import Link from "next/link";
 import { NavBar } from "../../../components/NavBar";
 import { DepositTabs } from "../../../components/DepositTabs";
 import { LiveBasketStats } from "../../../components/LiveBasketStats";
+import { LiveNavCard } from "../../../components/LiveNavCard";
 import { NavHistoryChart } from "../../../components/NavHistoryChart";
 import {
   BASKETS,
@@ -167,6 +168,7 @@ export default async function BasketDetailPage({
         </div>
 
         <LiveBasketStats symbol={basket.symbol} />
+        <LiveNavCard symbol={basket.symbol} />
 
         <div style={{ marginTop: 32 }}>
           <h3
