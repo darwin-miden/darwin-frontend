@@ -46,6 +46,13 @@ const BaliDepositPanel = dynamic(
     ),
   { ssr: false },
 );
+const V5UserPositionPanel = dynamic(
+  () =>
+    import("../../components/V5UserPositionPanel").then(
+      (m) => m.V5UserPositionPanel,
+    ),
+  { ssr: false },
+);
 import {
   BASKET_TOKENS,
   DARWIN_RELAY_ADDRESS,
@@ -382,6 +389,7 @@ export default function PortfolioPage() {
         )}
 
         <RelayPositionsPanel />
+        <V5UserPositionPanel />
         <RelayRedemptionsPanel />
         <BaliDepositPanel />
         <SelfCustodyWalletPanel />
