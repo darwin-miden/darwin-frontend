@@ -13,16 +13,13 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { Basket } from "./baskets";
 
-export interface PricesResponse {
-  source: "coingecko" | "pragma-miden";
-  fetchedAt: number;
-  eth: number;
-  wbtc: number;
-  usdt: number;
-  dai: number;
-  /** ms it took the server to fetch + parse, end-to-end. */
-  latencyMs?: number;
-}
+// PricesResponse is owned by the /api/prices route (which is also
+// the source-of-truth for the source enum, including the
+// pragma-miden+fallback variant emitted when a pragma feed needs a
+// per-pair CoinGecko backfill). Re-exporting it here keeps the
+// historic import path stable for older callers.
+export type { PricesResponse, PriceSource } from "../app/api/prices/route";
+import type { PricesResponse } from "../app/api/prices/route";
 
 const PRICE_KEY: Record<string, "eth" | "wbtc" | "usdt" | "dai"> = {
   "darwin-eth":  "eth",
