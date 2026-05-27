@@ -67,6 +67,13 @@ const RedeemPanel = dynamic(
     ),
   { ssr: false },
 );
+const BaliWithdrawPanel = dynamic(
+  () =>
+    import("../../components/BaliWithdrawPanel").then(
+      (m) => m.BaliWithdrawPanel,
+    ),
+  { ssr: false },
+);
 import {
   BASKET_TOKENS,
   DARWIN_RELAY_ADDRESS,
@@ -407,6 +414,7 @@ export default function PortfolioPage() {
         <RedeemPanel />
         <RelayRedemptionsPanel />
         <BaliDepositPanel />
+        <BaliWithdrawPanel />
         <BaliClaimPanel />
         <SelfCustodyWalletPanel />
         <MidenPortfolioSection />
