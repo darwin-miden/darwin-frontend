@@ -36,5 +36,12 @@ export const wagmiConfig = createConfig(
     appName: "Darwin Protocol",
     appDescription: "Confidential basket protocol on Miden.",
     appUrl: "https://darwin.xyz",
+    // ConnectKit auto-injects an @aave/account smart-wallet connector
+    // that lazy-tries to connect on mount + throws a pageerror when
+    // no Aave wallet is present ('Aave Account is not connected.
+    // Make sure to call AaveAccountSdk.connect() first.'). We don't
+    // expose Aave Smart Wallet in the UI; disable it so the page
+    // doesn't crash for users without it installed.
+    enableAaveAccount: false,
   }),
 );
