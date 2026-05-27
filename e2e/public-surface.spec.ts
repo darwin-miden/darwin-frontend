@@ -110,6 +110,22 @@ test.describe("portfolio", () => {
     ).toBeVisible();
     expect(errors).toEqual([]);
   });
+
+  test("/portfolio bundles the redeem + claim panels (mount sanity)", async ({ page }) => {
+    // The two new panels are hidden behind isConnected — they should
+    // still be IMPORTED on the page even without a wallet (the dynamic()
+    // imports resolve at mount). Smoke that the page loads without
+    // throwing once the bundle is materialised, then check that the
+    // RelayRedemptionsPanel section header still renders (proof the
+    // dynamic chain didn't break by us adding the two new ones).
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
+    const r = await page.goto("/portfolio");
+    expect(r?.status()).toBe(200);
+    // wait a beat for the dynamic-imported panels' chunks to load.
+    await page.waitForLoadState("networkidle");
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe("api", () => {

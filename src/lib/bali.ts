@@ -38,6 +38,25 @@ export const BALI_BRIDGE_ABI = [
     ],
     outputs: [],
   },
+  {
+    type: "function",
+    name: "claimAsset",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "smtProofLocalExitRoot", type: "bytes32[32]" },
+      { name: "smtProofRollupExitRoot", type: "bytes32[32]" },
+      { name: "globalIndex", type: "uint256" },
+      { name: "mainnetExitRoot", type: "bytes32" },
+      { name: "rollupExitRoot", type: "bytes32" },
+      { name: "originNetwork", type: "uint32" },
+      { name: "originTokenAddress", type: "address" },
+      { name: "destinationNetwork", type: "uint32" },
+      { name: "destinationAddress", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "metadata", type: "bytes" },
+    ],
+    outputs: [],
+  },
 ] as const;
 
 export interface BaliBridgeDeposit {
@@ -88,4 +107,91 @@ export async function listBridgesForDest(ethEncodedDest: string): Promise<BaliBr
   }
   const j = (await r.json()) as BridgesResponse;
   return j.deposits;
+}
+
+/**
+ * Merkle proof shape returned by `/api/merkle-proof`. The two
+ * `*_merkle_proof` arrays are padded to 32 siblings (the contract
+ * always expects 32; we zero-pad if the upstream returns fewer).
+ */
+export interface BaliMerkleProof {
+  main_exit_root: `0x${string}`;
+  rollup_exit_root: `0x${string}`;
+  merkle_proof: `0x${string}`[];
+  rollup_merkle_proof: `0x${string}`[];
+}
+
+export async function fetchMerkleProof(
+  depositCnt: number,
+  netId: number = BALI_NETWORK_ID,
+): Promise<BaliMerkleProof> {
+  const url = `${BALI_BRIDGE_SERVICE}/api/merkle-proof?deposit_cnt=${depositCnt}&net_id=${netId}`;
+  const r = await fetch(url);
+  if (!r.ok) {
+    throw new Error(`merkle-proof ${r.status}`);
+  }
+  const j = (await r.json()) as { proof: BaliMerkleProof };
+  return j.proof;
+}
+
+const ZERO_BYTES32: `0x${string}` = `0x${"00".repeat(32)}`;
+
+/** A 32-tuple of bytes32 — the exact shape `bytes32[32]` expands to. */
+export type Bytes32x32 = readonly [
+  `0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`,
+  `0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`,
+  `0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`,
+  `0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`,
+  `0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`,
+  `0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`,
+  `0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`,
+  `0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`,
+];
+
+/** Pad an SMT proof array to exactly 32 siblings (tuple-typed). */
+export function padSmt32(p: `0x${string}`[]): Bytes32x32 {
+  const out = p.slice(0, 32);
+  while (out.length < 32) out.push(ZERO_BYTES32);
+  return out as unknown as Bytes32x32;
+}
+
+/**
+ * Build the 11 args for `claimAsset` from a deposit + its proof, in
+ * the order viem expects when calling `writeContract` with our ABI.
+ *
+ * `metadata` is forced to `0x` if the upstream returns an empty
+ * string — viem rejects bare empty strings for `bytes`.
+ */
+export function buildClaimArgs(
+  deposit: BaliBridgeDeposit,
+  proof: BaliMerkleProof,
+): readonly [
+  Bytes32x32,
+  Bytes32x32,
+  bigint,
+  `0x${string}`,
+  `0x${string}`,
+  number,
+  `0x${string}`,
+  number,
+  `0x${string}`,
+  bigint,
+  `0x${string}`,
+] {
+  const metadata = deposit.metadata && deposit.metadata !== ""
+    ? (deposit.metadata as `0x${string}`)
+    : "0x";
+  return [
+    padSmt32(proof.merkle_proof),
+    padSmt32(proof.rollup_merkle_proof),
+    BigInt(deposit.global_index),
+    proof.main_exit_root,
+    proof.rollup_exit_root,
+    deposit.orig_net,
+    deposit.orig_addr as `0x${string}`,
+    deposit.dest_net,
+    deposit.dest_addr as `0x${string}`,
+    BigInt(deposit.amount),
+    metadata as `0x${string}`,
+  ] as const;
 }

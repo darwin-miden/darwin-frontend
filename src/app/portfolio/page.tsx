@@ -53,6 +53,20 @@ const UserPositionPanel = dynamic(
     ),
   { ssr: false },
 );
+const BaliClaimPanel = dynamic(
+  () =>
+    import("../../components/BaliClaimPanel").then(
+      (m) => m.BaliClaimPanel,
+    ),
+  { ssr: false },
+);
+const RedeemPanel = dynamic(
+  () =>
+    import("../../components/RedeemPanel").then(
+      (m) => m.RedeemPanel,
+    ),
+  { ssr: false },
+);
 import {
   BASKET_TOKENS,
   DARWIN_RELAY_ADDRESS,
@@ -390,8 +404,10 @@ export default function PortfolioPage() {
 
         <RelayPositionsPanel />
         <UserPositionPanel />
+        <RedeemPanel />
         <RelayRedemptionsPanel />
         <BaliDepositPanel />
+        <BaliClaimPanel />
         <SelfCustodyWalletPanel />
         <MidenPortfolioSection />
       </main>
