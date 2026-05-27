@@ -122,8 +122,16 @@ async function fetchPragma(): Promise<PricesResponse | null> {
 
 async function fetchCoinGecko(): Promise<PricesResponse> {
   const start = Date.now();
+  // cache:"no-store" — Next.js's `next: { revalidate: 30 }` cache
+  // serves stale FAILED responses for 30 s, which we saw burn us
+  // when CG was momentarily rate-limited: the cache then keeps
+  // returning the error long after CG recovered, so the per-pair
+  // fallback in fetchPragmaWithFallback never gets a chance to
+  // substitute. Our own module-level cache (cache.body) already
+  // does the warm-cache job; skip Next's. Same pattern would have
+  // hit us on USDT specifically — which it did.
   const upstream = await fetch(CG_URL, {
-    next: { revalidate: 30 },
+    cache: "no-store",
     headers: { accept: "application/json" },
   });
   if (!upstream.ok) {
@@ -165,7 +173,13 @@ async function fetchPragmaWithFallback(): Promise<PricesResponse | null> {
   let cg: PricesResponse | null = null;
   try {
     cg = await fetchCoinGecko();
-  } catch {
+  } catch (e) {
+    // Surface the reason — silently swallowing burned us during
+    // a verification round when this fallback path was meant to
+    // substitute USDT but kept the broken Pragma value because
+    // CG was unreachable from the dev server but reachable
+    // elsewhere on the box.
+    console.error("[/api/prices] CoinGecko fallback failed:", e instanceof Error ? e.message : e);
     cg = null;
   }
   if (!cg) {
