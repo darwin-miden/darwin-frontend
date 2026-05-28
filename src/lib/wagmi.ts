@@ -11,6 +11,7 @@
 import { getDefaultConfig } from "connectkit";
 import { createConfig, http } from "wagmi";
 import { mainnet, sepolia } from "wagmi/chains";
+import { injected, walletConnect } from "wagmi/connectors";
 
 const SEPOLIA_RPC =
   process.env.NEXT_PUBLIC_SEPOLIA_RPC_HTTP ||
@@ -25,6 +26,39 @@ const MAINNET_RPC =
 const WALLET_CONNECT_PROJECT_ID =
   process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "darwin-protocol-demo";
 
+// Explicit connector list — overrides ConnectKit's default set, which
+// hardcodes coinbaseWallet + an @aave/account smart-wallet connector.
+// We drop both:
+//   - @aave/account lazy-connects on mount and throws an unhandled
+//     pageerror ("Aave Account is not connected") that crashed the
+//     whole React tree.
+//   - Coinbase Wallet SDK demands COOP ≠ same-origin so it can open
+//     popups, but the Miden Web SDK *requires* COOP same-origin +
+//     COEP require-corp for SharedArrayBuffer (its multi-threaded
+//     STARK prover). The two are mutually exclusive — Miden wins.
+//     Loading Coinbase is then pure downside: console warnings, a
+//     dead wallet option in the picker, and blocked analytics
+//     fetches to cca-lite.coinbase.com. Dropped.
+// getDefaultConfig uses `props.connectors` verbatim when provided
+// (see connectkit/build defaultConfig: `props?.connectors ?? defaultConnectors(...)`).
+const connectors = [
+  injected({ target: "metaMask" }),
+  ...(WALLET_CONNECT_PROJECT_ID
+    ? [
+        walletConnect({
+          showQrModal: false, // ConnectKit renders its own modal
+          projectId: WALLET_CONNECT_PROJECT_ID,
+          metadata: {
+            name: "Darwin Protocol",
+            description: "Confidential basket protocol on Miden.",
+            url: "https://darwin.xyz",
+            icons: [],
+          },
+        }),
+      ]
+    : []),
+];
+
 export const wagmiConfig = createConfig(
   getDefaultConfig({
     chains: [sepolia, mainnet],
@@ -32,16 +66,10 @@ export const wagmiConfig = createConfig(
       [sepolia.id]: http(SEPOLIA_RPC),
       [mainnet.id]: http(MAINNET_RPC),
     },
+    connectors,
     walletConnectProjectId: WALLET_CONNECT_PROJECT_ID,
     appName: "Darwin Protocol",
     appDescription: "Confidential basket protocol on Miden.",
     appUrl: "https://darwin.xyz",
-    // ConnectKit auto-injects an @aave/account smart-wallet connector
-    // that lazy-tries to connect on mount + throws a pageerror when
-    // no Aave wallet is present ('Aave Account is not connected.
-    // Make sure to call AaveAccountSdk.connect() first.'). We don't
-    // expose Aave Smart Wallet in the UI; disable it so the page
-    // doesn't crash for users without it installed.
-    enableAaveAccount: false,
   }),
 );
