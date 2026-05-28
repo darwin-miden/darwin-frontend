@@ -23,8 +23,16 @@ const MAINNET_RPC =
   process.env.NEXT_PUBLIC_MAINNET_RPC_HTTP ||
   "https://ethereum-rpc.publicnode.com";
 
+// Only a *real* WalletConnect Cloud project id works — the relay
+// network rejects the placeholder, which makes WC spin forever
+// retrying its subscription ("Connection interrupted while trying
+// to subscribe" / "Subscribing … failed") and floods the console.
+// Treat unset / placeholder as "no WC" so we don't load a connector
+// that can never connect. Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
+// to a real id (cloud.reown.com) to re-enable mobile wallets.
+const RAW_WC_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
 const WALLET_CONNECT_PROJECT_ID =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "darwin-protocol-demo";
+  RAW_WC_ID && RAW_WC_ID !== "darwin-protocol-demo" ? RAW_WC_ID : "";
 
 // Explicit connector list — overrides ConnectKit's default set, which
 // hardcodes coinbaseWallet + an @aave/account smart-wallet connector.
