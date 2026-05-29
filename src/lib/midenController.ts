@@ -81,12 +81,22 @@ function leBytesToBigInt(b: Uint8Array): bigint {
  */
 export function buildUserPositionScript(userEvmAddr: string): string {
   const { suffix, prefix } = evmToUserIdFelts(userEvmAddr);
+  // Key word must be [0, 0, prefix, suffix] (top-down) — the SAME order
+  // the atomic_deposit note's set_user_position writes. get_map_item and
+  // set_map_item take the key in the same order, so reading with any
+  // other arrangement (e.g. [suffix, prefix, 0, 0]) targets a different
+  // map slot and always comes back empty.
+  //
+  // The stored position word is [0, 0, 0, amount]; sum its four felts
+  // (add add add) so the amount lands on the stack top regardless of
+  // which felt holds it, and the caller can read result.stack[0].
   return `use miden::core::sys
 
 begin
+  push.${suffix.toString()} push.${prefix.toString()}
   push.0 push.0
-  push.${prefix.toString()} push.${suffix.toString()}
   call.${MAST_ROOTS.get_user_position}
+  add add add
   exec.sys::truncate_stack
 end
 `;

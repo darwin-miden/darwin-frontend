@@ -37,10 +37,8 @@ export function UserPositionPanel() {
         accountId: CONTROLLER_ID,
         script,
       });
-      // Stack top after get_user_position = first felt of the
-      // position_word. We pushed [0, 0, suffix, prefix], called
-      // get_user_position which returned the value word. truncate_stack
-      // left 16 elements; the first slot is the lower felt.
+      // The script reads slot-10 with key [0, 0, prefix, suffix] and
+      // sums the returned position word, so stack[0] is the amount.
       const top = result.stack?.[0];
       if (typeof top === "bigint") {
         setPosition(top);
