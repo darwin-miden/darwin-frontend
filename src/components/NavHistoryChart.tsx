@@ -17,7 +17,7 @@ interface Point {
 }
 
 interface Resp {
-  source: "sqlite" | "synthetic";
+  source: "coingecko-30d" | "synthetic";
   basket: string;
   points: Point[];
 }
