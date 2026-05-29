@@ -1,23 +1,20 @@
 /**
  * Client-side price hook + NAV math for the Darwin baskets.
  *
- * Hits the `/api/prices` route (CoinGecko proxy with a 30s cache),
- * computes per-basket NAV in USD given the manifest weights from
- * `lib/baskets.ts`. The on-chain Pragma adapter will eventually
- * replace the CoinGecko source — the hook's return shape is
- * stable across that swap because `PricesResponse.source` carries
- * the provenance tag for the UI badge.
+ * Hits the `/api/prices` route (Vercel Edge function on CoinGecko,
+ * ISR-cached 30s) and computes per-basket NAV in USD against the
+ * manifest weights from `lib/baskets.ts`. On-chain settlement uses
+ * Pragma medians directly from the v6 controller; this hook is the
+ * *display* feed only.
  */
 
 import { useQuery } from "@tanstack/react-query";
 
 import type { Basket } from "./baskets";
 
-// PricesResponse is owned by the /api/prices route (which is also
-// the source-of-truth for the source enum, including the
-// pragma-miden+fallback variant emitted when a pragma feed needs a
-// per-pair CoinGecko backfill). Re-exporting it here keeps the
-// historic import path stable for older callers.
+// PricesResponse + PriceSource are owned by the /api/prices route.
+// Re-exporting here keeps the historic import path stable for callers
+// that imported the types from `lib/prices`.
 export type { PricesResponse, PriceSource } from "../app/api/prices/route";
 import type { PricesResponse } from "../app/api/prices/route";
 

@@ -330,25 +330,13 @@ export default function PortfolioPage() {
                   <>
                     NAV from{" "}
                     <strong>{pricesQuery.data.source}</strong>
-                    {pricesQuery.data.source === "pragma-miden" && (
-                      <>
-                        {" "}(<code>get_median</code> on{" "}
-                        <code>0xd0e1384e21a6350029d80128eb5c44</code>)
-                      </>
-                    )}
-                    {typeof pricesQuery.data.latencyMs === "number" && (
-                      <> · {pricesQuery.data.latencyMs}ms</>
-                    )}{" "}
+                    {" · "}
+                    {pricesQuery.data.latencyMs}ms{" "}
                     @ ETH ${pricesQuery.data.eth.toFixed(2)} · BTC $
                     {pricesQuery.data.wbtc.toFixed(0)} · USDT $
                     {pricesQuery.data.usdt.toFixed(4)} · DAI $
-                    {pricesQuery.data.dai.toFixed(4)}.{" "}
-                    {pricesQuery.data.source === "coingecko" && (
-                      <>
-                        Set <code>DARWIN_PRAGMA_BIN</code> on the server to
-                        switch this to a live on-chain Pragma read.
-                      </>
-                    )}
+                    {pricesQuery.data.dai.toFixed(4)}. On-chain settlement
+                    uses Pragma medians directly from the v6 controller.
                   </>
                 ) : (
                   <>Fetching live prices…</>

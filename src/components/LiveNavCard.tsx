@@ -6,13 +6,12 @@
  * claim ("Private NAV calc using oracle prices <200ms") is visible
  * directly in the UI.
  *
- * Source-of-truth tag (pragma-miden | coingecko) is shown verbatim
- * so users can see when the route is in Pragma-direct mode versus
- * fallback. The figure is the *target* NAV (Σ target_weight × price),
- * not the controller's on-chain compute_nav (which divides actual
- * vault value by supply); they match immediately after a rebalance
- * and drift otherwise. See lib/navOffchain for the precise
- * relationship.
+ * The displayed source tag matches the /api/prices route — currently
+ * CoinGecko spot via a Vercel Edge function. The figure is the
+ * *target* NAV (Σ target_weight × price), not the controller's
+ * on-chain compute_nav (which divides actual vault value by supply);
+ * they match immediately after a rebalance and drift otherwise. See
+ * lib/navOffchain for the precise relationship.
  */
 import type { BasketSymbol } from "../lib/baskets";
 import { useNavLive } from "../lib/useNavLive";
