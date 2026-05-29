@@ -10,16 +10,22 @@
  * Hidden behind a connected ETH wallet so we have a destination
  * default. The user can override the destination before submitting.
  *
- * Custodial note: the relay wallet's MidenFi key signs the burn.
- * True self-custody Miden→Sepolia withdraws (signing from your
- * own MidenFi wallet) go through `bridge-out-tool` directly per
- * the bali-integration doc — vendoring the full B2AGG MASM
- * dependency tree into the browser to compile in-place would
- * pin against consensus-changing agglayer modules and is brittle.
+ * The action itself is custodial — it signs from the relay wallet's
+ * MidenFi key, so it can only run where that key lives. The panel
+ * POSTs straight at the relay REST (`${RELAY_V2_URL}/v0/bridge-out`);
+ * when the relay isn't reachable (typical Vercel deploy without a
+ * backend) the panel surfaces a clean "feature unavailable" message
+ * instead of breaking the rest of the page.
+ *
+ * True self-custody Miden→Sepolia withdraws (signing from a user's
+ * own MidenFi wallet) would need the full B2AGG MASM dependency tree
+ * to compile in-browser, which pins against consensus-changing
+ * agglayer modules and is brittle — out of scope today.
  */
 
 import { useAccount } from "wagmi";
 import { useState } from "react";
+import { RELAY_V2_URL } from "../lib/relayV2";
 
 const MIDEN_EXPLORER_TX = "https://testnet.midenscan.com/tx/";
 
@@ -52,19 +58,34 @@ export function BaliWithdrawPanel() {
     }
     setStatus({ kind: "submitting" });
     try {
-      const r = await fetch("/api/bridge-out", {
+      const r = await fetch(`${RELAY_V2_URL}/v0/bridge-out`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ destAddress: dest, amount }),
       });
+      // 404 = relay is up but the bridge-out endpoint isn't deployed
+      // (the worker can do the burn but the REST hasn't exposed it
+      // yet). Show that as a feature flag rather than a generic err.
+      if (r.status === 404) {
+        setStatus({
+          kind: "err",
+          msg: `Relay at ${RELAY_V2_URL} does not expose /v0/bridge-out yet. Add it on the backend to enable the canonical Bali outbound from the UI.`,
+        });
+        return;
+      }
       const j = (await r.json()) as { ok: boolean; txId?: string; error?: string };
       if (!j.ok || !j.txId) {
-        setStatus({ kind: "err", msg: j.error ?? "unknown" });
+        setStatus({ kind: "err", msg: j.error ?? `relay HTTP ${r.status}` });
         return;
       }
       setStatus({ kind: "ok", txId: j.txId });
     } catch (e) {
-      setStatus({ kind: "err", msg: e instanceof Error ? e.message : String(e) });
+      // Network error — relay unreachable (common on Vercel deploys
+      // without a backend wired in via NEXT_PUBLIC_RELAY_V2_URL).
+      setStatus({
+        kind: "err",
+        msg: `Cannot reach relay at ${RELAY_V2_URL} — set NEXT_PUBLIC_RELAY_V2_URL to a running darwin-relay v2 instance. (${e instanceof Error ? e.message : String(e)})`,
+      });
     }
   };
 
