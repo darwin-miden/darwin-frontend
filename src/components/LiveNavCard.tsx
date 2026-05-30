@@ -31,7 +31,7 @@ function latencyColor(ms: number | null): string {
 }
 
 export function LiveNavCard({ symbol }: { symbol: BasketSymbol }) {
-  const { data, latencyMs, isFetching, refetch, error } = useNavLive(symbol);
+  const { data, latencyMs, isFetching, error } = useNavLive(symbol);
 
   return (
     <div
@@ -120,24 +120,23 @@ export function LiveNavCard({ symbol }: { symbol: BasketSymbol }) {
         <span data-testid="live-nav-source">
           via {data?.source ?? "—"}
         </span>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          disabled={isFetching}
-          style={{
-            marginTop: 4,
-            padding: "2px 8px",
-            fontSize: 10,
-            background: "var(--ink)",
-            color: "var(--paper)",
-            border: 0,
-            cursor: isFetching ? "wait" : "pointer",
-          }}
+        {/* Auto-refreshes every 10s via the useNavLive hook's
+            refetchInterval. We show a passive "refreshing…" hint while
+            React Query is fetching but never block on it — no manual
+            refresh button is needed and clicking one would just race
+            the auto tick. */}
+        <span
+          aria-live="polite"
+          style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 2 }}
         >
-          {isFetching ? "…" : "refresh"}
-        </button>
+          {isFetching ? "refreshing…" : "auto · 10s"}
+        </span>
       </div>
-      {error != null && (
+      {/* Only surface a transient fetch error if we have NO data at
+          all. Once a successful tick lands, errors from later 502s
+          (e.g. a CoinGecko rate-limit hiccup) shouldn't pollute the
+          UI — the next 10s tick will recover on its own. */}
+      {error != null && data == null && (
         <div
           style={{
             gridColumn: "1 / -1",
