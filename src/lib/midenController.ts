@@ -75,7 +75,7 @@ function leBytesToBigInt(b: Uint8Array): bigint {
  *
  * The key layout matches the worker's set_user_position payload:
  *   key = (user_id_suffix, user_id_prefix, 0, 0)
- *   where basket_id pad slots are 0 in M3 (M4 splits multi-basket).
+ *   where basket_id pad slots are 0 in M3 (a future iteration splits multi-basket).
  *
  * Stack on exit: [position_first_felt, 0, 0, 0]
  */

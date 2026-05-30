@@ -352,7 +352,7 @@ export function MidenPortfolioSection() {
       >
         v2 real-bodies <code>{REAL_BODIES_CONTROLLER_ID}</code> — read via
         useAccount() from your browser-side Miden client. The controller's
-        per-user storage map lands in M4 once the controller exposes
+        per-user storage map lands in a future iteration once the controller exposes
         addressable position slots; for now this aggregate vault state
         is the on-chain truth.
       </p>

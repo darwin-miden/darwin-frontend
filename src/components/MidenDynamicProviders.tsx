@@ -23,7 +23,7 @@ import type { ReactNode } from "react";
  *                             page. Pure self-custody. UX requires
  *                             one-time wallet creation; nothing
  *                             custodial. Not yet exposed in the UI —
- *                             the toggle is in place for M4.
+ *                             the toggle is in place for a future iteration.
  */
 const SELF_CUSTODY =
   typeof process !== "undefined" &&

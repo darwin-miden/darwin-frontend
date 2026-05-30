@@ -12,8 +12,14 @@ import * as path from "node:path";
  * different prefix); invoke explicitly when refreshing docs.
  */
 
-const OUT = process.env.DARWIN_SCREENSHOT_OUT
-  ?? "/Users/eden/data/darwin/repos/darwin-docs/docs/img";
+// Default to ../../darwin-docs/docs/img relative to this repo so a
+// fresh clone works without DARWIN_SCREENSHOT_OUT set (assumes the
+// canonical sibling-checkout layout: darwin-frontend/ and darwin-docs/
+// share a parent). Override with DARWIN_SCREENSHOT_OUT for any other
+// layout — that env var is the single knob a reviewer should need.
+const OUT =
+  process.env.DARWIN_SCREENSHOT_OUT
+  ?? path.resolve(process.cwd(), "../darwin-docs/docs/img");
 
 async function shoot(page: Page, name: string, route: string, ms = 1500) {
   fs.mkdirSync(OUT, { recursive: true });

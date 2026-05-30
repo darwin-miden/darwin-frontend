@@ -40,9 +40,18 @@ on testnet:
 ## Develop
 
 ```bash
-# .env.local should set DARWIN_PRAGMA_BIN pointing at the
-# pragma_prices_json binary from darwin-protocol — without it
-# the /api/prices route falls back to CoinGecko-only.
+# Copy .env.example to .env.local — the defaults assume a local
+# stack (relay on :8090, 1Click mock on :8080). Override the URLs
+# for a hosted deployment.
+cp .env.example .env.local
+
+# (optional) build the pragma_prices_json binary so /api/prices
+# can serve on-chain Pragma medians instead of falling back to
+# CoinGecko. From the workspace parent of this repo:
+#   cargo build --release --features pragma-live \
+#     -p darwin-protocol-account --bin pragma_prices_json
+# then set DARWIN_PRAGMA_BIN in .env.local to the absolute path.
+
 npm install
 npx next dev -p 3010   # match the Playwright baseURL
 ```
@@ -51,13 +60,19 @@ Tests:
 
 ```bash
 npx tsc --noEmit
-npx playwright test
+npx playwright test                              # default: public-surface
+DARWIN_SCREENSHOT_OUT=/tmp/shots \
+  npx playwright test e2e/screenshots.spec.ts    # opt-in docs refresh
+npx playwright test e2e/debug-console.spec.ts    # opt-in console audit
 ```
 
-The Playwright suite is in `e2e/public-surface.spec.ts` and
+The default Playwright suite is `e2e/public-surface.spec.ts` —
 covers landing, basket list, basket detail with NAV chart + live
-NAV figure under 200 ms, portfolio scaffolding, and the
-`/api/nav` + `/api/nav-history` endpoints. 10/10 expected.
+NAV under 200 ms, portfolio scaffolding, and `/api/nav` +
+`/api/nav-history`. Wallet-required flows (deposit, redeem, Bali
+claim) are out of scope here; they're exercised end-to-end via
+the relay's stress harness in `darwin-relay/scripts/stress_test.sh`
+and the manual demo scripts in `darwin-infra/scripts/`.
 
 ## License
 
