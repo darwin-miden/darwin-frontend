@@ -32,8 +32,40 @@ const MIDEN_EXPLORER_TX = "https://testnet.midenscan.com/tx/";
 type Status =
   | { kind: "idle" }
   | { kind: "submitting" }
+  | { kind: "pending"; requestId: string }
   | { kind: "ok"; txId: string }
   | { kind: "err"; msg: string };
+
+interface BridgeOutStatus {
+  request_id: string;
+  status: "pending" | "submitted" | "failed";
+  txId: string | null;
+  ok: boolean;
+  error: string | null;
+}
+
+// Poll the GET endpoint every 2s until the worker either submits the
+// burn (status="submitted" + txId set) or fails it. Bounded at 60s so
+// the UI doesn't spin forever if the worker is wedged.
+const POLL_INTERVAL_MS = 2_000;
+const POLL_TIMEOUT_MS = 60_000;
+
+async function pollUntilResolved(requestId: string): Promise<BridgeOutStatus> {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    if (Date.now() > deadline) {
+      throw new Error(
+        `timeout after ${POLL_TIMEOUT_MS / 1000}s — check the relay worker logs for request ${requestId}`,
+      );
+    }
+    const r = await fetch(`${RELAY_V2_URL}/v0/bridge-out/${requestId}`);
+    if (!r.ok) continue; // transient network/worker hiccup, retry
+    const j = (await r.json()) as BridgeOutStatus;
+    if (j.status === "submitted" || j.status === "failed") return j;
+    // Otherwise still "pending" — keep polling.
+  }
+}
 
 export function BaliWithdrawPanel() {
   const { address, isConnected } = useAccount();
@@ -57,34 +89,52 @@ export function BaliWithdrawPanel() {
       return;
     }
     setStatus({ kind: "submitting" });
+    let requestId: string;
     try {
       const r = await fetch(`${RELAY_V2_URL}/v0/bridge-out`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ destAddress: dest, amount }),
       });
-      // 404 = relay is up but the bridge-out endpoint isn't deployed
-      // (the worker can do the burn but the REST hasn't exposed it
-      // yet). Show that as a feature flag rather than a generic err.
       if (r.status === 404) {
         setStatus({
           kind: "err",
-          msg: `Relay at ${RELAY_V2_URL} does not expose /v0/bridge-out yet. Add it on the backend to enable the canonical Bali outbound from the UI.`,
+          msg: `Relay at ${RELAY_V2_URL} does not expose /v0/bridge-out yet. Upgrade the backend to enable the canonical Bali outbound from the UI.`,
         });
         return;
       }
-      const j = (await r.json()) as { ok: boolean; txId?: string; error?: string };
-      if (!j.ok || !j.txId) {
+      const j = (await r.json()) as { request_id?: string; error?: string };
+      if (!r.ok || !j.request_id) {
         setStatus({ kind: "err", msg: j.error ?? `relay HTTP ${r.status}` });
         return;
       }
-      setStatus({ kind: "ok", txId: j.txId });
+      requestId = j.request_id;
+      setStatus({ kind: "pending", requestId });
     } catch (e) {
-      // Network error — relay unreachable (common on Vercel deploys
-      // without a backend wired in via NEXT_PUBLIC_RELAY_V2_URL).
       setStatus({
         kind: "err",
         msg: `Cannot reach relay at ${RELAY_V2_URL} — set NEXT_PUBLIC_RELAY_V2_URL to a running darwin-relay v2 instance. (${e instanceof Error ? e.message : String(e)})`,
+      });
+      return;
+    }
+
+    // Hand off to the worker via the polling loop. The REST POST has
+    // already persisted the row; even if the user closes the tab now
+    // the worker will still drain it.
+    try {
+      const final = await pollUntilResolved(requestId);
+      if (final.status === "submitted" && final.txId) {
+        setStatus({ kind: "ok", txId: final.txId });
+      } else {
+        setStatus({
+          kind: "err",
+          msg: final.error ?? `bridge-out ${final.status}`,
+        });
+      }
+    } catch (e) {
+      setStatus({
+        kind: "err",
+        msg: e instanceof Error ? e.message : String(e),
       });
     }
   };
@@ -163,18 +213,42 @@ export function BaliWithdrawPanel() {
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={status.kind === "submitting"}
+          disabled={status.kind === "submitting" || status.kind === "pending"}
           style={{
             padding: "6px 14px",
             background: "var(--ink)",
             color: "var(--paper)",
             border: 0,
-            cursor: status.kind === "submitting" ? "wait" : "pointer",
+            cursor:
+              status.kind === "submitting" || status.kind === "pending"
+                ? "wait"
+                : "pointer",
           }}
         >
-          {status.kind === "submitting" ? "burning…" : "Burn + bridge out"}
+          {status.kind === "submitting"
+            ? "submitting…"
+            : status.kind === "pending"
+              ? "burning…"
+              : "Burn + bridge out"}
         </button>
       </div>
+
+      {status.kind === "pending" && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: 10,
+            background: "var(--paper-2)",
+            fontSize: 12,
+            fontFamily: "var(--font-mono-stack)",
+            borderLeft: "3px solid var(--ink-3)",
+            color: "var(--ink-2)",
+          }}
+        >
+          Request <code>{status.requestId}</code> enqueued — waiting for the
+          relay worker to emit the B2AGG note. This usually takes ~2-5s.
+        </div>
+      )}
 
       {status.kind === "ok" && (
         <div
