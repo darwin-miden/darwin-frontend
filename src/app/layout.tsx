@@ -17,7 +17,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Darwin Protocol — Confidential baskets, native to Miden",
+  title: {
+    default: "Darwin | Confidential baskets, native to Miden",
+    template: "Darwin | %s",
+  },
   description:
     "Client-side STARK-proven basket protocol. Pragma price feeds, AggLayer access from any EVM wallet. The portfolio is yours — and only yours.",
   metadataBase: new URL("https://darwin.xyz"),

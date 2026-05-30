@@ -10,7 +10,7 @@ import {
 } from "../../lib/testnet-state";
 
 export const metadata: Metadata = {
-  title: "Flow A · Flow C — Darwin testnet runs",
+  title: "Flows",
   description:
     "Real Miden testnet transaction IDs for Darwin's atomic deposit (Flow A) and atomic redeem (Flow C) flows.",
 };

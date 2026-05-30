@@ -10,7 +10,7 @@ import {
 } from "../../lib/testnet-state";
 
 export const metadata: Metadata = {
-  title: "Deployed accounts — Darwin",
+  title: "Accounts",
   description:
     "Every Miden testnet account that backs Darwin Protocol's Milestone 1: faucets, controllers, oracles, wallets.",
 };

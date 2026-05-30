@@ -6,7 +6,7 @@ import { LiveNavBadge } from "../../components/LiveNavBadge";
 import { BASKETS, type Basket, formatWeight } from "../../lib/baskets";
 
 export const metadata: Metadata = {
-  title: "Baskets — Darwin",
+  title: "Baskets",
   description:
     "Three Darwin baskets you can deposit USDC into. Each basket is a private STARK-proven position on Miden, exposed as an ERC20 on Ethereum.",
 };

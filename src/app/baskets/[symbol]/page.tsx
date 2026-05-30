@@ -35,11 +35,11 @@ export async function generateMetadata({
   try {
     const b = basketBySymbol(sym);
     return {
-      title: `${b.symbol} · ${b.name} — Darwin basket`,
+      title: b.name,
       description: b.description,
     };
   } catch {
-    return { title: "Basket not found — Darwin" };
+    return { title: "Basket not found" };
   }
 }
 

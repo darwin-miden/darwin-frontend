@@ -148,3 +148,5 @@ next-env.d.ts
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+.vercel
+.DS_Store
