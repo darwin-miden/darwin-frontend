@@ -60,7 +60,7 @@ export function MidenDynamicProviders({ children }: { children: ReactNode }) {
         <MidenFiSignerProvider
           appName="Darwin Protocol"
           network={WalletAdapterNetwork.Testnet}
-          autoConnect={false}
+          autoConnect={true}
         >
           {children}
         </MidenFiSignerProvider>

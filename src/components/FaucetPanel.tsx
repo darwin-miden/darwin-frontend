@@ -12,7 +12,8 @@
  */
 
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
-import { useState } from "react";
+import { useConsume, useNotes } from "@miden-sdk/react";
+import { useMemo, useState } from "react";
 
 interface AssetSpec {
   symbol: string;
@@ -62,6 +63,42 @@ type Status =
 export function FaucetPanel() {
   const { connected, address } = useMidenFiWallet();
   const [status, setStatus] = useState<Record<string, Status>>({});
+
+  // Faucet mints emit public P2ID notes addressed at the wallet but
+  // the MidenFi extension does not auto-consume them on sync — the
+  // user has to claim them explicitly. List the consumable notes and
+  // surface a one-click "claim" so the path is obvious.
+  const { consumableNotes, refetch: refetchNotes } = useNotes({
+    status: "committed",
+  });
+  const {
+    consume,
+    isLoading: isConsuming,
+    error: consumeError,
+  } = useConsume();
+  const claimableNotes = useMemo(
+    () =>
+      consumableNotes.filter((n) => {
+        // ConsumableNoteRecord exposes the note IDs the SDK believes
+        // the connected account can consume. Filtering by status
+        // 'committed' already gives us the on-chain ready set; we
+        // just need a non-empty list to render the claim button.
+        return !!n;
+      }),
+    [consumableNotes],
+  );
+  async function claimAll() {
+    if (!address || claimableNotes.length === 0) return;
+    try {
+      await consume({
+        accountId: address,
+        notes: claimableNotes.map((n) => n.id),
+      });
+      await refetchNotes();
+    } catch (e) {
+      console.error("[FaucetPanel] consume failed", e);
+    }
+  }
 
   if (!connected || !address) {
     return (
@@ -187,6 +224,91 @@ export function FaucetPanel() {
         })}
       </div>
 
+      {/* Claimable notes section — surfaces inbound P2ID notes the
+          MidenFi extension hasn't auto-consumed and lets the user
+          consume them in a single tx. */}
+      <div
+        style={{
+          marginTop: 24,
+          padding: "14px 16px",
+          background: "var(--paper-2)",
+          borderLeft: `3px solid ${
+            claimableNotes.length > 0 ? "var(--orange)" : "var(--rule)"
+          }`,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 16,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>
+              Pending notes
+            </div>
+            <div
+              style={{
+                color: "var(--ink-3)",
+                fontSize: 12,
+                marginTop: 2,
+                lineHeight: 1.5,
+              }}
+            >
+              {claimableNotes.length === 0
+                ? "No claimable notes. After a Drip, wait ~10–30s then refresh."
+                : `${claimableNotes.length} consumable P2ID note(s) waiting. Click claim to consume them and credit your vault.`}
+            </div>
+          </div>
+          <button
+            onClick={claimAll}
+            disabled={
+              isConsuming || claimableNotes.length === 0 || !address
+            }
+            style={{
+              padding: "8px 16px",
+              background:
+                isConsuming || claimableNotes.length === 0
+                  ? "var(--ink-3)"
+                  : "var(--ink)",
+              color: "var(--paper)",
+              border: 0,
+              cursor:
+                isConsuming || claimableNotes.length === 0
+                  ? "not-allowed"
+                  : "pointer",
+              fontSize: 13,
+              fontWeight: 500,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {isConsuming
+              ? "claiming…"
+              : claimableNotes.length === 0
+              ? "no notes to claim"
+              : `Claim ${claimableNotes.length} note${
+                  claimableNotes.length > 1 ? "s" : ""
+                }`}
+          </button>
+        </div>
+        {consumeError && (
+          <pre
+            style={{
+              marginTop: 8,
+              padding: 8,
+              background: "#fff0f0",
+              fontSize: 11,
+              color: "#a01a1a",
+              overflowX: "auto",
+            }}
+          >
+            {String(consumeError.message ?? consumeError)}
+          </pre>
+        )}
+      </div>
+
       <p
         style={{
           marginTop: 20,
@@ -197,7 +319,9 @@ export function FaucetPanel() {
         }}
       >
         Notes are emitted public P2ID and indexed against your wallet address.
-        Your MidenFi extension consumes them on the next sync — give it ~10–30s.
+        The MidenFi extension does not auto-consume them — use the claim
+        button above to fold them into your vault, then head back to a
+        basket page to deposit.
       </p>
     </div>
   );
