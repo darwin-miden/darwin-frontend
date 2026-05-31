@@ -7,7 +7,7 @@
  *   1. **ETH user** -> NEAR Intents 1Click bridge (Sepolia ETH ->
  *      Miden P2ID note) -> a custodial relay wallet on Miden submits
  *      the atomic_deposit_note to the controller on the user's behalf.
- *      This is the grant proposal's "ETH user via Near Intent + relay
+ *      This is the spec's "ETH user via Near Intent + relay
  *      wallet" path; we use Brian Seong's mock 1Click bridge as the
  *      NEAR-Intent-shaped front-end.
  *

@@ -2,7 +2,7 @@
   "name": "darwin-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "Darwin Protocol frontend at darwin.xyz (M3 deliverable).",
+  "description": "Darwin Protocol frontend at darwin.xyz.",
   "license": "MIT",
   "scripts": {
     "dev": "next dev",
