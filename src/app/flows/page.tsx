@@ -158,7 +158,9 @@ function EventCard({ ev, n }: { ev: FlowEvent; n: number }) {
 export default function FlowsPage() {
   return (
     <>
-      <NavBar active="flows" />
+      {/* /flows is preserved as a deep-link target but the top-nav now
+          points at /faucet — leave `active` unset so no item highlights. */}
+      <NavBar />
       <main className="container" style={{ padding: "48px 0 96px" }}>
         <div className="section-tag">
           <span className="tag-num">03</span>Flows on testnet
