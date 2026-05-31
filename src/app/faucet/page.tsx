@@ -8,6 +8,11 @@ export const metadata = {
   description: "Mint Darwin testnet assets (dETH, dWBTC, dUSDT, dDAI) into your Miden wallet.",
 };
 
+// FaucetPanel reads useMidenFiWallet() which only resolves under the
+// browser-side MidenProvider tree. Disable static prerender so the
+// build doesn't try to invoke the wallet hook at export time.
+export const dynamic = "force-dynamic";
+
 export default function FaucetPage() {
   return (
     <>
