@@ -19,11 +19,13 @@
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { AccountId } from "@miden-sdk/miden-sdk";
 import {
+  useAccount,
   useCompile,
+  useImportAccount,
   useSyncState,
   useTransaction,
 } from "@miden-sdk/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { Basket } from "../lib/baskets";
 import { buildDarwinNoteRequest } from "../lib/midenNote";
@@ -66,6 +68,33 @@ export function MidenDepositPanel({ basket }: Props) {
   const { syncHeight } = useSyncState();
   const compile = useCompile();
   const tx = useTransaction();
+
+  // The MidenFi extension only hands us the wallet address; it doesn't
+  // hydrate the WebClient's local account store. tx.execute() needs
+  // an account record in that store to sign + prove, otherwise it
+  // fails with "account data wasn't found for account id 0x…". The
+  // pattern: query useAccount(address) to see if the record is already
+  // local; if not, importAccount({type: "id", accountId}) fetches it
+  // from the network and stores it. Runs once per wallet connection.
+  const { account: walletAccount, isLoading: walletAccountLoading } =
+    useAccount(address ?? undefined);
+  const { importAccount, isImporting, error: importError } = useImportAccount();
+  const [importTriedFor, setImportTriedFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!address || walletAccountLoading || walletAccount) return;
+    if (importTriedFor === address || isImporting) return;
+    setImportTriedFor(address);
+    importAccount({ type: "id", accountId: address }).catch((e) => {
+      console.warn("[MidenDepositPanel] importAccount failed", e);
+    });
+  }, [
+    address,
+    walletAccount,
+    walletAccountLoading,
+    isImporting,
+    importTriedFor,
+    importAccount,
+  ]);
 
   const assetOptions = useMemo(
     () =>
@@ -274,6 +303,21 @@ export function MidenDepositPanel({ basket }: Props) {
         >
           {String(error.message ?? error)}
         </pre>
+      )}
+
+      {(isImporting || importError) && (
+        <p
+          style={{
+            marginTop: 8,
+            fontSize: 11,
+            color: importError ? "#a01a1a" : "var(--ink-3)",
+            fontFamily: "var(--font-mono-stack)",
+          }}
+        >
+          {isImporting
+            ? "importing wallet account into local store…"
+            : `import warning: ${String(importError?.message ?? importError)}`}
+        </p>
       )}
 
       <p
