@@ -76,8 +76,11 @@ export function MidenDepositPanel({ basket }: Props) {
   // pattern: query useAccount(address) to see if the record is already
   // local; if not, importAccount({type: "id", accountId}) fetches it
   // from the network and stores it. Runs once per wallet connection.
-  const { account: walletAccount, isLoading: walletAccountLoading } =
-    useAccount(address ?? undefined);
+  const {
+    account: walletAccount,
+    isLoading: walletAccountLoading,
+    getBalance,
+  } = useAccount(address ?? undefined);
   const { importAccount, isImporting, error: importError } = useImportAccount();
   const [importTriedFor, setImportTriedFor] = useState<string | null>(null);
   useEffect(() => {
@@ -109,6 +112,38 @@ export function MidenDepositPanel({ basket }: Props) {
   const [assetIdx, setAssetIdx] = useState(0);
   const [amount, setAmount] = useState<string>("10");
   const asset = assetOptions[assetIdx];
+
+  // Per-asset wallet balance (base units, asset-decimal scaled). Falls
+  // back to 0 when the account record isn't loaded yet — the deposit
+  // button validation below treats 0 the same as "not loaded" so a
+  // mid-import click doesn't fire a doomed transaction.
+  const assetBalance: bigint = useMemo(() => {
+    if (!asset || !walletAccount) return 0n;
+    try {
+      return getBalance(asset.id);
+    } catch {
+      return 0n;
+    }
+  }, [asset, walletAccount, getBalance]);
+
+  const balanceHuman = useMemo(() => {
+    if (!asset) return "0";
+    const base = 10n ** BigInt(asset.decimals);
+    const whole = assetBalance / base;
+    const frac = assetBalance % base;
+    if (frac === 0n) return whole.toString();
+    const fracStr = frac.toString().padStart(asset.decimals, "0").replace(/0+$/, "");
+    return `${whole}.${fracStr}`;
+  }, [asset, assetBalance]);
+
+  const requestedUnits: bigint = useMemo(() => {
+    if (!asset) return 0n;
+    const base = 10n ** BigInt(asset.decimals);
+    const microHuman = BigInt(Math.floor(parseFloat(amount || "0") * 1_000_000));
+    return (microHuman * base) / 1_000_000n;
+  }, [asset, amount]);
+
+  const insufficient = !!asset && requestedUnits > assetBalance;
 
   if (!connected || !address) {
     return (
@@ -265,22 +300,55 @@ export function MidenDepositPanel({ basket }: Props) {
         />
       </div>
 
+      <div
+        style={{
+          marginBottom: 8,
+          fontSize: 11,
+          fontFamily: "var(--font-mono-stack)",
+          color: "var(--ink-3)",
+          display: "flex",
+          justifyContent: "space-between",
+        }}
+      >
+        <span>
+          your {asset?.label ?? ""} balance:{" "}
+          <span style={{ color: insufficient ? "#a01a1a" : "var(--ink-2)" }}>
+            {balanceHuman}
+          </span>
+        </span>
+        {insufficient && (
+          <span style={{ color: "#a01a1a" }}>
+            need {amount} {asset?.label}, have {balanceHuman}
+          </span>
+        )}
+      </div>
+
       <button
         onClick={handleSend}
-        disabled={isLoading || !asset}
+        disabled={isLoading || !asset || insufficient || !walletAccount}
         style={{
           width: "100%",
           padding: "12px 16px",
-          background: isLoading ? "var(--ink-3)" : "var(--ink)",
+          background:
+            isLoading || insufficient || !walletAccount
+              ? "var(--ink-3)"
+              : "var(--ink)",
           color: "var(--paper)",
           border: 0,
-          cursor: isLoading ? "not-allowed" : "pointer",
+          cursor:
+            isLoading || insufficient || !walletAccount
+              ? "not-allowed"
+              : "pointer",
           fontSize: 14,
           fontWeight: 500,
         }}
       >
         {isLoading
           ? `${stage ?? "Working"}…`
+          : !walletAccount
+          ? "loading wallet account…"
+          : insufficient
+          ? `Insufficient ${asset?.label ?? ""} — mint from faucet first`
           : `Deposit ${amount} ${asset?.label ?? ""} → ${basket.symbol}`}
       </button>
 
