@@ -17,10 +17,7 @@
  */
 
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
-import {
-  Transaction,
-  TransactionType,
-} from "@miden-sdk/miden-wallet-adapter-base";
+import { Transaction } from "@miden-sdk/miden-wallet-adapter-base";
 import { AccountId } from "@miden-sdk/miden-sdk";
 import {
   useAccount,
@@ -228,15 +225,15 @@ export function MidenDepositPanel({ basket }: Props) {
       // WebClient's prover-side auth chain that doesn't have a
       // MidenFi handler bound to it.
       setTxState((s) => ({ ...s, stage: "waiting for MidenFi popup" }));
-      const customTx = Transaction.createCustomTransaction(
+      // Transaction.createCustomTransaction returns a fully-shaped
+      // MidenTransaction ({type, payload}); pass it directly to
+      // requestTransaction without wrapping.
+      const midenTx = Transaction.createCustomTransaction(
         address,
         controllerId,
         txRequest,
       );
-      const txId = await wallet.requestTransaction({
-        type: TransactionType.Custom,
-        payload: customTx,
-      });
+      const txId = await wallet.requestTransaction(midenTx);
       setTxState({ isLoading: false, stage: null, txId, error: null });
     } catch (e) {
       const msg = String((e as Error).message ?? e);
