@@ -23,11 +23,14 @@ export default function FaucetPage() {
             maxWidth: 720,
           }}
         >
-          Connect your Miden wallet and request a small drip of each constituent
-          asset (dETH, dWBTC, dUSDT, dDAI). Notes are emitted as public P2ID
-          and your wallet auto-consumes them on the next sync. Per-mint amounts
-          are intentionally tiny — the per-faucet <code>max_supply</code> caps
-          how much can ever exist on this testnet generation.
+          Connect your Miden wallet, click <em>Drip</em> on an asset row to
+          have the server mint a small public P2ID note from the faucet to
+          your wallet, then click <em>Claim</em> when the row swaps — that
+          consumes the note into your vault via a single MidenFi popup.
+          Per-mint amounts are intentionally tiny: the per-faucet{" "}
+          <code>max_supply</code> caps how much can ever exist on this
+          testnet generation (e.g. <code>dWBTC</code> totals at 0.01 across
+          all users).
         </p>
         <FaucetPanelClient />
       </main>
