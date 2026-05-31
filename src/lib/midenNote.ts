@@ -117,9 +117,18 @@ export async function buildDarwinNote(
 
   const script = await compile.noteScript({ code: noteCode });
 
-  const senderId = AccountId.fromHex(opts.sender);
-  const controllerId = AccountId.fromHex(opts.controller);
-  const faucetId = AccountId.fromHex(opts.faucetId);
+  // The MidenFi wallet hands us a bech32 address (mtst1…) while our
+  // hardcoded controller + faucet ids are stored as raw hex strings.
+  // Auto-detect format per arg so callers can pass either shape
+  // without ceremony (and so a wallet-derived sender doesn't blow up
+  // with "expected hex data length 32, found 49").
+  const parseAccountRef = (s: string) =>
+    s.startsWith("0x") || /^[0-9a-f]+$/i.test(s)
+      ? AccountId.fromHex(s)
+      : AccountId.fromBech32(s);
+  const senderId = parseAccountRef(opts.sender);
+  const controllerId = parseAccountRef(opts.controller);
+  const faucetId = parseAccountRef(opts.faucetId);
 
   const asset = new FungibleAsset(faucetId, opts.amount);
   const assets = new NoteAssets([asset]);
