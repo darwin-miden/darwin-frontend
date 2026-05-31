@@ -17,6 +17,7 @@
  */
 
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
+import { AccountId } from "@miden-sdk/miden-sdk";
 import {
   useCompile,
   useSyncState,
@@ -116,8 +117,17 @@ export function MidenDepositPanel({ basket }: Props) {
     const microHuman = BigInt(Math.floor(parseFloat(amount || "0") * 1_000_000));
     const units = (microHuman * base) / 1_000_000n;
     try {
+      // MidenFi hands us a bech32 address (mtst1…). useTransaction.execute()
+      // accepts AccountRef = string | AccountId; when given a string it
+      // internally calls AccountId.fromHex(), which rejects bech32 with
+      // 'expected hex data to have length 32, found 49'. Resolve to an
+      // AccountId object up-front so the SDK never tries to parse a
+      // bech32 string as hex.
+      const senderAccountId = /^0x[0-9a-f]+$/i.test(address)
+        ? AccountId.fromHex(address)
+        : AccountId.fromBech32(address);
       await tx.execute({
-        accountId: address,
+        accountId: senderAccountId,
         request: async () =>
           buildDarwinNoteRequest(compile, {
             kind: "atomic-deposit",
