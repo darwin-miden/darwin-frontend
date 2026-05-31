@@ -5,8 +5,6 @@ import { MidenFiSignerProvider } from "@miden-sdk/miden-wallet-adapter-react";
 import { WalletAdapterNetwork } from "@miden-sdk/miden-wallet-adapter-base";
 import type { ReactNode } from "react";
 
-import { MidenAutoReconnect } from "./MidenAutoReconnect";
-
 /**
  * Concrete browser-side Miden stack. Always loaded via next/dynamic
  * from `MidenContextProvider` so SSR doesn't see the WASM bundle.
@@ -62,21 +60,8 @@ export function MidenDynamicProviders({ children }: { children: ReactNode }) {
         <MidenFiSignerProvider
           appName="Darwin Protocol"
           network={WalletAdapterNetwork.Testnet}
-          // The provider's built-in autoConnect auto-sets the wallet
-          // 'name' to the only available adapter (MidenFi) the moment
-          // it loads, which means autoConnect=true would open the
-          // extension popup on EVERY first visit — including users
-          // who have never clicked Connect. MidenAutoReconnect (below)
-          // implements the right behaviour: read our own
-          // 'darwin:miden:consented' localStorage flag (set by the
-          // MidenConnectButton after a successful manual connect)
-          // and only call connect() then. For users who have already
-          // approved Darwin in MidenFi, the extension responds
-          // silently and the address comes back without UI; for
-          // first-time visitors nothing fires.
           autoConnect={false}
         >
-          <MidenAutoReconnect />
           {children}
         </MidenFiSignerProvider>
       )}

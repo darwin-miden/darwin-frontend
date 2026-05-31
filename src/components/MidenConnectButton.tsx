@@ -3,8 +3,6 @@
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { useEffect, useState } from "react";
 
-import { midenConsent } from "./MidenAutoReconnect";
-
 /**
  * Compact "Connect Miden wallet" button. Lives next to the ETH-side
  * ConnectKit button in the nav. Hides on SSR to avoid hitting the
@@ -36,13 +34,7 @@ export function MidenConnectButton() {
   if (connected && address) {
     return (
       <button
-        onClick={() => {
-          // Drop our auto-reconnect flag so the next visit doesn't
-          // silently re-establish the session the user just chose
-          // to drop.
-          midenConsent.clear();
-          disconnect();
-        }}
+        onClick={() => disconnect()}
         className="nav-cta"
         type="button"
         title={address}
@@ -64,10 +56,6 @@ export function MidenConnectButton() {
     }
     try {
       await connect();
-      // Connect succeeded → record consent so MidenAutoReconnect
-      // silently restores the session on future visits without ever
-      // popping the extension on a fresh browser.
-      midenConsent.set();
     } catch (e) {
       // connect() throws WalletNotReadyError if the browser extension
       // isn't installed — the provider already opens adapter.url for
