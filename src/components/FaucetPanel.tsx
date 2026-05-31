@@ -115,7 +115,9 @@ export function FaucetPanel() {
         await wallet.requestConsume({
           faucetId: asset.faucetId,
           noteId: note.noteId,
-          noteType: note.noteType === "Private" ? "private" : "public",
+          // NoteType enum: 1 = Public, 2 = Private. The MidenFi
+          // requestConsume expects the lowercase string form.
+          noteType: Number(note.noteType) === 2 ? "private" : "public",
           amount: Number(asset.amount),
         });
       }
