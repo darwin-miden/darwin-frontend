@@ -1,26 +1,32 @@
 "use client";
 
 /**
- * Testnet faucet panel.
+ * Testnet faucet panel — two flows on one page.
  *
- * Flow per asset:
- *   1. POST /api/faucet/mint  — backend invokes miden-client CLI to mint
- *      a public P2ID note from the operator faucet to the user wallet.
- *      Server responds with { txId, noteId }. No wallet interaction.
- *   2. UI captures the noteId, surfaces a "Claim" button next to the
- *      asset row.
- *   3. Click Claim → wallet.requestConsume({faucetId, noteId, noteType,
- *      amount}) → ONE MidenFi popup, user confirms → asset lands in
- *      the wallet vault.
+ * Flow A — happy path drip / claim per asset:
+ *   1. POST /api/faucet/mint  — server-side miden-client CLI mint of a
+ *      public P2ID from the operator faucet to the user wallet.
+ *      Server responds with {txId, noteId}. ZERO wallet popup.
+ *   2. UI captures the noteId, swaps the row's button to 'Claim <sym>'.
+ *   3. Click Claim → wallet.requestConsume({faucetId, noteId,
+ *      noteType, amount}) — ONE MidenFi popup, asset lands in vault.
  *
- * IMPORTANT: we never call wallet.requestConsumableNotes() — that
- * triggers a "Request Consumable Notes" popup in MidenFi on every
- * invocation. A previous version of this panel polled it every 5s,
- * which flooded the user with permission popups. Since the server-
- * side mint hands us the exact noteId, we can consume it directly
- * without ever asking the wallet to enumerate.
+ * Flow B — inbox scan (recovery / external-source path):
+ *   - Click 'Scan inbox' → wallet.requestConsumableNotes() — ONE
+ *     popup, returns every consumable note the wallet knows about
+ *     (Drips from earlier sessions, CLI mints, public notes from
+ *     other dApps, anything).
+ *   - Each result row has its own Claim button → wallet.requestConsume
+ *     for that specific note → ONE popup per claim.
+ *
+ * IMPORTANT: requestConsumableNotes is NEVER called outside an
+ * explicit user click on 'Scan inbox'. A previous version polled it
+ * every 5s on mount, which the MidenFi extension surfaces as a
+ * permission popup each time — flooded users with 12+ popups per
+ * minute of idle.
  */
 
+import type { InputNoteDetails } from "@miden-sdk/miden-wallet-adapter-base";
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { useState } from "react";
 
@@ -63,7 +69,7 @@ const ASSETS: AssetSpec[] = [
   },
 ];
 
-type Status =
+type DripStatus =
   | { kind: "idle" }
   | { kind: "minting" }
   | { kind: "minted"; txId: string; noteId: string }
@@ -71,10 +77,42 @@ type Status =
   | { kind: "claimed"; noteId: string }
   | { kind: "err"; message: string };
 
+type InboxStatus =
+  | { kind: "idle" }
+  | { kind: "scanning" }
+  | { kind: "scanned"; notes: InputNoteDetails[] }
+  | { kind: "err"; message: string };
+
+type ClaimStatus =
+  | { kind: "idle" }
+  | { kind: "claiming" }
+  | { kind: "claimed" }
+  | { kind: "err"; message: string };
+
+function formatBaseUnits(amountStr: string, decimals: number): string {
+  try {
+    const n = BigInt(amountStr);
+    const base = 10n ** BigInt(decimals);
+    const whole = n / base;
+    const frac = n % base;
+    if (frac === 0n) return whole.toString();
+    const fracStr = frac.toString().padStart(decimals, "0").replace(/0+$/, "");
+    return `${whole}.${fracStr}`;
+  } catch {
+    return amountStr;
+  }
+}
+
+function lookupAsset(faucetId: string): AssetSpec | undefined {
+  return ASSETS.find((a) => a.faucetId.toLowerCase() === faucetId.toLowerCase());
+}
+
 export function FaucetPanel() {
   const wallet = useMidenFiWallet();
   const { connected, address } = wallet;
-  const [status, setStatus] = useState<Record<string, Status>>({});
+  const [drips, setDrips] = useState<Record<string, DripStatus>>({});
+  const [inbox, setInbox] = useState<InboxStatus>({ kind: "idle" });
+  const [inboxClaims, setInboxClaims] = useState<Record<string, ClaimStatus>>({});
 
   if (!connected || !address) {
     return (
@@ -95,8 +133,10 @@ export function FaucetPanel() {
     );
   }
 
+  // ---------- Flow A: per-asset Drip + Claim ----------
+
   async function drip(asset: AssetSpec) {
-    setStatus((s) => ({ ...s, [asset.symbol]: { kind: "minting" } }));
+    setDrips((s) => ({ ...s, [asset.symbol]: { kind: "minting" } }));
     try {
       const resp = await fetch("/api/faucet/mint", {
         method: "POST",
@@ -109,33 +149,33 @@ export function FaucetPanel() {
       });
       const data = await resp.json();
       if (!resp.ok || !data.noteId) {
-        setStatus((s) => ({
+        setDrips((s) => ({
           ...s,
           [asset.symbol]: { kind: "err", message: data.error ?? `HTTP ${resp.status}` },
         }));
         return;
       }
-      setStatus((s) => ({
+      setDrips((s) => ({
         ...s,
         [asset.symbol]: { kind: "minted", txId: data.txId, noteId: data.noteId },
       }));
     } catch (e) {
-      setStatus((s) => ({
+      setDrips((s) => ({
         ...s,
         [asset.symbol]: { kind: "err", message: String((e as Error).message ?? e) },
       }));
     }
   }
 
-  async function claim(asset: AssetSpec, noteId: string) {
+  async function claimDrip(asset: AssetSpec, noteId: string) {
     if (!wallet.requestConsume) {
-      setStatus((s) => ({
+      setDrips((s) => ({
         ...s,
         [asset.symbol]: { kind: "err", message: "wallet.requestConsume not available" },
       }));
       return;
     }
-    setStatus((s) => ({ ...s, [asset.symbol]: { kind: "claiming", noteId } }));
+    setDrips((s) => ({ ...s, [asset.symbol]: { kind: "claiming", noteId } }));
     try {
       await wallet.requestConsume({
         faucetId: asset.faucetId,
@@ -143,14 +183,62 @@ export function FaucetPanel() {
         noteType: "public",
         amount: Number(asset.dripBase),
       });
-      setStatus((s) => ({ ...s, [asset.symbol]: { kind: "claimed", noteId } }));
+      setDrips((s) => ({ ...s, [asset.symbol]: { kind: "claimed", noteId } }));
     } catch (e) {
-      setStatus((s) => ({
+      setDrips((s) => ({
         ...s,
         [asset.symbol]: { kind: "err", message: String((e as Error).message ?? e) },
       }));
     }
   }
+
+  // ---------- Flow B: Scan inbox + Claim from results ----------
+
+  async function scanInbox() {
+    if (!wallet.requestConsumableNotes) {
+      setInbox({ kind: "err", message: "wallet.requestConsumableNotes not available" });
+      return;
+    }
+    setInbox({ kind: "scanning" });
+    setInboxClaims({});
+    try {
+      const notes = await wallet.requestConsumableNotes();
+      setInbox({ kind: "scanned", notes });
+    } catch (e) {
+      setInbox({ kind: "err", message: String((e as Error).message ?? e) });
+    }
+  }
+
+  async function claimInbox(note: InputNoteDetails) {
+    if (!wallet.requestConsume) return;
+    const asset0 = note.assets[0];
+    if (!asset0) {
+      setInboxClaims((s) => ({
+        ...s,
+        [note.noteId]: { kind: "err", message: "note carries no asset" },
+      }));
+      return;
+    }
+    setInboxClaims((s) => ({ ...s, [note.noteId]: { kind: "claiming" } }));
+    try {
+      // NoteType enum: 1=Public, 2=Private. Some notes may report undefined.
+      const isPrivate = Number(note.noteType) === 2;
+      await wallet.requestConsume({
+        faucetId: asset0.faucetId,
+        noteId: note.noteId,
+        noteType: isPrivate ? "private" : "public",
+        amount: Number(asset0.amount),
+      });
+      setInboxClaims((s) => ({ ...s, [note.noteId]: { kind: "claimed" } }));
+    } catch (e) {
+      setInboxClaims((s) => ({
+        ...s,
+        [note.noteId]: { kind: "err", message: String((e as Error).message ?? e) },
+      }));
+    }
+  }
+
+  // ---------- Render ----------
 
   return (
     <div style={{ maxWidth: 720 }}>
@@ -165,9 +253,10 @@ export function FaucetPanel() {
         target: {address.slice(0, 16)}…{address.slice(-6)}
       </div>
 
+      {/* Flow A — per-asset Drip / Claim */}
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {ASSETS.map((a) => {
-          const s = status[a.symbol] ?? { kind: "idle" };
+          const s = drips[a.symbol] ?? { kind: "idle" };
           const isMinted = s.kind === "minted" || s.kind === "claiming";
           const isClaimed = s.kind === "claimed";
           const isWorking = s.kind === "minting" || s.kind === "claiming";
@@ -230,7 +319,7 @@ export function FaucetPanel() {
               {isMinted ? (
                 <button
                   onClick={() =>
-                    claim(a, s.kind === "minted" ? s.noteId : (s as { noteId: string }).noteId)
+                    claimDrip(a, s.kind === "minted" ? s.noteId : (s as { noteId: string }).noteId)
                   }
                   disabled={isWorking}
                   style={{
@@ -271,6 +360,162 @@ export function FaucetPanel() {
         })}
       </div>
 
+      {/* Flow B — Scan inbox for notes from any source */}
+      <div
+        style={{
+          marginTop: 28,
+          padding: "16px 18px",
+          background: "var(--paper-2)",
+          borderLeft: "3px solid var(--rule)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 16,
+            marginBottom: inbox.kind === "scanned" && inbox.notes.length > 0 ? 14 : 0,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>
+              Inbox
+            </div>
+            <div
+              style={{
+                color: "var(--ink-3)",
+                fontSize: 12,
+                lineHeight: 1.5,
+                maxWidth: 460,
+              }}
+            >
+              Have pending notes minted from somewhere else (CLI, another dApp,
+              an earlier session)? Click <em>Scan inbox</em> — one MidenFi
+              popup, returns everything your wallet can consume.
+            </div>
+          </div>
+          <button
+            onClick={scanInbox}
+            disabled={inbox.kind === "scanning"}
+            style={{
+              padding: "8px 16px",
+              background:
+                inbox.kind === "scanning" ? "var(--ink-3)" : "var(--ink)",
+              color: "var(--paper)",
+              border: 0,
+              cursor: inbox.kind === "scanning" ? "not-allowed" : "pointer",
+              fontSize: 13,
+              fontWeight: 500,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {inbox.kind === "scanning" ? "scanning…" : "Scan inbox"}
+          </button>
+        </div>
+
+        {inbox.kind === "err" && (
+          <pre
+            style={{
+              marginTop: 10,
+              padding: 8,
+              background: "#fff0f0",
+              fontSize: 11,
+              color: "#a01a1a",
+              overflowX: "auto",
+            }}
+          >
+            {inbox.message}
+          </pre>
+        )}
+
+        {inbox.kind === "scanned" && inbox.notes.length === 0 && (
+          <div
+            style={{
+              marginTop: 12,
+              fontSize: 12,
+              color: "var(--ink-3)",
+              fontFamily: "var(--font-mono-stack)",
+            }}
+          >
+            No consumable notes for this wallet.
+          </div>
+        )}
+
+        {inbox.kind === "scanned" && inbox.notes.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {inbox.notes.map((note) => {
+              const asset = note.assets[0];
+              const matched = asset && lookupAsset(asset.faucetId);
+              const human = asset
+                ? formatBaseUnits(asset.amount, matched?.decimals ?? 0)
+                : "—";
+              const label = matched?.symbol ?? asset?.faucetId.slice(0, 16) ?? "note";
+              const cs = inboxClaims[note.noteId] ?? { kind: "idle" };
+              const isWorking = cs.kind === "claiming";
+              const isClaimed = cs.kind === "claimed";
+              return (
+                <div
+                  key={note.noteId}
+                  style={{
+                    padding: "10px 12px",
+                    background: "var(--paper)",
+                    border: "1px solid var(--rule)",
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto",
+                    gap: 12,
+                    alignItems: "center",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: "var(--font-mono-stack)",
+                      fontSize: 11,
+                      color: "var(--ink-2)",
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, color: "var(--ink)" }}>
+                      {human} {label}
+                    </div>
+                    <div style={{ color: "var(--ink-3)", marginTop: 2 }}>
+                      note <code>{note.noteId.slice(0, 18)}…</code>
+                    </div>
+                    {cs.kind === "err" && (
+                      <div style={{ color: "#a01a1a", marginTop: 4 }}>
+                        ✗ {cs.message.slice(0, 200)}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => claimInbox(note)}
+                    disabled={isWorking || isClaimed}
+                    style={{
+                      padding: "6px 14px",
+                      background:
+                        isWorking || isClaimed
+                          ? "var(--ink-3)"
+                          : "var(--orange)",
+                      color: "var(--paper)",
+                      border: 0,
+                      cursor: isWorking || isClaimed ? "not-allowed" : "pointer",
+                      fontSize: 12,
+                      fontWeight: 500,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {isClaimed
+                      ? "claimed ✓"
+                      : isWorking
+                      ? "claiming…"
+                      : "Claim"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <p
         style={{
           marginTop: 20,
@@ -282,7 +527,8 @@ export function FaucetPanel() {
       >
         Drip = server-side mint (no wallet popup). Claim = single MidenFi
         confirmation popup that consumes the freshly-minted note into your
-        wallet vault. Two clicks, two distinct flows.
+        wallet vault. Scan inbox = one extra popup to enumerate any
+        externally-sourced notes; each one then claims with its own popup.
       </p>
     </div>
   );
