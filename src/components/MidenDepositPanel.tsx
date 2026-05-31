@@ -17,13 +17,16 @@
  */
 
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
+import {
+  Transaction,
+  TransactionType,
+} from "@miden-sdk/miden-wallet-adapter-base";
 import { AccountId } from "@miden-sdk/miden-sdk";
 import {
   useAccount,
   useCompile,
   useImportAccount,
   useSyncState,
-  useTransaction,
 } from "@miden-sdk/react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -64,10 +67,21 @@ const BASKET_CONTROLLER_ID: Record<string, string> = {
 };
 
 export function MidenDepositPanel({ basket }: Props) {
-  const { connected, address } = useMidenFiWallet();
+  const wallet = useMidenFiWallet();
+  const { connected, address } = wallet;
   const { syncHeight } = useSyncState();
   const compile = useCompile();
-  const tx = useTransaction();
+  // useTransaction() drives the WebClient's transaction prover directly,
+  // which raises `miden::protocol::auth::request` for the wallet to
+  // sign — but the MidenFi extension hasn't wired its auth handler on
+  // that path (assertion 1324136…). Use wallet.requestTransaction with
+  // a Custom payload instead: the extension's own UI signs natively.
+  const [txState, setTxState] = useState<{
+    isLoading: boolean;
+    stage: string | null;
+    txId: string | null;
+    error: string | null;
+  }>({ isLoading: false, stage: null, txId: null, error: null });
 
   // The MidenFi extension only hands us the wallet address; it doesn't
   // hydrate the WebClient's local account store. tx.execute() needs
@@ -177,39 +191,64 @@ export function MidenDepositPanel({ basket }: Props) {
 
   async function handleSend() {
     if (!asset || !controllerId || !address) return;
+    if (!wallet.requestTransaction) {
+      setTxState({
+        isLoading: false,
+        stage: null,
+        txId: null,
+        error: "wallet.requestTransaction not available",
+      });
+      return;
+    }
     const base = 10n ** BigInt(asset.decimals);
     const microHuman = BigInt(Math.floor(parseFloat(amount || "0") * 1_000_000));
     const units = (microHuman * base) / 1_000_000n;
+    setTxState({ isLoading: true, stage: "building note", txId: null, error: null });
     try {
-      // MidenFi hands us a bech32 address (mtst1…). useTransaction.execute()
-      // accepts AccountRef = string | AccountId; when given a string it
-      // internally calls AccountId.fromHex(), which rejects bech32 with
-      // 'expected hex data to have length 32, found 49'. Resolve to an
-      // AccountId object up-front so the SDK never tries to parse a
-      // bech32 string as hex.
+      // Resolve sender address to an AccountId (bech32 vs hex sniff)
+      // even though we don't pass it to the wallet — buildDarwinNote
+      // still needs the parsed form internally.
       const senderAccountId = /^0x[0-9a-f]+$/i.test(address)
         ? AccountId.fromHex(address)
         : AccountId.fromBech32(address);
-      await tx.execute({
-        accountId: senderAccountId,
-        request: async () =>
-          buildDarwinNoteRequest(compile, {
-            kind: "atomic-deposit",
-            sender: address,
-            controller: controllerId,
-            faucetId: asset.id,
-            amount: units,
-          }),
+      void senderAccountId;
+
+      setTxState((s) => ({ ...s, stage: "compiling MASM" }));
+      const txRequest = await buildDarwinNoteRequest(compile, {
+        kind: "atomic-deposit",
+        sender: address,
+        controller: controllerId,
+        faucetId: asset.id,
+        amount: units,
       });
+
+      // Use the MidenFi extension's custom-transaction path. The
+      // extension renders its own popup which signs natively (handles
+      // miden::protocol::auth::request internally), bypassing the
+      // WebClient's prover-side auth chain that doesn't have a
+      // MidenFi handler bound to it.
+      setTxState((s) => ({ ...s, stage: "waiting for MidenFi popup" }));
+      const customTx = Transaction.createCustomTransaction(
+        address,
+        controllerId,
+        txRequest,
+      );
+      const txId = await wallet.requestTransaction({
+        type: TransactionType.Custom,
+        payload: customTx,
+      });
+      setTxState({ isLoading: false, stage: null, txId, error: null });
     } catch (e) {
+      const msg = String((e as Error).message ?? e);
+      setTxState({ isLoading: false, stage: null, txId: null, error: msg });
       console.error("miden deposit failed", e);
     }
   }
 
-  const isLoading = tx.isLoading;
-  const stage = tx.stage;
-  const result = tx.result;
-  const error = tx.error;
+  const isLoading = txState.isLoading;
+  const stage = txState.stage;
+  const result = txState.txId ? { transactionId: txState.txId } : null;
+  const error = txState.error ? { message: txState.error } : null;
 
   return (
     <div
