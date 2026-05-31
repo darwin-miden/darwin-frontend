@@ -16,7 +16,7 @@
  *      own Miden wallet sends straight to the controller.
  *
  * The earlier Sepolia ESCROW + wDCC ERC20 path (darwin-relay v1) is
- * deprecated. It was a workaround built during M2 when NEAR Intent
+ * deprecated. It was a workaround built earlier when NEAR Intent
  * didn't support Miden. With Brian's mock now live, the proposal's
  * native architecture is reachable, and we no longer need a Sepolia-
  * side wrapped basket token.

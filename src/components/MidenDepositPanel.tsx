@@ -11,7 +11,7 @@
  * controller consumes the note in a separate tx and credits the
  * user's basket-token position.
  *
- * For the M3 launch we keep the UX intentionally simple: one asset
+ * For the initial launch we keep the UX intentionally simple: one asset
  * at a time. a future iteration will swap `useSend` for `useCompile` + a custom
  * multi-asset DepositNote built from the bundled .masp package.
  */
