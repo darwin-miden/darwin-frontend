@@ -627,3 +627,17 @@ footer {
 @media (prefers-reduced-motion: reduce) {
   .rise, .marquee-track { animation: none; }
 }
+
+/* Portfolio disclosure groups — rotate the chevron when open and
+   give the summary a subtle hover so it reads as a control. */
+details > summary::-webkit-details-marker { display: none; }
+details[open] > summary > span:first-child {
+  transform: rotate(90deg);
+}
+details > summary > span:first-child {
+  display: inline-block;
+  transition: transform 120ms ease;
+}
+details > summary:hover {
+  color: var(--orange);
+}

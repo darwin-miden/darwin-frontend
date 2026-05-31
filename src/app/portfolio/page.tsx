@@ -366,17 +366,114 @@ export default function PortfolioPage() {
           </>
         )}
 
-        <RelayPositionsPanel />
-        <UserPositionPanel />
-        <RedeemPanel />
-        <RelayRedemptionsPanel />
-        <BaliDepositPanel />
-        <BaliWithdrawPanel />
-        <BaliClaimPanel />
-        <SelfCustodyWalletPanel />
+        {/* Miden-side positions — always rendered; the component itself
+            handles the 'connect a Miden wallet' fallback. */}
         <MidenPortfolioSection />
+
+        {/* === Actions === The main thing a user does on this page. */}
+        <h2
+          style={{
+            fontSize: 14,
+            fontFamily: "var(--font-mono-stack)",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            borderBottom: "1px solid var(--ink)",
+            paddingBottom: 8,
+            marginTop: 56,
+            marginBottom: 0,
+          }}
+        >
+          Actions
+        </h2>
+        <DisclosureGroup label="Redeem a basket position" defaultOpen>
+          <RedeemPanel />
+        </DisclosureGroup>
+        <DisclosureGroup label="Bridge between chains (Bali agglayer)">
+          <BaliDepositPanel />
+          <BaliWithdrawPanel />
+          <BaliClaimPanel />
+        </DisclosureGroup>
+
+        {/* === Activity === History tables. Collapsed by default. */}
+        <h2
+          style={{
+            fontSize: 14,
+            fontFamily: "var(--font-mono-stack)",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            borderBottom: "1px solid var(--ink)",
+            paddingBottom: 8,
+            marginTop: 56,
+            marginBottom: 0,
+          }}
+        >
+          Activity
+        </h2>
+        <DisclosureGroup label="Redemption lifecycle">
+          <RelayRedemptionsPanel />
+        </DisclosureGroup>
+
+        {/* === Technical === On-chain reads + debug. Collapsed. */}
+        <h2
+          style={{
+            fontSize: 14,
+            fontFamily: "var(--font-mono-stack)",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            borderBottom: "1px solid var(--ink)",
+            paddingBottom: 8,
+            marginTop: 56,
+            marginBottom: 0,
+          }}
+        >
+          Technical
+        </h2>
+        <DisclosureGroup label="Relay-held positions (off-chain)">
+          <RelayPositionsPanel />
+        </DisclosureGroup>
+        <DisclosureGroup label="On-chain controller slot-10 read">
+          <UserPositionPanel />
+        </DisclosureGroup>
+        <SelfCustodyWalletPanel />
       </main>
     </>
+  );
+}
+
+function DisclosureGroup({
+  label,
+  defaultOpen = false,
+  children,
+}: {
+  label: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details
+      open={defaultOpen}
+      style={{
+        marginTop: 12,
+        borderBottom: "1px solid var(--rule-2)",
+      }}
+    >
+      <summary
+        style={{
+          padding: "14px 0",
+          fontFamily: "var(--font-mono-stack)",
+          fontSize: 13,
+          cursor: "pointer",
+          listStyle: "none",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <span style={{ color: "var(--ink-3)", fontSize: 11 }}>▸</span>
+        <span>{label}</span>
+      </summary>
+      <div style={{ padding: "4px 0 24px" }}>{children}</div>
+    </details>
   );
 }
 
