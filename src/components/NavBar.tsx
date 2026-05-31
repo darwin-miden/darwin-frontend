@@ -32,7 +32,7 @@ export type NavKey =
   | "home"
   | "baskets"
   | "accounts"
-  | "flows"
+  | "faucet"
   | "portfolio";
 
 export function NavBar({ active }: { active?: NavKey }) {
