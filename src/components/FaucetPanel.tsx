@@ -90,9 +90,14 @@ export function FaucetPanel() {
   async function claimAll() {
     if (!address || claimableNotes.length === 0) return;
     try {
+      // ConsumableNoteRecord wraps an InputNoteRecord; pull the
+      // NoteId off the inner record. The consume() API accepts
+      // string|NoteId|InputNoteRecord|Note — passing the underlying
+      // InputNoteRecord is the most direct.
+      const notes = claimableNotes.map((n) => n.inputNoteRecord());
       await consume({
         accountId: address,
-        notes: claimableNotes.map((n) => n.id),
+        notes,
       });
       await refetchNotes();
     } catch (e) {
