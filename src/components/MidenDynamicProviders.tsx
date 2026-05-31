@@ -60,7 +60,12 @@ export function MidenDynamicProviders({ children }: { children: ReactNode }) {
         <MidenFiSignerProvider
           appName="Darwin Protocol"
           network={WalletAdapterNetwork.Testnet}
-          autoConnect={true}
+          // Keep false: when true the MidenFi extension popup opens
+          // every page load even on routes the user just navigates
+          // to read-only. The persistence trade-off (have to click
+          // 'Connect Miden' once per visit) is the right call — the
+          // popup-on-arrival UX is hostile.
+          autoConnect={false}
         >
           {children}
         </MidenFiSignerProvider>
