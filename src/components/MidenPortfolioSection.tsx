@@ -82,11 +82,26 @@ function fmtUnits(amount: bigint, decimals: number): string {
 }
 
 export function MidenPortfolioSection() {
+  // RULES OF HOOKS: every hook must be called on every render, in the
+  // same order, regardless of whether the user is connected. Earlier
+  // versions of this component called useSyncState/useAccount/etc
+  // before the `if (!connected) return …` early-return and then
+  // useNotes/useConsume/useState AFTER it — which threw React error
+  // #310 the moment the user clicked Connect, because that flipped
+  // the rendered hook count from 5 to 11 between renders.
+  //
+  // Keep ALL hooks at the top, then branch on the rendered output.
   const { connected, address } = useMidenFiWallet();
   const { syncHeight } = useSyncState();
   const accountResult = useAccount(address ?? undefined);
   const controllerVault = useAccount(REAL_BODIES_CONTROLLER_ID);
   const history = useTransactionHistory({});
+  const prices = usePrices();
+  const notesQuery = useNotes({ accountId: address ?? undefined });
+  const { consume, isLoading: consuming, stage: consumeStage } = useConsume();
+  const compile = useCompile();
+  const redeemTx = useTransaction();
+  const [burningSymbol, setBurningSymbol] = useState<string | null>(null);
 
   if (!connected || !address) {
     return (
@@ -132,13 +147,6 @@ export function MidenPortfolioSection() {
     ...f,
     amount: accountResult.getBalance(f.id),
   }));
-
-  const prices = usePrices();
-  const notesQuery = useNotes({ accountId: address ?? undefined });
-  const { consume, isLoading: consuming, stage: consumeStage } = useConsume();
-  const compile = useCompile();
-  const redeemTx = useTransaction();
-  const [burningSymbol, setBurningSymbol] = useState<string | null>(null);
 
   const basketBalances = BASKET_TOKEN_FAUCETS.map((b) => {
     const amount = accountResult.getBalance(b.id);
