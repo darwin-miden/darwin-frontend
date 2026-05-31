@@ -60,7 +60,7 @@ export function NavBar({ active }: { active?: NavKey }) {
           {link("baskets", "/baskets", "Baskets")}
           {link("portfolio", "/portfolio", "Portfolio")}
           {link("accounts", "/accounts", "Accounts")}
-          {link("flows", "/flows", "Flows")}
+          {link("faucet", "/faucet", "Faucet")}
         </nav>
         <div style={{ display: "flex", gap: 8 }}>
           <MidenConnectButton />
