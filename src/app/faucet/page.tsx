@@ -1,17 +1,10 @@
-import { Suspense } from "react";
-
-import { FaucetPanel } from "../../components/FaucetPanel";
+import { FaucetPanelClient } from "../../components/FaucetPanelClient";
 import { NavBar } from "../../components/NavBar";
 
 export const metadata = {
   title: "Faucet — Darwin Protocol",
   description: "Mint Darwin testnet assets (dETH, dWBTC, dUSDT, dDAI) into your Miden wallet.",
 };
-
-// FaucetPanel reads useMidenFiWallet() which only resolves under the
-// browser-side MidenProvider tree. Disable static prerender so the
-// build doesn't try to invoke the wallet hook at export time.
-export const dynamic = "force-dynamic";
 
 export default function FaucetPage() {
   return (
@@ -36,9 +29,7 @@ export default function FaucetPage() {
           are intentionally tiny — the per-faucet <code>max_supply</code> caps
           how much can ever exist on this testnet generation.
         </p>
-        <Suspense fallback={<p>loading…</p>}>
-          <FaucetPanel />
-        </Suspense>
+        <FaucetPanelClient />
       </main>
     </>
   );
