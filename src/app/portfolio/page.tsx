@@ -11,6 +11,13 @@ import { basketBySymbol, type BasketSymbol } from "../../lib/baskets";
 import { basketNav, usePrices } from "../../lib/prices";
 
 // Client-only — pulls in the Miden WASM bundle on hydration.
+const PortfolioConnectionBanner = dynamic(
+  () =>
+    import("../../components/PortfolioConnectionBanner").then(
+      (m) => m.PortfolioConnectionBanner,
+    ),
+  { ssr: false },
+);
 const MidenPortfolioSection = dynamic(
   () =>
     import("../../components/MidenPortfolioSection").then(
@@ -144,57 +151,19 @@ export default function PortfolioPage() {
             lineHeight: 1.05,
           }}
         >
-          Your Darwin baskets on Sepolia.
+          Your Darwin positions.
         </h1>
         <p style={{ color: "var(--ink-2)", maxWidth: 720, fontSize: 16, lineHeight: 1.55 }}>
-          Balances of every Darwin basket ERC20 minted to your wallet by the
-          relay. Refreshes every 8 s. Mint a fresh position on the{" "}
+          Sepolia basket-token ERC20s minted by the relay, plus Miden-native
+          positions held directly against the basket controller. Refreshes
+          every 8s. Mint a fresh position on the{" "}
           <Link href="/baskets" style={{ borderBottom: "1px dotted var(--rule)" }}>
             baskets page
           </Link>
           .
         </p>
 
-        {!isConnected && (
-          <div
-            style={{
-              marginTop: 32,
-              padding: "20px 24px",
-              background: "var(--paper-2)",
-              borderLeft: "3px solid var(--orange)",
-            }}
-          >
-            <h3 style={{ margin: 0, fontSize: 16 }}>Connect a Sepolia wallet</h3>
-            <p
-              style={{
-                color: "var(--ink-2)",
-                fontSize: 14,
-                lineHeight: 1.55,
-                margin: "8px 0 16px",
-              }}
-            >
-              Switch your wallet to the Sepolia network. MockUSDC is
-              permissionless — you can self-mint on the baskets page.
-            </p>
-            <ConnectKitButton.Custom>
-              {({ show }) => (
-                <button
-                  onClick={show}
-                  style={{
-                    padding: "10px 18px",
-                    background: "var(--ink)",
-                    color: "var(--paper)",
-                    border: 0,
-                    cursor: "pointer",
-                    fontSize: 14,
-                  }}
-                >
-                  Connect wallet
-                </button>
-              )}
-            </ConnectKitButton.Custom>
-          </div>
-        )}
+        <PortfolioConnectionBanner />
         {isConnected && (
           <>
             <div
