@@ -11,9 +11,9 @@
  * generation (e.g. dWBTC max ≈ 0.01 base units total).
  */
 
+import type { InputNoteDetails } from "@miden-sdk/miden-wallet-adapter-base";
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
-import { useConsume, useNotes } from "@miden-sdk/react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 interface AssetSpec {
   symbol: string;
@@ -61,47 +61,70 @@ type Status =
   | { kind: "err"; message: string };
 
 export function FaucetPanel() {
-  const { connected, address } = useMidenFiWallet();
+  const wallet = useMidenFiWallet();
+  const { connected, address } = wallet;
   const [status, setStatus] = useState<Record<string, Status>>({});
 
   // Faucet mints emit public P2ID notes addressed at the wallet but
   // the MidenFi extension does not auto-consume them on sync — the
-  // user has to claim them explicitly. List the consumable notes and
-  // surface a one-click "claim" so the path is obvious.
-  const { consumableNotes, refetch: refetchNotes } = useNotes({
-    status: "committed",
-  });
-  const {
-    consume,
-    isLoading: isConsuming,
-    error: consumeError,
-  } = useConsume();
-  const claimableNotes = useMemo(
-    () =>
-      consumableNotes.filter((n) => {
-        // ConsumableNoteRecord exposes the note IDs the SDK believes
-        // the connected account can consume. Filtering by status
-        // 'committed' already gives us the on-chain ready set; we
-        // just need a non-empty list to render the claim button.
-        return !!n;
-      }),
-    [consumableNotes],
-  );
-  async function claimAll() {
-    if (!address || claimableNotes.length === 0) return;
+  // user has to claim them explicitly. We DON'T use the @miden-sdk
+  // react `useConsume` hook here because it drives the WebClient's
+  // transaction prover directly; the kernel raises a
+  // `miden::protocol::auth::request` event during execution and the
+  // MidenFi signer hasn't wired its auth handler onto that path
+  // (event dies with assertion 1324136…). The MidenFi adapter
+  // exposes a dedicated `requestConsume` that routes the consume
+  // transaction through the extension's own signer + popup UI —
+  // that path handles auth properly, so use it.
+  const [claimableNotes, setClaimableNotes] = useState<InputNoteDetails[]>([]);
+  const [isConsuming, setIsConsuming] = useState(false);
+  const [consumeError, setConsumeError] = useState<string | null>(null);
+
+  const refreshClaimable = useCallback(async () => {
+    if (!connected || !wallet.requestConsumableNotes) {
+      setClaimableNotes([]);
+      return;
+    }
     try {
-      // ConsumableNoteRecord wraps an InputNoteRecord; pull the
-      // NoteId off the inner record. The consume() API accepts
-      // string|NoteId|InputNoteRecord|Note — passing the underlying
-      // InputNoteRecord is the most direct.
-      const notes = claimableNotes.map((n) => n.inputNoteRecord());
-      await consume({
-        accountId: address,
-        notes,
-      });
-      await refetchNotes();
+      const notes = await wallet.requestConsumableNotes();
+      setClaimableNotes(notes);
     } catch (e) {
-      console.error("[FaucetPanel] consume failed", e);
+      console.warn("[FaucetPanel] requestConsumableNotes failed", e);
+      setClaimableNotes([]);
+    }
+  }, [connected, wallet]);
+
+  // Initial fetch + light poll so a fresh drip surfaces here within ~5s.
+  useEffect(() => {
+    refreshClaimable();
+    const t = setInterval(refreshClaimable, 5000);
+    return () => clearInterval(t);
+  }, [refreshClaimable]);
+
+  async function claimAll() {
+    if (!address || !wallet.requestConsume || claimableNotes.length === 0) return;
+    setIsConsuming(true);
+    setConsumeError(null);
+    try {
+      // Consume one at a time: requestConsume takes a single
+      // MidenConsumeTransaction. Notes from the faucet have exactly
+      // one fungible asset; pull it off the .assets[0] slot.
+      for (const note of claimableNotes) {
+        const asset = note.assets[0];
+        if (!asset) continue;
+        await wallet.requestConsume({
+          faucetId: asset.faucetId,
+          noteId: note.noteId,
+          noteType: note.noteType === "Private" ? "private" : "public",
+          amount: Number(asset.amount),
+        });
+      }
+      await refreshClaimable();
+    } catch (e) {
+      setConsumeError(String((e as Error).message ?? e));
+      console.error("[FaucetPanel] requestConsume failed", e);
+    } finally {
+      setIsConsuming(false);
     }
   }
 
@@ -309,7 +332,7 @@ export function FaucetPanel() {
               overflowX: "auto",
             }}
           >
-            {String(consumeError.message ?? consumeError)}
+            {consumeError}
           </pre>
         )}
       </div>
