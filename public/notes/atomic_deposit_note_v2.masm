@@ -1,0 +1,144 @@
+# Atomic DepositNote v2 — receive_asset + per-user slot-10 write
+# (browser-SDK-compatible).
+#
+# Semantic mirror of darwin-relay/asm/atomic_deposit_note_v2.masm.
+# Differences vs the Rust path:
+#   - `@note_script pub proc main` wrapper instead of `begin .. end`
+#     (required by @miden-sdk 0.14.x `useCompile().noteScript()`).
+#   - `darwin::math::felt_div` inlined as `felt_div` here; the browser
+#     assembler can't link external user libraries that themselves
+#     `use` std-lib modules.
+#   - All MAST roots match the Rust file byte-for-byte; the script
+#     therefore produces a different note script root from v1
+#     (atomic_deposit_note.masm) and credits the user's slot-10
+#     position via call to set_user_position after receive_asset.
+#
+# Storage felts (7):
+#   storage[0] = deposit_value
+#   storage[1] = fee_factor
+#   storage[2] = nav_scale
+#   storage[3] = user_id_suffix       (felt — low 64 bits of user AccountId)
+#   storage[4] = user_id_prefix       (felt — high 64 bits of user AccountId)
+#   storage[5] = basket_id_suffix     (felt — low 64 bits of basket-token faucet AccountId)
+#   storage[6] = basket_id_prefix     (felt — high 64 bits of basket-token faucet AccountId)
+#
+# basket_id is what makes the slot-10 map key per-basket instead of
+# per-user-only — without it every basket row in the portfolio reads
+# the same slot and shows the same balance, which is wrong when the
+# user has only deposited into one basket. Derived from the basket
+# faucet's own AccountId so the discriminator is canonical.
+#
+# Target: v5/v6 controllers (e.g. 0x2a3ea0a268d97b80497d6a966e3141).
+# The bare v2 real-bodies controller (0xa25aa0b00007…) lacks slot-10
+# storage and the set_user_position proc — sending a v2-script note
+# there is a no-op for position tracking (the asset still lands in
+# the vault).
+
+use miden::core::math::u64
+use miden::core::sys
+use miden::protocol::active_note
+use miden::protocol::asset::ASSET_VALUE_MEMORY_OFFSET
+use miden::protocol::asset::ASSET_SIZE
+
+# u64-safe felt division. Stack: [num, div] -> [num / div].
+# Inlined copy of darwin::math::felt_div for browser compile.
+proc felt_div
+    u32split
+    movup.2
+    u32split
+    exec.u64::div
+    swap
+    push.4294967296
+    mul
+    add
+end
+
+@locals(2048)
+proc drain_assets_into_controller
+    locaddr.0 exec.active_note::get_assets
+    mul.ASSET_SIZE dup.1 add
+    padw padw movup.9
+    dup dup.10 neq
+    while.true
+        dup movdn.9
+        add.ASSET_VALUE_MEMORY_OFFSET mem_loadw_le swapw
+        dup.8 mem_loadw_le
+        padw padw swapdw
+        call.0x75f638c65584d058542bcf4674b066ae394183021bc9b44dc2fdd97d52f9bcfb
+        dropw dropw
+        movup.8 add.ASSET_SIZE dup
+        dup.10 neq
+    end
+    drop dropw dropw drop
+end
+
+# Computes mint_amount = deposit_value * fee_factor / nav_scale.
+# Leaves [mint_amount] on top of the stack so write_user_position
+# can read it.
+proc compute_mint_amount_from_storage
+    push.100
+    exec.active_note::get_storage
+    drop drop
+
+    push.100 mem_load                 # deposit_value           [dv]
+    push.101 mem_load                 # fee_factor              [ff, dv]
+    mul                               # dv*ff
+    push.102 mem_load                 # nav_scale               [ns, dv*ff]
+    swap                              # [dv*ff, ns]
+    exec.felt_div                     # (dv*ff)/ns
+end
+
+# Accumulate the user's basket-token credit into slot-10 map:
+# position := current_position + mint_amount.
+#
+# Stack on entry: [mint_amount, ...]
+# Stack on exit:  [pad, depth 16]
+proc write_user_position
+    # Stash mint_amount in scratch memory (mem[200] is clear of the
+    # storage region 100..104) so the read below can normalise stack
+    # without losing it.
+    mem_store.200
+
+    # Read current position. Key word [basket_prefix, basket_suffix,
+    # user_prefix, user_suffix] (top-down) — must mirror the set_map_item
+    # ordering below to hit the same key. basket_id felts make the slot
+    # per-(user, basket) so different baskets don't share one balance.
+    push.103 mem_load                  # user_id_suffix
+    push.104 mem_load                  # user_id_prefix
+    push.105 mem_load                  # basket_id_suffix  (was push.0)
+    push.106 mem_load                  # basket_id_prefix  (was push.0)
+    call.0xc9ccec5458661be113ea48c9d8947d10bfe4705a53a7aeee76c273733f88bf38
+    exec.sys::truncate_stack           # value word on top, depth 16
+
+    # Sum the 4 felts of the value word so we recover cur regardless
+    # of which felt the amount sits in. The stored layout is
+    # [0, 0, 0, cur].
+    add add add                        # [cur_amount, ...]
+    mem_load.200                       # [mint_amount, cur_amount, ...]
+    add                                # [total, ...]
+
+    # Write new total back. Same 4-felt key as the read above so set
+    # and get hit the same map slot.
+    push.103 mem_load                  # user_id_suffix
+    push.104 mem_load                  # user_id_prefix
+    push.105 mem_load                  # basket_id_suffix
+    push.106 mem_load                  # basket_id_prefix
+    # Stack: [basket_prefix, basket_suffix, user_prefix, user_suffix, total, ...]
+    movup.4                            # [total, key(4), ...]
+    push.0 push.0 push.0               # [0, 0, 0, total, key(4), ...]
+    swapw                              # [key(4), value(4), ...]
+    call.0xa017ac3e12d53bad11bfb8b4289a3bd2c4deef4c67a5209c53703dacbbe2d335
+    dropw
+end
+
+@note_script
+pub proc main
+    exec.compute_mint_amount_from_storage
+    exec.write_user_position
+    exec.drain_assets_into_controller
+    # FPI to get_user_position above leaves stray felts in the overflow
+    # table. The kernel rejects the consume unless the script returns
+    # at depth exactly 16. The asset moves are already committed; this
+    # final truncate is side-effect-free.
+    exec.sys::truncate_stack
+end

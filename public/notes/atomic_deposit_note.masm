@@ -12,10 +12,20 @@
 #   slot 1  fee_factor
 #   slot 2  nav_scale
 # release = deposit_value * fee_factor / nav_scale via inline felt_div.
+#
+# Asset layout note: miden-protocol 0.14.5 has ASSET_SIZE = 8 (key+value
+# as two 4-felt words, key first then value) and ASSET_VALUE_MEMORY_OFFSET
+# = 4. Older revs of this file inlined 4 / 0 — that loaded the vault
+# KEY instead of the asset VALUE and crashed receive_asset on the
+# fungible asset value layout assertion (`elements 1, 2, 3 must be
+# zeros`). Constants are imported from miden::protocol::asset so a
+# future protocol bump shows up at compile time rather than at
+# execution.
 
 use miden::core::math::u64
 use miden::protocol::active_note
-use miden::protocol::asset->asset
+use miden::protocol::asset::ASSET_VALUE_MEMORY_OFFSET
+use miden::protocol::asset::ASSET_SIZE
 
 # u64-safe felt division. Stack: [num, div] -> [num / div].
 proc felt_div
@@ -32,17 +42,17 @@ end
 @locals(2048)
 proc drain_assets_into_controller
     locaddr.0 exec.active_note::get_assets
-    mul.4 dup.1 add
+    mul.ASSET_SIZE dup.1 add
     padw padw movup.9
     dup dup.10 neq
     while.true
         dup movdn.9
-        add.0 mem_loadw_le swapw
+        add.ASSET_VALUE_MEMORY_OFFSET mem_loadw_le swapw
         dup.8 mem_loadw_le
         padw padw swapdw
         call.0x75f638c65584d058542bcf4674b066ae394183021bc9b44dc2fdd97d52f9bcfb
         dropw dropw
-        movup.8 add.4 dup
+        movup.8 add.ASSET_SIZE dup
         dup.10 neq
     end
     drop dropw dropw drop

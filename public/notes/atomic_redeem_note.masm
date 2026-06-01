@@ -7,7 +7,8 @@
 
 use miden::core::math::u64
 use miden::protocol::active_note
-use miden::protocol::asset->asset
+use miden::protocol::asset::ASSET_VALUE_MEMORY_OFFSET
+use miden::protocol::asset::ASSET_SIZE
 
 proc felt_div
     u32split
@@ -23,17 +24,17 @@ end
 @locals(2048)
 proc drain_assets_into_controller
     locaddr.0 exec.active_note::get_assets
-    mul.4 dup.1 add
+    mul.ASSET_SIZE dup.1 add
     padw padw movup.9
     dup dup.10 neq
     while.true
         dup movdn.9
-        add.0 mem_loadw_le swapw
+        add.ASSET_VALUE_MEMORY_OFFSET mem_loadw_le swapw
         dup.8 mem_loadw_le
         padw padw swapdw
         call.0x75f638c65584d058542bcf4674b066ae394183021bc9b44dc2fdd97d52f9bcfb
         dropw dropw
-        movup.8 add.4 dup
+        movup.8 add.ASSET_SIZE dup
         dup.10 neq
     end
     drop dropw dropw drop
