@@ -24,14 +24,17 @@ import {
   useAccount,
   useCompile,
   useConsume,
+  useImportAccount,
   useNotes,
   useTransaction,
   useTransactionHistory,
   useSyncState,
 } from "@miden-sdk/react";
-import { useState } from "react";
+import { AccountId } from "@miden-sdk/miden-sdk";
+import { useCallback, useEffect, useState } from "react";
 
 import { buildDarwinNoteRequest } from "../lib/midenNote";
+import { CONTROLLER_ID as FEE_ROUTING_CONTROLLER_ID } from "../lib/midenController";
 
 import {
   basketBySymbol,
@@ -58,16 +61,16 @@ const BASKET_TOKEN_FAUCETS: { symbol: string; id: string; decimals: number }[] =
   { symbol: "DCO", id: "0xbe4efc6729eb3220423b7d6d6a0942", decimals: 8 },
 ];
 
-// v2 real-bodies controller — the one with a working `receive_asset`.
-// Flow A end-to-end verified on testnet 2026-05-17:
-//   user tx     0x7116c2f0…45dc995 (block 792643)
-//   consumer tx 0xde449dfc…39e689ac (block 792643)
-//   note        0x24d9b1fc…7e22f09b
-const REAL_BODIES_CONTROLLER_ID = "0xa25aa0b00007688024b74b05a52aab";
+// v6 fee-routing controller — the only one carrying slot-10
+// (per-user position map) + slot-11 (fee recipient), and the one the
+// frontend's deposit panel now targets. Same source of truth as the
+// relay-driven flow: every basket-token mint hits the same controller,
+// every per-user position read hits the same slot-10 entry.
+const CONTROLLER_ID = FEE_ROUTING_CONTROLLER_ID;
 const BASKET_CONTROLLER_ID: Record<string, string> = {
-  DCC: REAL_BODIES_CONTROLLER_ID,
-  DAG: REAL_BODIES_CONTROLLER_ID,
-  DCO: REAL_BODIES_CONTROLLER_ID,
+  DCC: CONTROLLER_ID,
+  DAG: CONTROLLER_ID,
+  DCO: CONTROLLER_ID,
 };
 
 function fmtUnits(amount: bigint, decimals: number): string {
@@ -94,14 +97,69 @@ export function MidenPortfolioSection() {
   const { connected, address } = useMidenFiWallet();
   const { syncHeight } = useSyncState();
   const accountResult = useAccount(address ?? undefined);
-  const controllerVault = useAccount(REAL_BODIES_CONTROLLER_ID);
+  const controllerVault = useAccount(CONTROLLER_ID);
   const history = useTransactionHistory({});
   const prices = usePrices();
   const notesQuery = useNotes({ accountId: address ?? undefined });
   const { consume, isLoading: consuming, stage: consumeStage } = useConsume();
   const compile = useCompile();
   const redeemTx = useTransaction();
+  const { importAccount: _importAccount } = useImportAccount();
+  void _importAccount; // kept to preserve hook ordering during refactor
   const [burningSymbol, setBurningSymbol] = useState<string | null>(null);
+  // Per-basket on-chain slot-10 position fetched via the server-side
+  // `/api/position` endpoint. The v6 controller is `storage_mode =
+  // private`, so the browser miden-client can't read its storage map
+  // directly — only the operator's CLI can. The API proxies the read.
+  // Keyed by basket symbol so DCC/DAG/DCO each pull their own slot.
+  const [basketPositions, setBasketPositions] = useState<Record<string, bigint>>({});
+  const [, setSlotReadError] = useState<string | null>(null);
+  const refreshSlotPositions = useCallback(async () => {
+    if (!address) return;
+    try {
+      const senderId = /^0x[0-9a-f]+$/i.test(address)
+        ? AccountId.fromHex(address)
+        : AccountId.fromBech32(address);
+      const suffix = senderId.suffix().asInt().toString();
+      const prefix = senderId.prefix().asInt().toString();
+      const results = await Promise.all(
+        BASKET_TOKEN_FAUCETS.map(async (b) => {
+          const basketId = AccountId.fromHex(b.id);
+          const basketSuffix = basketId.suffix().asInt().toString();
+          const basketPrefix = basketId.prefix().asInt().toString();
+          const r = await fetch("/api/position", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ suffix, prefix, basketSuffix, basketPrefix }),
+          });
+          if (!r.ok) {
+            const text = await r.text();
+            throw new Error(`${b.symbol} ${r.status} ${text.slice(0, 80)}`);
+          }
+          const j = (await r.json()) as { position?: string };
+          return [b.symbol, j.position ? BigInt(j.position) : 0n] as const;
+        }),
+      );
+      const next: Record<string, bigint> = {};
+      for (const [sym, amt] of results) next[sym] = amt;
+      setBasketPositions(next);
+      setSlotReadError(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[MidenPortfolio] slot-10 read failed", e);
+      setSlotReadError(msg);
+      setBasketPositions({});
+    }
+  }, [address]);
+  useEffect(() => {
+    if (!connected || !address) {
+      setBasketPositions({});
+      return;
+    }
+    void refreshSlotPositions();
+    // Re-read on each sync tick so the credit lands without a manual
+    // refresh once the worker consumes the deposit note.
+  }, [connected, address, syncHeight, refreshSlotPositions]);
 
   if (!connected || !address) {
     return (
@@ -148,8 +206,11 @@ export function MidenPortfolioSection() {
     amount: accountResult.getBalance(f.id),
   }));
 
+  // Slot-10 entries are keyed by (user_id_suffix, user_id_prefix,
+  // basket_id_suffix, basket_id_prefix) — each basket pulls its own
+  // entry, so DCC/DAG/DCO carry independent balances per user.
   const basketBalances = BASKET_TOKEN_FAUCETS.map((b) => {
-    const amount = accountResult.getBalance(b.id);
+    const amount = basketPositions[b.symbol] ?? 0n;
     const manifest = basketBySymbol(b.symbol as BasketSymbol);
     const nav = basketNav(manifest, prices.data);
     const human = Number(amount) / 10 ** b.decimals;
@@ -358,11 +419,11 @@ export function MidenPortfolioSection() {
           marginBottom: 10,
         }}
       >
-        v2 real-bodies <code>{REAL_BODIES_CONTROLLER_ID}</code> — read via
-        useAccount() from your browser-side Miden client. The controller's
-        per-user storage map lands in a future iteration once the controller exposes
-        addressable position slots; for now this aggregate vault state
-        is the on-chain truth.
+        v6 fee-routing <code>{CONTROLLER_ID}</code> — read via{" "}
+        useAccount() from your browser-side Miden client. The aggregate
+        vault below totals all users' deposits; per-user position is
+        the slot-10 read in each basket row above (same controller,
+        different slot).
       </p>
       {controllerVault.isLoading ? (
         <p style={{ color: "var(--ink-3)", fontSize: 12 }}>loading vault…</p>

@@ -29,6 +29,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { Basket } from "../lib/baskets";
 import { buildDarwinNoteRequest } from "../lib/midenNote";
+import { basketNav, usePrices } from "../lib/prices";
 
 interface Props {
   basket: Basket;
@@ -56,18 +57,106 @@ const ASSET_FAUCETS: Record<string, { label: string; id: string; decimals: numbe
 //   note        0x24d9b1fc90d979c78321b9fc9293e413dada5b590e56c58375333f4c7e22f09b
 //   both at block 792643. 100 dETH moved user → note → controller vault;
 //   darwin::math::felt_div ran on-chain through the kernel's u64::div event.
-const REAL_BODIES_CONTROLLER_ID = "0xa25aa0b00007688024b74b05a52aab";
-const BASKET_CONTROLLER_ID: Record<string, string> = {
-  DCC: REAL_BODIES_CONTROLLER_ID,
-  DAG: REAL_BODIES_CONTROLLER_ID,
-  DCO: REAL_BODIES_CONTROLLER_ID,
+// v6 fee-routing controller — the one the relay deposits into, the
+// only one that carries slot-10 (per-user position map) + slot-11
+// (fee recipient). The bare "real-bodies" v2 controller
+// (0xa25aa0b00007…) lacks those slots, so depositing there leaves
+// the asset in the aggregate vault but never credits a user position
+// — the portfolio UI then reads slot-10 and shows 0 forever.
+const FEE_ROUTING_CONTROLLER_ID = "0x2a3ea0a268d97b80497d6a966e3141";
+// Basket-token faucet IDs — same source as MidenPortfolioSection.
+// The atomic-deposit-v2 script reads the basket faucet's (suffix,
+// prefix) felts and uses them as the basket_id half of the slot-10
+// map key, so each basket carries its own balance for each user.
+const BASKET_TOKEN_FAUCET: Record<string, string> = {
+  DCC: "0x2066f2da1f91ba202af5251d39101c",
+  DAG: "0xfb6811fd6399df206d44f62800620d",
+  DCO: "0xbe4efc6729eb3220423b7d6d6a0942",
 };
+const BASKET_CONTROLLER_ID: Record<string, string> = {
+  DCC: FEE_ROUTING_CONTROLLER_ID,
+  DAG: FEE_ROUTING_CONTROLLER_ID,
+  DCO: FEE_ROUTING_CONTROLLER_ID,
+};
+
+// Constituent faucet -> spot price (USD). For dUSDT/dDAI we treat as
+// $1 stables; dETH/dWBTC use the live oracle prices once the on-chain
+// PragmaFeed is wired. Until then a fallback static value keeps the
+// math sane for testnet deposits in non-stable assets.
+const ASSET_PRICE_USD: Record<string, number> = {
+  "0xa095d9b3831e96206ff70c2218a6a9": 2000,   // dETH
+  "0x7a45cb24ada22120246bcf54196e12": 60000,  // dWBTC
+  "0xd3789f451ddd4720602ba9eb1a268d": 1,      // dUSDT
+  "0xb526deb0408a29207e4f27ed57bf1a": 1,      // dDAI
+};
+const BASKET_TOKEN_DECIMALS = 8;
+
+// Derive the felts the atomic_deposit_note_v2 script reads from
+// storage so its `mint = deposit_value * fee_factor / nav_scale` runs
+// in correct dimensional units.
+//
+// Goal:
+//   mint_basket_base = (amount_asset_base * asset_price_usd / basket_nav_usd)
+//                      * 10^(basket_dec - asset_dec)
+//                      * fee
+//
+// Implementation: deposit_value carries `amount * asset_price_usd` and
+// nav_scale absorbs the basket NAV plus the decimal alignment.
+//   deposit_value = amount * asset_price
+//   fee_factor    = 9970                                          (0.9970 in 1e4 fp)
+//   nav_scale     = basket_nav * 10000 * 10^(asset_dec - basket_dec)
+// → mint = amount * asset_price * 9970 / (basket_nav * 10000 * 10^(asset_dec-basket_dec))
+//        = amount * asset_price * 10^(basket_dec - asset_dec) * 0.9970 / basket_nav ✓
+//
+// For dUSDT (6 dec) → DCC (8 dec) @ NAV $30126:
+//   nav_scale = 30126 * 10000 * 10^(6-8) = 30126 * 100 ≈ 3_012_600
+//   for amount = 10e6 (10 dUSDT @ $1):
+//   mint = 10e6 * 1 * 9970 / 3_012_600 ≈ 33_090 base units = 0.000331 DCC
+//   ⇒ value 0.000331 × $30126 ≈ $9.97  ✓
+function computeStorageFelts(
+  amountAssetBase: bigint,
+  assetDecimals: number,
+  assetPriceUsd: number,
+  basketNavUsd: number,
+): [bigint, bigint, bigint] {
+  // Derivation:
+  //   mint_basket_base = amount * asset_price * 10^(basket_dec - asset_dec) / basket_nav
+  //   with fee:        = above × 9970/10000
+  // The on-chain script computes `mint = deposit_value × fee / nav_scale`
+  // (felt_div is integer division), so we pre-pack the units into
+  // (deposit_value, nav_scale) such that the divide lands on the right
+  // integer mint.
+  //
+  //   deposit_value = amount × asset_price
+  //   nav_scale     = basket_nav × 10000 / 10^(basket_dec - asset_dec)
+  //
+  // For dUSDT (6 dec, $1) → DCC (8 dec) @ NAV $30126:
+  //   nav_scale = 30126 × 10000 / 100 = 3_012_600
+  //   amount = 10e6, fee = 9970:
+  //   mint = 10e6 × 1 × 9970 / 3_012_600 = 33_090 base units = 0.000331 DCC
+  //   ⇒ value 0.000331 × $30126 ≈ $9.97  ✓
+  const depositValue = amountAssetBase * BigInt(Math.round(assetPriceUsd));
+  const navFlat = BigInt(Math.max(1, Math.round(basketNavUsd)));
+  const basketMinusAssetDec = BASKET_TOKEN_DECIMALS - assetDecimals;
+
+  let navScale = navFlat * 10_000n;
+  if (basketMinusAssetDec > 0) {
+    // asset has fewer decimals than basket (dUSDT 6 → 8) — divide
+    navScale = navScale / 10n ** BigInt(basketMinusAssetDec);
+    if (navScale === 0n) navScale = 1n;
+  } else if (basketMinusAssetDec < 0) {
+    // asset has more decimals than basket (dETH 18 → 8) — multiply
+    navScale = navScale * 10n ** BigInt(-basketMinusAssetDec);
+  }
+  return [depositValue, 9_970n, navScale];
+}
 
 export function MidenDepositPanel({ basket }: Props) {
   const wallet = useMidenFiWallet();
   const { connected, address } = wallet;
   const { syncHeight } = useSyncState();
   const compile = useCompile();
+  const prices = usePrices();
   // useTransaction() drives the WebClient's transaction prover directly,
   // which raises `miden::protocol::auth::request` for the wallet to
   // sign — but the MidenFi extension hasn't wired its auth handler on
@@ -211,12 +300,32 @@ export function MidenDepositPanel({ basket }: Props) {
       void senderAccountId;
 
       setTxState((s) => ({ ...s, stage: "compiling MASM" }));
+      // Resolve basket NAV from the cached price feed; without it
+      // the script defaults to amount × 9970 / 10000 which conflates
+      // asset base units with basket base units and credits ~300×
+      // the actual USD value of the deposit on a $30k-NAV basket.
+      const basketNavUsd = basketNav(basket, prices.data) ?? null;
+      const priceUsd = ASSET_PRICE_USD[asset.id] ?? null;
+      const mathFelts =
+        basketNavUsd && priceUsd
+          ? computeStorageFelts(units, asset.decimals, priceUsd, basketNavUsd)
+          : undefined;
+
       const txRequest = await buildDarwinNoteRequest(compile, {
-        kind: "atomic-deposit",
+        // v2 calls set_user_position after receive_asset so the
+        // controller credits the user's slot-10 entry, which the
+        // portfolio panel reads to display a non-zero basket
+        // position. The 7-felt note storage (3 math + 2 user_id +
+        // 2 basket_id felts) is filled by buildDarwinNoteRequest
+        // automatically — basket_id ensures DCC/DAG/DCO deposits
+        // hit distinct slot-10 entries instead of sharing one.
+        kind: "atomic-deposit-v2",
         sender: address,
         controller: controllerId,
         faucetId: asset.id,
         amount: units,
+        basketFaucetId: BASKET_TOKEN_FAUCET[basket.symbol],
+        storageFelts: mathFelts,
       });
 
       // Use the MidenFi extension's custom-transaction path. The
