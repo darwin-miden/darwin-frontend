@@ -81,11 +81,35 @@ function leBytesToBigInt(b: Uint8Array): bigint {
  */
 export function buildUserPositionScript(userEvmAddr: string): string {
   const { suffix, prefix } = evmToUserIdFelts(userEvmAddr);
-  // Key word must be [0, 0, prefix, suffix] (top-down) — the SAME order
-  // the atomic_deposit note's set_user_position writes. get_map_item and
-  // set_map_item take the key in the same order, so reading with any
-  // other arrangement (e.g. [suffix, prefix, 0, 0]) targets a different
-  // map slot and always comes back empty.
+  return buildUserPositionScriptFromFelts(suffix, prefix);
+}
+
+/**
+ * Same as `buildUserPositionScript` but takes the user_id felts
+ * directly — used by the Miden-native flow where the user_id is the
+ * Miden wallet's AccountId (suffix + prefix from `AccountId.suffix()`
+ * / `.prefix()`) rather than an EVM address.
+ *
+ * `basketSuffix` / `basketPrefix` are the basket-token faucet's
+ * AccountId felts. They make the slot-10 key per-(user, basket) so
+ * each basket carries its own balance. Pass `0n / 0n` to fall back
+ * to the legacy single-slot semantics.
+ *
+ * The atomic_deposit_note_v2 script writes the same 4-felt key when
+ * it calls `set_user_position`, so this read lands on the exact
+ * slot-10 entry the deposit created.
+ */
+export function buildUserPositionScriptFromFelts(
+  suffix: bigint,
+  prefix: bigint,
+  basketSuffix: bigint = 0n,
+  basketPrefix: bigint = 0n,
+): string {
+  // Key word must be [basket_prefix, basket_suffix, user_prefix,
+  // user_suffix] (top-down) — the SAME order the atomic_deposit note's
+  // set_user_position writes. get_map_item and set_map_item take the
+  // key in the same order, so reading with any other arrangement
+  // targets a different map slot and always comes back empty.
   //
   // The stored position word is [0, 0, 0, amount]; sum its four felts
   // (add add add) so the amount lands on the stack top regardless of
@@ -94,7 +118,7 @@ export function buildUserPositionScript(userEvmAddr: string): string {
 
 begin
   push.${suffix.toString()} push.${prefix.toString()}
-  push.0 push.0
+  push.${basketSuffix.toString()} push.${basketPrefix.toString()}
   call.${MAST_ROOTS.get_user_position}
   add add add
   exec.sys::truncate_stack
