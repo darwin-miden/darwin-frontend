@@ -176,13 +176,17 @@ export function FaucetPanel() {
       return;
     }
     setDrips((s) => ({ ...s, [asset.symbol]: { kind: "claiming", noteId } }));
-    // Retry loop — the MidenFi extension's local store needs a few
+    // Retry loop — the Miden Wallet extension's local store needs
     // sync ticks to discover a freshly-minted Public note. Without a
     // retry, clicking Claim right after Drip throws INVALID_PARAMS
-    // 'Note with id … not found'. Caps at ~25s wall-clock (5 × 5s)
-    // which covers normal testnet sync latency without locking the
-    // UI forever.
-    const MAX_ATTEMPTS = 5;
+    // 'Note with id … not found' because the extension's background
+    // sync (when it runs at all) hasn't caught up yet. requestConsume
+    // doesn't import the note itself, so we have to wait for it.
+    //
+    // Caps at ~60s wall-clock (12 × 5s) which covers cold-start sync
+    // on testnet; if it's still missing the user can fall back to
+    // 'Scan inbox' which forces a sync via popup.
+    const MAX_ATTEMPTS = 12;
     const RETRY_DELAY_MS = 5_000;
     let lastErr: unknown = null;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -207,12 +211,13 @@ export function FaucetPanel() {
         }
       }
     }
+    const rawMsg = String((lastErr as Error).message ?? lastErr);
+    const friendly = /not found/i.test(rawMsg)
+      ? "wallet didn't sync this note in time — click 'Scan inbox' below to force a sync, then claim it from the result list"
+      : rawMsg;
     setDrips((s) => ({
       ...s,
-      [asset.symbol]: {
-        kind: "err",
-        message: String((lastErr as Error).message ?? lastErr),
-      },
+      [asset.symbol]: { kind: "err", message: friendly },
     }));
   }
 
