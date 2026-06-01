@@ -176,20 +176,44 @@ export function FaucetPanel() {
       return;
     }
     setDrips((s) => ({ ...s, [asset.symbol]: { kind: "claiming", noteId } }));
-    try {
-      await wallet.requestConsume({
-        faucetId: asset.faucetId,
-        noteId,
-        noteType: "public",
-        amount: Number(asset.dripBase),
-      });
-      setDrips((s) => ({ ...s, [asset.symbol]: { kind: "claimed", noteId } }));
-    } catch (e) {
-      setDrips((s) => ({
-        ...s,
-        [asset.symbol]: { kind: "err", message: String((e as Error).message ?? e) },
-      }));
+    // Retry loop — the MidenFi extension's local store needs a few
+    // sync ticks to discover a freshly-minted Public note. Without a
+    // retry, clicking Claim right after Drip throws INVALID_PARAMS
+    // 'Note with id … not found'. Caps at ~25s wall-clock (5 × 5s)
+    // which covers normal testnet sync latency without locking the
+    // UI forever.
+    const MAX_ATTEMPTS = 5;
+    const RETRY_DELAY_MS = 5_000;
+    let lastErr: unknown = null;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await wallet.requestConsume({
+          faucetId: asset.faucetId,
+          noteId,
+          noteType: "public",
+          amount: Number(asset.dripBase),
+        });
+        setDrips((s) => ({ ...s, [asset.symbol]: { kind: "claimed", noteId } }));
+        return;
+      } catch (e) {
+        lastErr = e;
+        const msg = String((e as Error).message ?? e);
+        // Surface non-recoverable errors immediately (user rejection,
+        // wallet locked, etc) — only the 'not found' race is worth
+        // retrying.
+        if (!/not found/i.test(msg)) break;
+        if (attempt < MAX_ATTEMPTS) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+        }
+      }
     }
+    setDrips((s) => ({
+      ...s,
+      [asset.symbol]: {
+        kind: "err",
+        message: String((lastErr as Error).message ?? lastErr),
+      },
+    }));
   }
 
   // ---------- Flow B: Scan inbox + Claim from results ----------
