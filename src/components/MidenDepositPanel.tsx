@@ -41,7 +41,7 @@ interface Props {
 const ASSET_FAUCETS: Record<string, { label: string; id: string; decimals: number }> = {
   "darwin-eth":  { label: "dETH",  id: "0x9ecd63df21c64f2029429a6337a712", decimals: 18 },
   "darwin-wbtc": { label: "dWBTC", id: "0x2357c29fd5ed992038b0c44bf54aaf", decimals: 8  },
-  "darwin-usdt": { label: "dUSDT", id: "0xd3789f451ddd4720602ba9eb1a268d", decimals: 6  },
+  "darwin-usdt": { label: "dUSDT", id: "0x049d581b3233f42040501b99d2bd52", decimals: 6  },
   "darwin-dai":  { label: "dDAI",  id: "0x619df5d889019020782e804eb60d0b", decimals: 18 },
 };
 
@@ -86,7 +86,7 @@ const BASKET_CONTROLLER_ID: Record<string, string> = {
 const ASSET_PRICE_USD: Record<string, number> = {
   "0x9ecd63df21c64f2029429a6337a712": 2000,   // dETH
   "0x2357c29fd5ed992038b0c44bf54aaf": 60000,  // dWBTC
-  "0xd3789f451ddd4720602ba9eb1a268d": 1,      // dUSDT
+  "0x049d581b3233f42040501b99d2bd52": 1,      // dUSDT
   "0x619df5d889019020782e804eb60d0b": 1,      // dDAI
 };
 const BASKET_TOKEN_DECIMALS = 8;

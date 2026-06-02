@@ -38,37 +38,45 @@ interface AssetSpec {
   dripHuman: string;    // pre-formatted "X.Y" for the button label
 }
 
+// Per-drip amounts sized to realistic test denominations. Two hard
+// ceilings to keep in mind for 18-decimal assets:
+//   1. Asset amount in a note is a u64 felt — max ~18 units fit in
+//      a single note for 18-dec assets, so 100 dDAI per drip is not
+//      achievable in one tx.
+//   2. wallet.requestConsume's `amount` field is typed `number` —
+//      Number.MAX_SAFE_INTEGER (2^53 ≈ 9e15) is the precision boundary.
+//      Above that, BigInt → Number coercion can lose units. We push
+//      past it for the higher-value 18-dec drips and accept the
+//      cosmetic display drift in the popup (the on-chain consume uses
+//      the note's exact amount, not the param).
 const ASSETS: AssetSpec[] = [
   {
     symbol: "dETH",
     faucetId: "0x9ecd63df21c64f2029429a6337a712",
     decimals: 18,
-    dripBase: 1_000_000_000_000_000n, // 1e15 = 0.001 dETH per drip
-    dripHuman: "0.001",
+    dripBase: 100_000_000_000_000_000n, // 1e17 = 0.1 dETH (~$200)
+    dripHuman: "0.1",
   },
   {
     symbol: "dWBTC",
     faucetId: "0x2357c29fd5ed992038b0c44bf54aaf",
     decimals: 8,
-    dripBase: 100_000n,
-    dripHuman: "0.001",
+    dripBase: 100_000_000n, // 1e8 = 1 dWBTC (~$60k)
+    dripHuman: "1",
   },
   {
     symbol: "dUSDT",
-    faucetId: "0xd3789f451ddd4720602ba9eb1a268d",
+    faucetId: "0x049d581b3233f42040501b99d2bd52",
     decimals: 6,
-    dripBase: 100_000_000n,
-    dripHuman: "100",
+    dripBase: 1_000_000_000n, // 1e9 = 1000 dUSDT ($1000)
+    dripHuman: "1000",
   },
   {
     symbol: "dDAI",
     faucetId: "0x619df5d889019020782e804eb60d0b",
     decimals: 18,
-    // Keep <= 9e15 (Number safe-integer ceiling) — wallet.requestConsume
-    // takes amount as a Number and dropping precision on the boundary
-    // would cause the consume to reject. 1e15 = 0.001 dDAI per drip.
-    dripBase: 1_000_000_000_000_000n,
-    dripHuman: "0.001",
+    dripBase: 1_000_000_000_000_000_000n, // 1e18 = 1 dDAI ($1)
+    dripHuman: "1",
   },
 ];
 

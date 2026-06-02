@@ -53,7 +53,7 @@ export const DEPLOYED_ACCOUNTS: DeployedAccount[] = [
     label: "dUSDT faucet",
     role: "asset-faucet",
     symbol: "DUSDT",
-    accountId: "0xd3789f451ddd4720602ba9eb1a268d",
+    accountId: "0x049d581b3233f42040501b99d2bd52",
     storageMode: "public",
     deployTx: "0x32cd61c2500c257e60a8026541e65208024e6b4345af5f949a681954cae0f90a",
   },

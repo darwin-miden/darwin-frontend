@@ -33,7 +33,7 @@ const MIDEN_CLIENT =
 const ALLOWED_FAUCETS = new Set([
   "0x9ecd63df21c64f2029429a6337a712", // dETH
   "0x2357c29fd5ed992038b0c44bf54aaf", // dWBTC
-  "0xd3789f451ddd4720602ba9eb1a268d", // dUSDT
+  "0x049d581b3233f42040501b99d2bd52", // dUSDT
   "0x619df5d889019020782e804eb60d0b", // dDAI
 ]);
 
