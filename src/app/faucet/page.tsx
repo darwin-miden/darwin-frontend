@@ -2,7 +2,7 @@ import { FaucetPanelClient } from "../../components/FaucetPanelClient";
 import { NavBar } from "../../components/NavBar";
 
 export const metadata = {
-  title: "Faucet — Darwin Protocol",
+  title: "Faucet",
   description: "Mint Darwin testnet assets (dETH, dWBTC, dUSDT, dDAI) into your Miden wallet.",
 };
 
