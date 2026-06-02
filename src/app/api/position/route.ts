@@ -28,6 +28,14 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// When deployed on Vercel the operator's miden-client doesn't exist,
+// so this route proxies to the operator's host (Mac) via the URL in
+// DARWIN_MAC_API_BASE. The bypass-tunnel-reminder header is what
+// localtunnel checks to skip its warning interstitial; without it
+// Vercel's outbound fetch would receive the HTML reminder page and
+// time out waiting for JSON.
+const MAC_API_BASE = process.env.DARWIN_MAC_API_BASE;
+
 const MIDEN_CLIENT =
   process.env.DARWIN_MIDEN_CLIENT_BIN ||
   "/Users/eden/Library/Application Support/midenup/toolchains/0.14.0/bin/miden-client";
@@ -101,6 +109,25 @@ export async function POST(req: Request) {
     body = (await req.json()) as Body;
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+
+  // Proxy mode (Vercel) — forward the body verbatim to the operator's
+  // host with the localtunnel bypass header. The local route below
+  // still runs on the operator's Mac where miden-client is available.
+  if (MAC_API_BASE) {
+    const r = await fetch(`${MAC_API_BASE}/api/position`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Bypass-Tunnel-Reminder": "1",
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await r.text();
+    return new NextResponse(text, {
+      status: r.status,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   if (!body.suffix || !body.prefix) {

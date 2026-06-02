@@ -23,6 +23,11 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// On Vercel the operator's miden-client doesn't exist; proxy to the
+// operator's host (set via DARWIN_MAC_API_BASE) with the bypass header
+// the localtunnel proxy needs to skip its HTML warning interstitial.
+const MAC_API_BASE = process.env.DARWIN_MAC_API_BASE;
+
 const MIDEN_CLIENT =
   process.env.DARWIN_MIDEN_CLIENT_BIN ||
   "/Users/eden/Library/Application Support/midenup/toolchains/0.14.0/bin/miden-client";
@@ -74,6 +79,24 @@ export async function POST(req: Request) {
     body = (await req.json()) as Body;
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+
+  // Proxy mode (Vercel) — forward to the operator's host with the
+  // localtunnel bypass header so the warning interstitial is skipped.
+  if (MAC_API_BASE) {
+    const r = await fetch(`${MAC_API_BASE}/api/faucet/mint`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Bypass-Tunnel-Reminder": "1",
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await r.text();
+    return new NextResponse(text, {
+      status: r.status,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   const target = body.target?.trim();

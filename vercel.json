@@ -1,13 +1,3 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    {
-      "source": "/api/faucet/:path*",
-      "destination": "https://darwin-protocol-mac.loca.lt/api/faucet/:path*"
-    },
-    {
-      "source": "/api/position",
-      "destination": "https://darwin-protocol-mac.loca.lt/api/position"
-    }
-  ]
+  "$schema": "https://openapi.vercel.sh/vercel.json"
 }
