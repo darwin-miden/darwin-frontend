@@ -41,14 +41,14 @@ interface AssetSpec {
 const ASSETS: AssetSpec[] = [
   {
     symbol: "dETH",
-    faucetId: "0xa095d9b3831e96206ff70c2218a6a9",
+    faucetId: "0x9ecd63df21c64f2029429a6337a712",
     decimals: 18,
-    dripBase: 1_000_000n,
-    dripHuman: "1e-12",
+    dripBase: 1_000_000_000_000_000n, // 1e15 = 0.001 dETH per drip
+    dripHuman: "0.001",
   },
   {
     symbol: "dWBTC",
-    faucetId: "0x7a45cb24ada22120246bcf54196e12",
+    faucetId: "0x2357c29fd5ed992038b0c44bf54aaf",
     decimals: 8,
     dripBase: 100_000n,
     dripHuman: "0.001",
@@ -62,10 +62,13 @@ const ASSETS: AssetSpec[] = [
   },
   {
     symbol: "dDAI",
-    faucetId: "0xb526deb0408a29207e4f27ed57bf1a",
+    faucetId: "0x619df5d889019020782e804eb60d0b",
     decimals: 18,
-    dripBase: 1_000_000n,
-    dripHuman: "1e-12",
+    // Keep <= 9e15 (Number safe-integer ceiling) — wallet.requestConsume
+    // takes amount as a Number and dropping precision on the boundary
+    // would cause the consume to reject. 1e15 = 0.001 dDAI per drip.
+    dripBase: 1_000_000_000_000_000n,
+    dripHuman: "0.001",
   },
 ];
 

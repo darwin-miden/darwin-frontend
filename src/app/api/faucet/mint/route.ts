@@ -31,13 +31,16 @@ const MIDEN_CLIENT =
 // the panel being repurposed to mint from arbitrary user-supplied
 // faucets that happen to be in the operator's store.
 const ALLOWED_FAUCETS = new Set([
-  "0xa095d9b3831e96206ff70c2218a6a9", // dETH
-  "0x7a45cb24ada22120246bcf54196e12", // dWBTC
+  "0x9ecd63df21c64f2029429a6337a712", // dETH
+  "0x2357c29fd5ed992038b0c44bf54aaf", // dWBTC
   "0xd3789f451ddd4720602ba9eb1a268d", // dUSDT
-  "0xb526deb0408a29207e4f27ed57bf1a", // dDAI
+  "0x619df5d889019020782e804eb60d0b", // dDAI
 ]);
 
-const MAX_AMOUNT_PER_REQUEST = 1_000_000_000n;
+// 1e18 = enough for one 1.0 unit drip of an 18-decimal asset (dETH/dDAI).
+// 6-/8-decimal faucets (dUSDT/dWBTC) request much smaller numbers so the
+// effective ceiling is per-faucet supply, not this constant.
+const MAX_AMOUNT_PER_REQUEST = 1_000_000_000_000_000_000n;
 
 function runMint(args: string[]): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
