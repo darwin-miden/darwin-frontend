@@ -31,10 +31,10 @@ const MIDEN_CLIENT =
 // the panel being repurposed to mint from arbitrary user-supplied
 // faucets that happen to be in the operator's store.
 const ALLOWED_FAUCETS = new Set([
-  "0x9ecd63df21c64f2029429a6337a712", // dETH
+  "0x7b727cd8d659d72042a9872c9c68b0", // dETH
   "0x2357c29fd5ed992038b0c44bf54aaf", // dWBTC
   "0x049d581b3233f42040501b99d2bd52", // dUSDT
-  "0x619df5d889019020782e804eb60d0b", // dDAI
+  "0x93968449ab8ec92035a92a38d747f9", // dDAI
 ]);
 
 // 1e18 = enough for one 1.0 unit drip of an 18-decimal asset (dETH/dDAI).

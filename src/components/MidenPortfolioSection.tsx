@@ -46,10 +46,10 @@ import { basketNav, usePrices } from "../lib/prices";
 // the 2026-05-14 deploy (miden_testnet_state.md). Hardcoding symbol
 // + decimals avoids an extra round-trip to `useAssetMetadata`.
 const FAUCETS: { label: string; id: string; decimals: number }[] = [
-  { label: "dETH",  id: "0x9ecd63df21c64f2029429a6337a712", decimals: 18 },
-  { label: "dWBTC", id: "0x2357c29fd5ed992038b0c44bf54aaf", decimals: 8  },
-  { label: "dUSDT", id: "0x049d581b3233f42040501b99d2bd52", decimals: 6  },
-  { label: "dDAI",  id: "0x619df5d889019020782e804eb60d0b", decimals: 18 },
+  { label: "dETH",  id: "0x7b727cd8d659d72042a9872c9c68b0", decimals: 8 },
+  { label: "dWBTC", id: "0x2357c29fd5ed992038b0c44bf54aaf", decimals: 8 },
+  { label: "dUSDT", id: "0x049d581b3233f42040501b99d2bd52", decimals: 6 },
+  { label: "dDAI",  id: "0x93968449ab8ec92035a92a38d747f9", decimals: 6 },
 ];
 
 // Basket-token faucets — what gets minted to the user when their

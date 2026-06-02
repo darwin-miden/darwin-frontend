@@ -38,31 +38,32 @@ interface AssetSpec {
   dripHuman: string;    // pre-formatted "X.Y" for the button label
 }
 
-// Per-drip amounts sized to realistic test denominations. Two hard
-// ceilings to keep in mind for 18-decimal assets:
-//   1. Asset amount in a note is a u64 felt — max ~18 units fit in
-//      a single note for 18-dec assets, so 100 dDAI per drip is not
-//      achievable in one tx.
-//   2. wallet.requestConsume's `amount` field is typed `number` —
-//      Number.MAX_SAFE_INTEGER (2^53 ≈ 9e15) is the precision boundary.
-//      Above that, BigInt → Number coercion can lose units. We push
-//      past it for the higher-value 18-dec drips and accept the
-//      cosmetic display drift in the popup (the on-chain consume uses
-//      the note's exact amount, not the param).
+// Per-drip amounts sized to readable testnet denominations. All four
+// constituents now sit at 6 or 8 decimals so every drip amount fits
+// well inside `Number.MAX_SAFE_INTEGER` — there's no precision drift
+// at the wallet API boundary, and a single felt-bound note can carry
+// the full drip in one tx.
+//
+// 18-decimal versions of dETH / dDAI were retired in favour of 8 / 6
+// dec testnet equivalents because real-DAI's 18 decimals against a
+// u64 felt ceiling caps total supply at ~18 DAI across all users — a
+// 1000-DAI drip is mathematically impossible there. The symbols stay
+// the same so the UI reads as expected; decimals are a testnet-only
+// convenience.
 const ASSETS: AssetSpec[] = [
   {
     symbol: "dETH",
-    faucetId: "0x9ecd63df21c64f2029429a6337a712",
-    decimals: 18,
-    dripBase: 100_000_000_000_000_000n, // 1e17 = 0.1 dETH (~$200)
-    dripHuman: "0.1",
+    faucetId: "0x7b727cd8d659d72042a9872c9c68b0",
+    decimals: 8,
+    dripBase: 100_000_000n, // 1e8 = 1 dETH (~$2000)
+    dripHuman: "1",
   },
   {
     symbol: "dWBTC",
     faucetId: "0x2357c29fd5ed992038b0c44bf54aaf",
     decimals: 8,
-    dripBase: 100_000_000n, // 1e8 = 1 dWBTC (~$60k)
-    dripHuman: "1",
+    dripBase: 10_000_000n, // 1e7 = 0.1 dWBTC (~$6000)
+    dripHuman: "0.1",
   },
   {
     symbol: "dUSDT",
@@ -73,10 +74,10 @@ const ASSETS: AssetSpec[] = [
   },
   {
     symbol: "dDAI",
-    faucetId: "0x619df5d889019020782e804eb60d0b",
-    decimals: 18,
-    dripBase: 1_000_000_000_000_000_000n, // 1e18 = 1 dDAI ($1)
-    dripHuman: "1",
+    faucetId: "0x93968449ab8ec92035a92a38d747f9",
+    decimals: 6,
+    dripBase: 1_000_000_000n, // 1e9 = 1000 dDAI ($1000)
+    dripHuman: "1000",
   },
 ];
 

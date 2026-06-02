@@ -39,10 +39,10 @@ interface Props {
 // decimals. `useSend.assetId` accepts any `AccountRef` form (hex,
 // bech32, AccountId object).
 const ASSET_FAUCETS: Record<string, { label: string; id: string; decimals: number }> = {
-  "darwin-eth":  { label: "dETH",  id: "0x9ecd63df21c64f2029429a6337a712", decimals: 18 },
-  "darwin-wbtc": { label: "dWBTC", id: "0x2357c29fd5ed992038b0c44bf54aaf", decimals: 8  },
-  "darwin-usdt": { label: "dUSDT", id: "0x049d581b3233f42040501b99d2bd52", decimals: 6  },
-  "darwin-dai":  { label: "dDAI",  id: "0x619df5d889019020782e804eb60d0b", decimals: 18 },
+  "darwin-eth":  { label: "dETH",  id: "0x7b727cd8d659d72042a9872c9c68b0", decimals: 8 },
+  "darwin-wbtc": { label: "dWBTC", id: "0x2357c29fd5ed992038b0c44bf54aaf", decimals: 8 },
+  "darwin-usdt": { label: "dUSDT", id: "0x049d581b3233f42040501b99d2bd52", decimals: 6 },
+  "darwin-dai":  { label: "dDAI",  id: "0x93968449ab8ec92035a92a38d747f9", decimals: 6 },
 };
 
 // v2 real-bodies controller — the one with a working `receive_asset`
@@ -84,10 +84,10 @@ const BASKET_CONTROLLER_ID: Record<string, string> = {
 // PragmaFeed is wired. Until then a fallback static value keeps the
 // math sane for testnet deposits in non-stable assets.
 const ASSET_PRICE_USD: Record<string, number> = {
-  "0x9ecd63df21c64f2029429a6337a712": 2000,   // dETH
+  "0x7b727cd8d659d72042a9872c9c68b0": 2000,   // dETH
   "0x2357c29fd5ed992038b0c44bf54aaf": 60000,  // dWBTC
   "0x049d581b3233f42040501b99d2bd52": 1,      // dUSDT
-  "0x619df5d889019020782e804eb60d0b": 1,      // dDAI
+  "0x93968449ab8ec92035a92a38d747f9": 1,      // dDAI
 };
 const BASKET_TOKEN_DECIMALS = 8;
 
