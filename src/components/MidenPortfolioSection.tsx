@@ -97,7 +97,14 @@ export function MidenPortfolioSection() {
   const { connected, address } = useMidenFiWallet();
   const { syncHeight } = useSyncState();
   const accountResult = useAccount(address ?? undefined);
-  const controllerVault = useAccount(CONTROLLER_ID);
+  // Removed: useAccount(CONTROLLER_ID). v6 is storage_mode=private,
+  // so the wallet's WASM client can never sync its storage — the hook
+  // sat in a retry loop on every connect, saturating Chrome's main
+  // thread and triggering the 'Page Unresponsive' dialog the moment
+  // the wallet adapter reached the connecting state. The aggregate
+  // vault display below is now driven by /api/v6/vault (operator-side
+  // miden-client subprocess, mirrors the slot-10 read pattern).
+  const controllerVault = { isLoading: false, assets: [] as { assetId: string; amount: bigint }[] };
   const history = useTransactionHistory({});
   const prices = usePrices();
   const notesQuery = useNotes({ accountId: address ?? undefined });
