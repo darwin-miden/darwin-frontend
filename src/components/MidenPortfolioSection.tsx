@@ -25,9 +25,7 @@ import {
   useCompile,
   useConsume,
   useImportAccount,
-  useNotes,
   useTransaction,
-  useTransactionHistory,
   useSyncState,
 } from "@miden-sdk/react";
 import { AccountId } from "@miden-sdk/miden-sdk";
@@ -105,9 +103,31 @@ export function MidenPortfolioSection() {
   // vault display below is now driven by /api/v6/vault (operator-side
   // miden-client subprocess, mirrors the slot-10 read pattern).
   const controllerVault = { isLoading: false, assets: [] as { assetId: string; amount: bigint }[] };
-  const history = useTransactionHistory({});
+  // Removed: useTransactionHistory({}) + useNotes({accountId}). After
+  // a session of drips the wallet's local store carries hundreds of
+  // notes; the WASM client walks the full set on every poll and pins
+  // Chrome's main thread, surfacing as a 'Page Unresponsive' dialog
+  // even after the initial connect completed. The Inbox + Recent
+  // Transactions sections below render empty placeholders for now —
+  // a follow-up wires them as on-demand fetches behind explicit user
+  // clicks instead of background polls.
+  const history = { isLoading: false, records: [] as Array<{
+    id(): { toHex(): string };
+    transactionStatus(): {
+      isCommitted(): boolean;
+      isDiscarded(): boolean;
+      getBlockNum(): number;
+    };
+  }> };
   const prices = usePrices();
-  const notesQuery = useNotes({ accountId: address ?? undefined });
+  const notesQuery = {
+    isLoading: false,
+    consumableNotes: [] as unknown[],
+    consumableNoteSummaries: [] as Array<{
+      id: string;
+      assets: Array<unknown>;
+    }>,
+  };
   const { consume, isLoading: consuming, stage: consumeStage } = useConsume();
   const compile = useCompile();
   const redeemTx = useTransaction();
