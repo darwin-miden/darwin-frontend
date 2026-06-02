@@ -201,26 +201,36 @@ export function FaucetPanel() {
     const MAX_ATTEMPTS = 12;
     const RETRY_DELAY_MS = 5_000;
     let lastErr: unknown = null;
+    // Use Promise.catch instead of try/await + catch so the rejection
+    // is settled at the promise layer. Next.js's dev error overlay
+    // intercepts `throw`-inside-`await` even when the call site catches
+    // — but a `.catch` handler closes the rejection before it reaches
+    // the React event-handler stack the overlay scans. Production
+    // builds wouldn't surface either form, but the overlay is loud in
+    // dev so we route around it.
+    const attemptConsume = (): Promise<{ ok: true } | { ok: false; err: unknown }> =>
+      wallet.requestConsume!({
+        faucetId: asset.faucetId,
+        noteId,
+        noteType: "public",
+        amount: Number(asset.dripBase),
+      })
+        .then(() => ({ ok: true as const }))
+        .catch((err: unknown) => ({ ok: false as const, err }));
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        await wallet.requestConsume({
-          faucetId: asset.faucetId,
-          noteId,
-          noteType: "public",
-          amount: Number(asset.dripBase),
-        });
+      const result = await attemptConsume();
+      if (result.ok) {
         setDrips((s) => ({ ...s, [asset.symbol]: { kind: "claimed", noteId } }));
         return;
-      } catch (e) {
-        lastErr = e;
-        const msg = String((e as Error).message ?? e);
-        // Surface non-recoverable errors immediately (user rejection,
-        // wallet locked, etc) — only the 'not found' race is worth
-        // retrying.
-        if (!/not found/i.test(msg)) break;
-        if (attempt < MAX_ATTEMPTS) {
-          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
-        }
+      }
+      lastErr = result.err;
+      const msg = String((result.err as Error).message ?? result.err);
+      // Surface non-recoverable errors immediately (user rejection,
+      // wallet locked, etc) — only the 'not found' race is worth
+      // retrying.
+      if (!/not found/i.test(msg)) break;
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
       }
     }
     const rawMsg = String((lastErr as Error).message ?? lastErr);
