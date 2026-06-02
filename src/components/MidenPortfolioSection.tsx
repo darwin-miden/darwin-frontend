@@ -31,7 +31,7 @@ import {
   useSyncState,
 } from "@miden-sdk/react";
 import { AccountId } from "@miden-sdk/miden-sdk";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { buildDarwinNoteRequest } from "../lib/midenNote";
 import { CONTROLLER_ID as FEE_ROUTING_CONTROLLER_ID } from "../lib/midenController";
@@ -114,8 +114,24 @@ export function MidenPortfolioSection() {
   // Keyed by basket symbol so DCC/DAG/DCO each pull their own slot.
   const [basketPositions, setBasketPositions] = useState<Record<string, bigint>>({});
   const [, setSlotReadError] = useState<string | null>(null);
+  // Throttle slot-10 reads. Each /api/position call spawns a
+  // miden-client subprocess that locks ~/.miden/store.sqlite3 — the
+  // relay worker also taps that store on its 30s sync cadence, so
+  // unthrottled polling at every syncHeight tick (~8s) pile-ups the
+  // subprocesses, contends the SQLite lock, and freezes the page
+  // until Chrome offers to kill it.
+  // - skipIfInflight: drop a new fetch attempt while one is still
+  //   running, so a slow tick can't queue a second on top of itself.
+  // - minimum 20s gap between successful reads so the polling matches
+  //   the worker's drain cadence rather than the wallet's sync tick.
+  const fetchInFlight = useRef(false);
+  const lastFetchAt = useRef(0);
   const refreshSlotPositions = useCallback(async () => {
     if (!address) return;
+    if (fetchInFlight.current) return;
+    const now = Date.now();
+    if (now - lastFetchAt.current < 20_000) return;
+    fetchInFlight.current = true;
     try {
       const senderId = /^0x[0-9a-f]+$/i.test(address)
         ? AccountId.fromHex(address)
@@ -144,11 +160,13 @@ export function MidenPortfolioSection() {
       for (const [sym, amt] of results) next[sym] = amt;
       setBasketPositions(next);
       setSlotReadError(null);
+      lastFetchAt.current = Date.now();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn("[MidenPortfolio] slot-10 read failed", e);
       setSlotReadError(msg);
-      setBasketPositions({});
+    } finally {
+      fetchInFlight.current = false;
     }
   }, [address]);
   useEffect(() => {
@@ -157,8 +175,9 @@ export function MidenPortfolioSection() {
       return;
     }
     void refreshSlotPositions();
-    // Re-read on each sync tick so the credit lands without a manual
-    // refresh once the worker consumes the deposit note.
+    // Re-read on syncHeight ticks; the throttle inside drops repeats
+    // that arrive before the 20s gap elapses, so the wallet's ~8s
+    // tick doesn't translate into 3 server-side mints every 8s.
   }, [connected, address, syncHeight, refreshSlotPositions]);
 
   if (!connected || !address) {
