@@ -61,6 +61,17 @@ export function MidenDynamicProviders({ children }: { children: ReactNode }) {
           appName="Darwin Protocol"
           network={WalletAdapterNetwork.Testnet}
           autoConnect={false}
+          // Default error handler does `console.error(error)`, which
+          // Next 15's dev overlay scrapes — including 'Note not found'
+          // failures from the faucet claim retry loop that we already
+          // recover from (the next attempt succeeds once the wallet
+          // syncs). Filter those + emit a quieter warn for everything
+          // else so production breakage still surfaces.
+          onError={(error) => {
+            const msg = String((error as Error)?.message ?? error);
+            if (/not found/i.test(msg)) return;
+            console.warn("[MidenFi adapter]", msg);
+          }}
         >
           {children}
         </MidenFiSignerProvider>
