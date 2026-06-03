@@ -23,11 +23,11 @@ export const metadata: Metadata = {
   },
   description:
     "Client-side STARK-proven basket protocol. Pragma price feeds, AggLayer access from any EVM wallet. The portfolio is yours — and only yours.",
-  metadataBase: new URL("https://darwin.xyz"),
+  metadataBase: new URL("https://darwin.market"),
   openGraph: {
     title: "Darwin Protocol",
     description: "Confidential baskets, native to Miden.",
-    url: "https://darwin.xyz",
+    url: "https://darwin.market",
     siteName: "Darwin Protocol",
   },
 };
