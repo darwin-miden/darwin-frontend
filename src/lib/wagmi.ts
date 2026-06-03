@@ -59,7 +59,7 @@ const connectors = [
           metadata: {
             name: "Darwin Protocol",
             description: "Confidential basket protocol on Miden.",
-            url: "https://darwin.xyz",
+            url: "https://darwin.market",
             icons: [],
           },
         }),
@@ -78,6 +78,6 @@ export const wagmiConfig = createConfig(
     walletConnectProjectId: WALLET_CONNECT_PROJECT_ID,
     appName: "Darwin Protocol",
     appDescription: "Confidential basket protocol on Miden.",
-    appUrl: "https://darwin.xyz",
+    appUrl: "https://darwin.market",
   }),
 );
