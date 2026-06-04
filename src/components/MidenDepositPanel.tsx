@@ -91,6 +91,54 @@ const ASSET_PRICE_USD: Record<string, number> = {
 };
 const BASKET_TOKEN_DECIMALS = 8;
 
+// Suggest a deposit amount that lands around ~$50 of value, so the
+// default field is the same order of magnitude whether the user picks
+// dWBTC ($60k) or dUSDT ($1). A flat default of "10" would mean $20k
+// for dETH and $600k for dWBTC — both well beyond what testnet
+// faucets dispense and visually wrong.
+function defaultAmountFor(asset: { id: string }): string {
+  const price = ASSET_PRICE_USD[asset.id] ?? 1;
+  const raw = 50 / price;
+  if (raw >= 10) return Math.round(raw).toString();
+  if (raw >= 1) return raw.toFixed(1);
+  if (raw >= 0.1) return raw.toFixed(2);
+  if (raw >= 0.01) return raw.toFixed(3);
+  return raw.toFixed(4);
+}
+
+// Economic minimum per deposit, in human-asset units. Anchored to
+// roughly $1 of value across the board:
+//   * 30 bps protocol fee + 2 Miden txs behind each deposit (user
+//     note tx + controller drain tx) means anything under ~$1 is
+//     dominated by overhead — fee on a $0.50 deposit is <$0.002
+//     and the per-tx prover time (~1.5s in browser) is the same
+//     whether the user deposits $0.50 or $50.
+//   * Round numbers picked by hand instead of computed from price so
+//     the gate stays stable when price feed moves (we don't want the
+//     UI to slide between "0.000016" and "0.000018" depending on
+//     today's BTC quote).
+const MIN_AMOUNT_HUMAN: Record<string, string> = {
+  "0x7b727cd8d659d72042a9872c9c68b0": "0.0005",   // dETH  ≈ $1
+  "0x2357c29fd5ed992038b0c44bf54aaf": "0.00001",  // dWBTC ≈ $0.60
+  "0x049d581b3233f42040501b99d2bd52": "1",         // dUSDT  = $1
+  "0x93968449ab8ec92035a92a38d747f9": "1",         // dDAI   = $1
+};
+
+function minAmountUnitsFor(asset: { id: string; decimals: number }): bigint {
+  const human = MIN_AMOUNT_HUMAN[asset.id] ?? "0";
+  const microHuman = BigInt(Math.floor(parseFloat(human) * 1_000_000));
+  return (microHuman * 10n ** BigInt(asset.decimals)) / 1_000_000n;
+}
+
+function formatUnits(units: bigint, decimals: number): string {
+  const base = 10n ** BigInt(decimals);
+  const whole = units / base;
+  const frac = units % base;
+  if (frac === 0n) return whole.toString();
+  const fracStr = frac.toString().padStart(decimals, "0").replace(/0+$/, "");
+  return `${whole}.${fracStr}`;
+}
+
 // Derive the felts the atomic_deposit_note_v2 script reads from
 // storage so its `mint = deposit_value * fee_factor / nav_scale` runs
 // in correct dimensional units.
@@ -210,8 +258,22 @@ export function MidenDepositPanel({ basket }: Props) {
   );
 
   const [assetIdx, setAssetIdx] = useState(0);
-  const [amount, setAmount] = useState<string>("10");
   const asset = assetOptions[assetIdx];
+  const [amount, setAmount] = useState<string>(() =>
+    asset ? defaultAmountFor(asset) : "0",
+  );
+  // Re-suggest a price-aware default when the user switches asset —
+  // "0.025 dETH" and "50 dUSDT" carry the same USD weight, so reusing
+  // the previous numeric value across assets is almost always wrong.
+  const [lastDefaultAssetId, setLastDefaultAssetId] = useState<string | null>(
+    asset?.id ?? null,
+  );
+  useEffect(() => {
+    if (!asset) return;
+    if (asset.id === lastDefaultAssetId) return;
+    setAmount(defaultAmountFor(asset));
+    setLastDefaultAssetId(asset.id);
+  }, [asset, lastDefaultAssetId]);
 
   // Per-asset wallet balance (base units, asset-decimal scaled). Falls
   // back to 0 when the account record isn't loaded yet — the deposit
@@ -244,6 +306,16 @@ export function MidenDepositPanel({ basket }: Props) {
   }, [asset, amount]);
 
   const insufficient = !!asset && requestedUnits > assetBalance;
+  const minUnits = useMemo(
+    () => (asset ? minAmountUnitsFor(asset) : 0n),
+    [asset],
+  );
+  const belowMin =
+    !!asset && requestedUnits > 0n && requestedUnits < minUnits;
+  const minHuman = useMemo(
+    () => (asset ? formatUnits(minUnits, asset.decimals) : "0"),
+    [asset, minUnits],
+  );
 
   if (!connected || !address) {
     return (
@@ -434,7 +506,7 @@ export function MidenDepositPanel({ basket }: Props) {
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           min={0}
-          step={1}
+          step="any"
           style={{
             flex: 1,
             padding: "10px 12px",
@@ -460,28 +532,37 @@ export function MidenDepositPanel({ basket }: Props) {
           <span style={{ color: insufficient ? "#a01a1a" : "var(--ink-2)" }}>
             {balanceHuman}
           </span>
+          <span style={{ marginLeft: 12, color: "var(--ink-3)" }}>
+            min {minHuman} {asset?.label ?? ""} (~$1)
+          </span>
         </span>
-        {insufficient && (
+        {insufficient ? (
           <span style={{ color: "#a01a1a" }}>
             need {amount} {asset?.label}, have {balanceHuman}
           </span>
-        )}
+        ) : belowMin ? (
+          <span style={{ color: "#a01a1a" }}>
+            below min ({minHuman} {asset?.label})
+          </span>
+        ) : null}
       </div>
 
       <button
         onClick={handleSend}
-        disabled={isLoading || !asset || insufficient || !walletAccount}
+        disabled={
+          isLoading || !asset || insufficient || belowMin || !walletAccount
+        }
         style={{
           width: "100%",
           padding: "12px 16px",
           background:
-            isLoading || insufficient || !walletAccount
+            isLoading || insufficient || belowMin || !walletAccount
               ? "var(--ink-3)"
               : "var(--ink)",
           color: "var(--paper)",
           border: 0,
           cursor:
-            isLoading || insufficient || !walletAccount
+            isLoading || insufficient || belowMin || !walletAccount
               ? "not-allowed"
               : "pointer",
           fontSize: 14,
@@ -494,6 +575,8 @@ export function MidenDepositPanel({ basket }: Props) {
           ? "loading wallet account…"
           : insufficient
           ? `Insufficient ${asset?.label ?? ""} — mint from faucet first`
+          : belowMin
+          ? `Min deposit ${minHuman} ${asset?.label ?? ""} (~$1) — fees dominate below`
           : `Deposit ${amount} ${asset?.label ?? ""} → ${basket.symbol}`}
       </button>
 
