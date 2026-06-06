@@ -46,6 +46,31 @@ interface Props {
   basket: BasketDef;
 }
 
+// basket_amount_minted comes from the relay as a base-10 string of
+// 8-decimal basket-token base units (the same convention every other
+// Miden faucet uses). Display it as the human-facing fractional amount
+// so "62" → "0.00000062 DCC" instead of looking like a 62-DCC mint
+// (which would be ~$1.5M).
+const BASKET_TOKEN_DECIMALS = 8;
+function formatBasketAmount(raw: string | null | undefined): string {
+  if (!raw) return "—";
+  let n: bigint;
+  try {
+    n = BigInt(raw);
+  } catch {
+    return raw;
+  }
+  const base = 10n ** BigInt(BASKET_TOKEN_DECIMALS);
+  const whole = n / base;
+  const frac = n % base;
+  if (frac === 0n) return whole.toString();
+  const fracStr = frac
+    .toString()
+    .padStart(BASKET_TOKEN_DECIMALS, "0")
+    .replace(/0+$/, "");
+  return `${whole}.${fracStr}`;
+}
+
 type Stage =
   | "idle"
   | "claiming-intent"
@@ -186,7 +211,7 @@ export function OneClickDepositPanel({ basket }: Props) {
     polling: relayIntent
       ? `Relay → ${relayIntent.stage}`
       : "Polling relay…",
-    success: `🎯 Position credited — ${relayIntent?.basket_amount_minted ?? ""} ${basket.symbol}`,
+    success: `🎯 Position credited — ${formatBasketAmount(relayIntent?.basket_amount_minted)} ${basket.symbol}`,
     error: "Error",
   };
 
