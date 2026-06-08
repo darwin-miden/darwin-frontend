@@ -1,7 +1,7 @@
 /**
  * Helpers for reading the live Darwin controller's on-chain state.
  *
- * The v6 controller (account 0x2a3ea0a268d97b80497d6a966e3141) is a
+ * The v6 controller (account 0xbef7d2e89e9c3e006e10f959fa16d2) is a
  * strict superset of v5 — adds slot 11 (fee_recipient) and a
  * receive_and_credit compound proc — and is the current default
  * across worker + relay. The storage maps the frontend cares about
@@ -21,7 +21,7 @@
  * Roots come from `cargo run --bin build_v6_fee_routing_controller`.
  */
 
-export const CONTROLLER_ID = "0x2a3ea0a268d97b80497d6a966e3141";
+export const CONTROLLER_ID = "0xbef7d2e89e9c3e006e10f959fa16d2";
 
 export const MAST_ROOTS = {
   get_target_weights: "0xd63bb900370d555c4a73142cc101b1d0c8bc47cf25c7ec8ee61002891608e3c6",

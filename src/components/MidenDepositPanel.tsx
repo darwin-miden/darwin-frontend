@@ -63,7 +63,7 @@ const ASSET_FAUCETS: Record<string, { label: string; id: string; decimals: numbe
 // (0xa25aa0b00007…) lacks those slots, so depositing there leaves
 // the asset in the aggregate vault but never credits a user position
 // — the portfolio UI then reads slot-10 and shows 0 forever.
-const FEE_ROUTING_CONTROLLER_ID = "0x2a3ea0a268d97b80497d6a966e3141";
+const FEE_ROUTING_CONTROLLER_ID = "0xbef7d2e89e9c3e006e10f959fa16d2";
 // Basket-token faucet IDs — same source as MidenPortfolioSection.
 // The atomic-deposit-v2 script reads the basket faucet's (suffix,
 // prefix) felts and uses them as the basket_id half of the slot-10

@@ -41,7 +41,7 @@ const MIDEN_CLIENT =
   "/Users/eden/Library/Application Support/midenup/toolchains/0.14.0/bin/miden-client";
 
 const CONTROLLER_ID =
-  process.env.DARWIN_CONTROLLER_HEX || "0x2a3ea0a268d97b80497d6a966e3141";
+  process.env.DARWIN_CONTROLLER_HEX || "0xbef7d2e89e9c3e006e10f959fa16d2";
 
 // MAST root of `get_user_position` on the v6 controller — pinned in
 // midenController.ts and mirrored here so the server doesn't need to
