@@ -36,10 +36,11 @@ import {
   ALLOCATOR_URL,
   EPOCH_USDC_SEPOLIA,
   SEPOLIA_CHAIN_ID,
-  dusdcBaseUnits,
+  dusdcMidenBaseUnits,
   extractNonce,
   fetchQuote,
   submitIntent,
+  usdcSepoliaBaseUnits,
   type EpochQuote,
 } from "../lib/epoch";
 
@@ -169,19 +170,23 @@ export function EpochDepositPanel({ basket }: Props) {
     setError(null);
     try {
       // Claim a relay intent — gives us the Miden recipient (relay wallet).
+      // amount_in_wei uses Sepolia 18-dec (the worker converts via
+      // wei_per_miden_base = 10^12 to get Miden 6-dec base units).
       setStage("claiming-intent");
       const intent = await createIntent({
         user_evm_addr: address,
         basket_symbol: basket.symbol,
-        amount_in_wei: dusdcBaseUnits(usdcOut),
+        amount_in_wei: usdcSepoliaBaseUnits(usdcOut),
       });
       setIntentInit(intent);
 
       setStage("quoting");
+      // minTokenOut is Miden-side base units (6-dec) — that's what
+      // Epoch's allocator quotes against.
       const q = await fetchQuote(sdkRef.current, {
         evmSourceAddress: address as `0x${string}`,
         midenRecipientId: intent.relay_miden_address,
-        minTokenOut: dusdcBaseUnits(usdcOut),
+        minTokenOut: dusdcMidenBaseUnits(usdcOut),
       });
       setQuote(q);
       setStage("quote-ready");

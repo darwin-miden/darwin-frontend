@@ -40,12 +40,14 @@ const ZERO_HASH =
   "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 // Epoch's test USDC on Sepolia — same address the bridging-app uses.
-// 18-decimal, NOT the canonical 6-decimal USDC.
+// EVM side is 18-decimal (NOT the canonical 6-dec USDC); Miden side is
+// 6-decimal (verified live 2026-06-10: 1e18 wei in → 2e6 dUSDC base out).
 export const EPOCH_USDC_SEPOLIA = {
   symbol: "USDC",
   address: "0x2BB4FfD7E2c6D432b697554Efd77fA13bdbefd69" as `0x${string}`,
   decimals: 18,
   midenFaucetId: "0x0a7d175ed63ec5200fb2ced86f6aa5",
+  midenDecimals: 6,
 } as const;
 
 export interface EpochQuoteParams {
@@ -125,9 +127,14 @@ export async function submitIntent(sdk: EpochIntentSDK, quote: EpochQuote): Prom
   });
 }
 
-/** Convert human dUSDC amount to base units (18 decimals on Epoch's test USDC). */
-export function dusdcBaseUnits(human: string): string {
+/** Convert human USDC amount to Sepolia 18-dec base units (relay's `amount_in_wei`). */
+export function usdcSepoliaBaseUnits(human: string): string {
   return parseUnits(human || "0", EPOCH_USDC_SEPOLIA.decimals).toString();
+}
+
+/** Convert human dUSDC amount to Miden 6-dec base units (Epoch `minTokenOut`). */
+export function dusdcMidenBaseUnits(human: string): string {
+  return parseUnits(human || "0", EPOCH_USDC_SEPOLIA.midenDecimals).toString();
 }
 
 /** Extract the intent nonce from solveIntent's result — Epoch's reply shape varies. */
