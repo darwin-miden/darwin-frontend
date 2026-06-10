@@ -4,22 +4,18 @@
  * Two deposit paths, converging on the same private basket position
  * on Miden:
  *
- *   1. **ETH user** -> NEAR Intents 1Click bridge (Sepolia ETH ->
- *      Miden P2ID note) -> a custodial relay wallet on Miden submits
- *      the atomic_deposit_note to the controller on the user's behalf.
- *      This is the spec's "ETH user via Near Intent + relay
- *      wallet" path; we use Brian Seong's mock 1Click bridge as the
- *      NEAR-Intent-shaped front-end.
+ *   1. **ETH user** -> Epoch protocol's hosted intent bridge (Sepolia
+ *      USDC -> Miden P2ID note). The custodial relay wallet on Miden
+ *      receives the bridged dUSDC and submits the atomic_deposit_note
+ *      to the controller on the user's behalf. No local bridge mock,
+ *      no laptop dependency — Epoch hosts the allocator + solver.
  *
  *   2. **Miden-native user** -> direct atomic_deposit_note via the
  *      Miden Web SDK in this tab. No bridge, no relay -- the user's
  *      own Miden wallet sends straight to the controller.
  *
- * The earlier Sepolia ESCROW + wDCC ERC20 path (darwin-relay v1) is
- * deprecated. It was a workaround built earlier when NEAR Intent
- * didn't support Miden. With Brian's mock now live, the proposal's
- * native architecture is reachable, and we no longer need a Sepolia-
- * side wrapped basket token.
+ * The earlier 1Click-mock + Sepolia ESCROW + wDCC ERC20 paths are
+ * retired (commit history has them if a rollback is ever needed).
  */
 
 import dynamic from "next/dynamic";
@@ -51,22 +47,14 @@ const MidenDepositPanel = dynamic(
   },
 );
 
-const OneClickDepositPanel = dynamic(
-  () => import("./OneClickDepositPanel").then((m) => m.OneClickDepositPanel),
-  { ssr: false },
-);
-
 const EpochDepositPanel = dynamic(
   () => import("./EpochDepositPanel").then((m) => m.EpochDepositPanel),
   { ssr: false },
 );
 
-type Tab = "epoch" | "oneclick" | "miden";
+type Tab = "epoch" | "miden";
 
 export function DepositTabs({ basket }: { basket: BasketDef }) {
-  // Epoch is the new ETH-user default — hosted allocator, no laptop
-  // dependency, replaces the local 1Click mock. The old 1Click tab is
-  // kept available during transition.
   const [tab, setTab] = useState<Tab>("epoch");
   const manifest = basketBySymbol(basket.symbol as BasketSymbol);
 
@@ -88,12 +76,6 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
           subtitle="Sepolia USDC → Miden via Epoch"
         />
         <TabButton
-          active={tab === "oneclick"}
-          onClick={() => setTab("oneclick")}
-          label="ETH wallet (legacy)"
-          subtitle="Sepolia → Miden via 1Click mock"
-        />
-        <TabButton
           active={tab === "miden"}
           onClick={() => setTab("miden")}
           label="Miden wallet"
@@ -102,7 +84,6 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
       </div>
 
       {tab === "epoch" && <EpochDepositPanel basket={basket} />}
-      {tab === "oneclick" && <OneClickDepositPanel basket={basket} />}
       {tab === "miden" && <MidenDepositPanel basket={manifest} />}
     </div>
   );
