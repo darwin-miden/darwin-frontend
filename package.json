@@ -12,6 +12,7 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "@epoch-protocol/epoch-intents-sdk": "^1.0.23",
     "@miden-sdk/miden-sdk": "^0.14.9",
     "@miden-sdk/miden-wallet-adapter-base": "^0.14.3",
     "@miden-sdk/miden-wallet-adapter-react": "^0.14.3",

@@ -56,12 +56,18 @@ const OneClickDepositPanel = dynamic(
   { ssr: false },
 );
 
-type Tab = "oneclick" | "miden";
+const EpochDepositPanel = dynamic(
+  () => import("./EpochDepositPanel").then((m) => m.EpochDepositPanel),
+  { ssr: false },
+);
+
+type Tab = "epoch" | "oneclick" | "miden";
 
 export function DepositTabs({ basket }: { basket: BasketDef }) {
-  // ETH user path is the default — most casual visitors have an ETH wallet
-  // and no Miden wallet, so 1Click is the entry point.
-  const [tab, setTab] = useState<Tab>("oneclick");
+  // Epoch is the new ETH-user default — hosted allocator, no laptop
+  // dependency, replaces the local 1Click mock. The old 1Click tab is
+  // kept available during transition.
+  const [tab, setTab] = useState<Tab>("epoch");
   const manifest = basketBySymbol(basket.symbol as BasketSymbol);
 
   return (
@@ -76,10 +82,16 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
         }}
       >
         <TabButton
+          active={tab === "epoch"}
+          onClick={() => setTab("epoch")}
+          label="ETH wallet"
+          subtitle="Sepolia USDC → Miden via Epoch"
+        />
+        <TabButton
           active={tab === "oneclick"}
           onClick={() => setTab("oneclick")}
-          label="ETH wallet"
-          subtitle="Sepolia → Miden via NEAR Intents 1Click"
+          label="ETH wallet (legacy)"
+          subtitle="Sepolia → Miden via 1Click mock"
         />
         <TabButton
           active={tab === "miden"}
@@ -89,6 +101,7 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
         />
       </div>
 
+      {tab === "epoch" && <EpochDepositPanel basket={basket} />}
       {tab === "oneclick" && <OneClickDepositPanel basket={basket} />}
       {tab === "miden" && <MidenDepositPanel basket={manifest} />}
     </div>
