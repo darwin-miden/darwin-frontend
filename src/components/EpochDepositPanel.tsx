@@ -83,12 +83,7 @@ export function EpochDepositPanel({ basket }: Props) {
   const chainId = useChainId();
   const { data: walletClient } = useWalletClient();
 
-  // Epoch's testnet-dev solver has draining dUSDC liquidity — the
-  // working cap trended down from 0.77 → 0.1 dUSDC over a handful of
-  // deposits 2026-06-10 (each successful deposit drains the solver
-  // further). 0.1 is the largest amount that quotes reliably right
-  // now. Bump back up once Epoch tops up the solver.
-  const [usdcOut, setUsdcOut] = useState("0.1");
+  const [usdcOut, setUsdcOut] = useState("1");
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState<string | null>(null);
   const [intentInit, setIntentInit] = useState<RelayIntentCreateResponse | null>(
