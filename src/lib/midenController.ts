@@ -31,7 +31,13 @@
  *   on their respective toolchains.
  */
 
-export const CONTROLLER_ID = "0xbef7d2e89e9c3e006e10f959fa16d2";
+// CONTROLLER_ID is duplicated by `FEE_ROUTING_CONTROLLER_ID` in
+// midenConstants.ts — kept here for backward compatibility with code
+// that imports from this file directly. Both resolve identically.
+export const CONTROLLER_ID =
+  process.env.NEXT_PUBLIC_MIDEN_V015 === "1"
+    ? "0x2388eaea4ce45331214b871755e7b5"
+    : "0xbef7d2e89e9c3e006e10f959fa16d2";
 
 export const MAST_ROOTS_V014 = {
   get_target_weights: "0xd63bb900370d555c4a73142cc101b1d0c8bc47cf25c7ec8ee61002891608e3c6",
