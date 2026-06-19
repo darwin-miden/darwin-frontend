@@ -26,6 +26,8 @@ import type {
   IntentQuoteResult,
 } from "@epoch-protocol/epoch-intents-sdk";
 
+import { EPOCH_DUSDC_FAUCET_ID } from "./midenConstants";
+
 export const ALLOCATOR_URL =
   process.env.NEXT_PUBLIC_ALLOCATOR_URL ||
   "https://testnet-dev.epochprotocol.xyz";
@@ -46,7 +48,7 @@ export const EPOCH_USDC_SEPOLIA = {
   symbol: "USDC",
   address: "0x2BB4FfD7E2c6D432b697554Efd77fA13bdbefd69" as `0x${string}`,
   decimals: 18,
-  midenFaucetId: "0x0a7d175ed63ec5200fb2ced86f6aa5",
+  midenFaucetId: EPOCH_DUSDC_FAUCET_ID,
   midenDecimals: 6,
 } as const;
 

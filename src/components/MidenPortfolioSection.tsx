@@ -32,7 +32,11 @@ import { AccountId } from "@miden-sdk/miden-sdk";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { buildDarwinNoteRequest } from "../lib/midenNote";
-import { CONTROLLER_ID as FEE_ROUTING_CONTROLLER_ID } from "../lib/midenController";
+import {
+  ASSET_FAUCETS as ASSET_FAUCET_CATALOGUE,
+  BASKET_TOKEN_FAUCETS as BASKET_TOKEN_REGISTRY,
+  FEE_ROUTING_CONTROLLER_ID,
+} from "../lib/midenConstants";
 
 import {
   basketBySymbol,
@@ -40,36 +44,24 @@ import {
 } from "../lib/baskets";
 import { basketNav, usePrices } from "../lib/prices";
 
-// Same source of truth as MidenDepositPanel: testnet faucet IDs from
-// the 2026-05-14 deploy (miden_testnet_state.md). Hardcoding symbol
-// + decimals avoids an extra round-trip to `useAssetMetadata`.
-const FAUCETS: { label: string; id: string; decimals: number }[] = [
-  { label: "dETH",  id: "0x7b727cd8d659d72042a9872c9c68b0", decimals: 8 },
-  { label: "dWBTC", id: "0x2357c29fd5ed992038b0c44bf54aaf", decimals: 8 },
-  { label: "dUSDT", id: "0x049d581b3233f42040501b99d2bd52", decimals: 6 },
-  { label: "dDAI",  id: "0x93968449ab8ec92035a92a38d747f9", decimals: 6 },
-];
+// Pulled from the central registry so every place that touches a
+// Miden AccountId sees the same value. Local <label, id, decimals>
+// shape matches the rest of this component.
+const FAUCETS: { label: string; id: string; decimals: number }[] = Object.values(
+  ASSET_FAUCET_CATALOGUE,
+).map((a) => ({ label: a.symbol, id: a.id, decimals: a.decimals }));
 
-// Basket-token faucets — what gets minted to the user when their
-// deposit settles. Reading these tells the user how much of each
-// basket they own on the Miden side.
-const BASKET_TOKEN_FAUCETS: { symbol: string; id: string; decimals: number }[] = [
-  { symbol: "DCC", id: "0x2066f2da1f91ba202af5251d39101c", decimals: 8 },
-  { symbol: "DAG", id: "0xfb6811fd6399df206d44f62800620d", decimals: 8 },
-  { symbol: "DCO", id: "0xbe4efc6729eb3220423b7d6d6a0942", decimals: 8 },
-];
+const BASKET_TOKEN_FAUCETS: { symbol: string; id: string; decimals: number }[] =
+  Object.values(BASKET_TOKEN_REGISTRY).map((f) => ({
+    symbol: f.symbol,
+    id: f.id,
+    decimals: f.decimals,
+  }));
 
-// v6 fee-routing controller — the only one carrying slot-10
-// (per-user position map) + slot-11 (fee recipient), and the one the
-// frontend's deposit panel now targets. Same source of truth as the
-// relay-driven flow: every basket-token mint hits the same controller,
-// every per-user position read hits the same slot-10 entry.
 const CONTROLLER_ID = FEE_ROUTING_CONTROLLER_ID;
-const BASKET_CONTROLLER_ID: Record<string, string> = {
-  DCC: CONTROLLER_ID,
-  DAG: CONTROLLER_ID,
-  DCO: CONTROLLER_ID,
-};
+const BASKET_CONTROLLER_ID: Record<string, string> = Object.fromEntries(
+  BASKET_TOKEN_FAUCETS.map((f) => [f.symbol, CONTROLLER_ID]),
+);
 
 function fmtUnits(amount: bigint, decimals: number): string {
   const base = 10n ** BigInt(decimals);

@@ -74,9 +74,20 @@ export async function getDarwinMathSource(): Promise<string> {
   return mathLibPromise;
 }
 
+// Goldilocks prime is p = 2^64 − 2^32 + 1. Any random u64 ≥ p makes
+// `new Word(buf)` throw on the v0.15 SDK (constructor became strict),
+// and on v0.14 it silently wraps which can collide with valid serial
+// numbers. Mask the top 32 bits so every lane sits comfortably under
+// p − 1 = 0xFFFFFFFF00000000: clearing one bit of the high half gives
+// max 0xFFFFFFFE_FFFFFFFF < p. Cheap, no rejection sampling needed.
+const GOLDILOCKS_SAFE_MASK = 0xfffffffeffffffffn;
+
 function randomSerialNum(): Word {
   const buf = new BigUint64Array(4);
   crypto.getRandomValues(buf);
+  for (let i = 0; i < buf.length; i++) {
+    buf[i] = buf[i] & GOLDILOCKS_SAFE_MASK;
+  }
   return new Word(buf);
 }
 
@@ -169,8 +180,22 @@ export async function buildDarwinNote(
   if (opts.kind === "atomic-deposit-v2" && !opts.storageFelts) {
     mathFelts = [opts.amount, 9_970n, 10_000n];
   }
+  // Each felt must fit under Goldilocks p = 2^64 − 2^32 + 1; v0.15 the
+  // `Felt` constructor throws on overflow. The math felts can blow up
+  // when callers pre-compute `deposit_value = amount × price` upstream
+  // (e.g. 1 ETH base × $4000 = 4×10^21 ≫ 2^64). Guard at construction
+  // so the failure mode is a clear thrown error rather than a silent
+  // wrap on v0.14 then a runtime throw on v0.15.
+  const FELT_MAX = 0xffffffff00000000n; // p − 1
   const feltArray = new FeltArray();
-  for (const f of mathFelts) feltArray.push(new Felt(f));
+  for (const f of mathFelts) {
+    if (f < 0n || f >= FELT_MAX) {
+      throw new Error(
+        `buildDarwinNote: storage felt ${f} overflows Goldilocks (< ${FELT_MAX}); pre-scale the math before passing`,
+      );
+    }
+    feltArray.push(new Felt(f));
+  }
   if (opts.kind === "atomic-deposit-v2" && mathFelts.length < 7) {
     // Derive the user_id key from the sender's AccountId so each
     // wallet writes to a distinct slot-10 entry and accumulates only

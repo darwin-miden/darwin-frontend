@@ -30,6 +30,8 @@ import type { InputNoteDetails } from "@miden-sdk/miden-wallet-adapter-base";
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { useState } from "react";
 
+import { ASSET_FAUCETS as ASSET_FAUCET_CATALOGUE } from "../lib/midenConstants";
+
 interface AssetSpec {
   symbol: string;
   faucetId: string;
@@ -50,36 +52,20 @@ interface AssetSpec {
 // 1000-DAI drip is mathematically impossible there. The symbols stay
 // the same so the UI reads as expected; decimals are a testnet-only
 // convenience.
-const ASSETS: AssetSpec[] = [
-  {
-    symbol: "dETH",
-    faucetId: "0x7b727cd8d659d72042a9872c9c68b0",
-    decimals: 8,
-    dripBase: 100_000_000n, // 1e8 = 1 dETH (~$2000)
-    dripHuman: "1",
-  },
-  {
-    symbol: "dWBTC",
-    faucetId: "0x2357c29fd5ed992038b0c44bf54aaf",
-    decimals: 8,
-    dripBase: 10_000_000n, // 1e7 = 0.1 dWBTC (~$6000)
-    dripHuman: "0.1",
-  },
-  {
-    symbol: "dUSDT",
-    faucetId: "0x049d581b3233f42040501b99d2bd52",
-    decimals: 6,
-    dripBase: 1_000_000_000n, // 1e9 = 1000 dUSDT ($1000)
-    dripHuman: "1000",
-  },
-  {
-    symbol: "dDAI",
-    faucetId: "0x93968449ab8ec92035a92a38d747f9",
-    decimals: 6,
-    dripBase: 1_000_000_000n, // 1e9 = 1000 dDAI ($1000)
-    dripHuman: "1000",
-  },
-];
+// Drip amounts hand-tuned per asset; faucet ids + decimals sourced
+// from the central registry so a v0.15 migration is a one-file diff.
+const DRIPS: Record<string, { dripBase: bigint; dripHuman: string }> = {
+  dETH:  { dripBase: 100_000_000n,    dripHuman: "1"    }, // 1e8 = 1 dETH (~$2000)
+  dWBTC: { dripBase: 10_000_000n,     dripHuman: "0.1"  }, // 1e7 = 0.1 dWBTC (~$6000)
+  dUSDT: { dripBase: 1_000_000_000n,  dripHuman: "1000" }, // 1e9 = 1000 dUSDT
+  dDAI:  { dripBase: 1_000_000_000n,  dripHuman: "1000" }, // 1e9 = 1000 dDAI
+};
+const ASSETS: AssetSpec[] = Object.values(ASSET_FAUCET_CATALOGUE).map((a) => ({
+  symbol: a.symbol,
+  faucetId: a.id,
+  decimals: a.decimals,
+  ...DRIPS[a.symbol],
+}));
 
 type DripStatus =
   | { kind: "idle" }
@@ -272,8 +258,24 @@ export function FaucetPanel() {
     }
     setInboxClaims((s) => ({ ...s, [note.noteId]: { kind: "claiming" } }));
     try {
-      // NoteType enum: 1=Public, 2=Private. Some notes may report undefined.
-      const isPrivate = Number(note.noteType) === 2;
+      // Wallet may report noteType as a number, an enum, or the literal
+      // strings "private" / "public" depending on SDK version. We
+      // accept any shape and default to "public" when nothing matches
+      // — safer than tagging a public note "private" (silently
+      // mis-routes). v0.14 NoteType is 2-bit (1=Public, 2=Private);
+      // v0.15 trims to 1-bit (0=Public, 1=Private). Hardcoding `=== 2`
+      // would silently invert on v0.15, so match strings first.
+      const raw: unknown = note.noteType;
+      const rawStr =
+        typeof raw === "string"
+          ? raw.toLowerCase()
+          : typeof raw === "number"
+            ? String(raw)
+            : "";
+      const isPrivate =
+        rawStr === "private" ||
+        rawStr === "1" || // v0.15 numeric Private
+        rawStr === "2";   // v0.14 numeric Private (legacy)
       await wallet.requestConsume({
         faucetId: asset0.faucetId,
         noteId: note.noteId,

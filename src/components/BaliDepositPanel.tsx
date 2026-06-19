@@ -32,8 +32,7 @@ import {
   midenToEthDest,
   type BaliBridgeDeposit,
 } from "../lib/bali";
-
-const DEFAULT_MIDEN_DEST = "0xed3cd5befa3207805f8529207cfc0d";
+import { BALI_DEFAULT_MIDEN_DEST as DEFAULT_MIDEN_DEST } from "../lib/midenConstants";
 
 type Stage =
   | "idle"

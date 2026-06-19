@@ -35,60 +35,41 @@ interface Props {
   basket: Basket;
 }
 
-// Asset faucet ids on Miden testnet (deploy 2026-05-14), with real
-// decimals. `useSend.assetId` accepts any `AccountRef` form (hex,
-// bech32, AccountId object).
-const ASSET_FAUCETS: Record<string, { label: string; id: string; decimals: number }> = {
-  "darwin-eth":  { label: "dETH",  id: "0x7b727cd8d659d72042a9872c9c68b0", decimals: 8 },
-  "darwin-wbtc": { label: "dWBTC", id: "0x2357c29fd5ed992038b0c44bf54aaf", decimals: 8 },
-  "darwin-usdt": { label: "dUSDT", id: "0x049d581b3233f42040501b99d2bd52", decimals: 6 },
-  "darwin-dai":  { label: "dDAI",  id: "0x93968449ab8ec92035a92a38d747f9", decimals: 6 },
-};
+import {
+  ASSET_FAUCETS as ASSET_FAUCET_CATALOGUE,
+  BASKET_TOKEN_FAUCETS,
+  FEE_ROUTING_CONTROLLER_ID,
+  type BasketSymbol as MidenBasketSymbol,
+} from "../lib/midenConstants";
 
-// v2 real-bodies controller — the one with a working `receive_asset`
-// proc that the note's `call.0x75f6…` resolves to. v1
-// (`0x171f46fecf1bca8005ae068a8dfe77`) doesn't have `receive_asset`,
-// so the note would land in its inbox but never get consumed.
-//
-// Flow A fully verified end-to-end on Miden testnet 2026-05-17 via
-// `cargo run -p darwin-protocol-account --bin flow_a_full`:
-//   user tx     0x7116c2f040ccbb38435bef812b23c56d00ea3cff4838a0e7b1bfd8d8f45dc995
-//   consumer tx 0xde449dfcbf4d182eff7b0122754f874019aff2498dbb768e8d1ce26039e689ac
-//   note        0x24d9b1fc90d979c78321b9fc9293e413dada5b590e56c58375333f4c7e22f09b
-//   both at block 792643. 100 dETH moved user → note → controller vault;
-//   darwin::math::felt_div ran on-chain through the kernel's u64::div event.
-// v6 fee-routing controller — the one the relay deposits into, the
-// only one that carries slot-10 (per-user position map) + slot-11
-// (fee recipient). The bare "real-bodies" v2 controller
-// (0xa25aa0b00007…) lacks those slots, so depositing there leaves
-// the asset in the aggregate vault but never credits a user position
-// — the portfolio UI then reads slot-10 and shows 0 forever.
-const FEE_ROUTING_CONTROLLER_ID = "0xbef7d2e89e9c3e006e10f959fa16d2";
-// Basket-token faucet IDs — same source as MidenPortfolioSection.
-// The atomic-deposit-v2 script reads the basket faucet's (suffix,
-// prefix) felts and uses them as the basket_id half of the slot-10
-// map key, so each basket carries its own balance for each user.
-const BASKET_TOKEN_FAUCET: Record<string, string> = {
-  DCC: "0x2066f2da1f91ba202af5251d39101c",
-  DAG: "0xfb6811fd6399df206d44f62800620d",
-  DCO: "0xbe4efc6729eb3220423b7d6d6a0942",
-};
-const BASKET_CONTROLLER_ID: Record<string, string> = {
-  DCC: FEE_ROUTING_CONTROLLER_ID,
-  DAG: FEE_ROUTING_CONTROLLER_ID,
-  DCO: FEE_ROUTING_CONTROLLER_ID,
-};
+// Reshape into the local <label, id, decimals> shape this panel uses.
+// `useSend.assetId` accepts any `AccountRef` form (hex, bech32,
+// AccountId object).
+const ASSET_FAUCETS: Record<string, { label: string; id: string; decimals: number }> =
+  Object.fromEntries(
+    Object.entries(ASSET_FAUCET_CATALOGUE).map(([slug, a]) => [
+      slug,
+      { label: a.symbol, id: a.id, decimals: a.decimals },
+    ]),
+  );
 
-// Constituent faucet -> spot price (USD). For dUSDT/dDAI we treat as
-// $1 stables; dETH/dWBTC use the live oracle prices once the on-chain
-// PragmaFeed is wired. Until then a fallback static value keeps the
-// math sane for testnet deposits in non-stable assets.
-const ASSET_PRICE_USD: Record<string, number> = {
-  "0x7b727cd8d659d72042a9872c9c68b0": 2000,   // dETH
-  "0x2357c29fd5ed992038b0c44bf54aaf": 60000,  // dWBTC
-  "0x049d581b3233f42040501b99d2bd52": 1,      // dUSDT
-  "0x93968449ab8ec92035a92a38d747f9": 1,      // dDAI
-};
+// Basket-token faucet IDs from the central registry. The
+// atomic-deposit-v2 script reads the basket faucet's (suffix, prefix)
+// felts and uses them as the basket_id half of the slot-10 map key.
+const BASKET_TOKEN_FAUCET: Record<string, string> = Object.fromEntries(
+  Object.entries(BASKET_TOKEN_FAUCETS).map(([sym, f]) => [sym, f.id]),
+);
+const BASKET_CONTROLLER_ID: Record<string, string> = Object.fromEntries(
+  (Object.keys(BASKET_TOKEN_FAUCETS) as MidenBasketSymbol[]).map((s) => [
+    s,
+    FEE_ROUTING_CONTROLLER_ID,
+  ]),
+);
+
+// Constituent faucet -> spot price (USD), keyed by AccountId hex.
+const ASSET_PRICE_USD: Record<string, number> = Object.fromEntries(
+  Object.values(ASSET_FAUCET_CATALOGUE).map((a) => [a.id, a.referencePriceUsd]),
+);
 const BASKET_TOKEN_DECIMALS = 8;
 
 // Suggest a deposit amount that lands around ~$50 of value, so the
@@ -117,12 +98,9 @@ function defaultAmountFor(asset: { id: string }): string {
 //     the gate stays stable when price feed moves (we don't want the
 //     UI to slide between "0.000016" and "0.000018" depending on
 //     today's BTC quote).
-const MIN_AMOUNT_HUMAN: Record<string, string> = {
-  "0x7b727cd8d659d72042a9872c9c68b0": "0.0005",   // dETH  ≈ $1
-  "0x2357c29fd5ed992038b0c44bf54aaf": "0.00001",  // dWBTC ≈ $0.60
-  "0x049d581b3233f42040501b99d2bd52": "1",         // dUSDT  = $1
-  "0x93968449ab8ec92035a92a38d747f9": "1",         // dDAI   = $1
-};
+const MIN_AMOUNT_HUMAN: Record<string, string> = Object.fromEntries(
+  Object.values(ASSET_FAUCET_CATALOGUE).map((a) => [a.id, a.minAmountHuman]),
+);
 
 function minAmountUnitsFor(asset: { id: string; decimals: number }): bigint {
   const human = MIN_AMOUNT_HUMAN[asset.id] ?? "0";
