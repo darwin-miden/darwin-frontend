@@ -29,11 +29,21 @@ const SELF_CUSTODY =
   typeof process !== "undefined" &&
   process.env.NEXT_PUBLIC_MIDEN_SELF_CUSTODY === "1";
 
+// Network switch — flips the entire SDK runtime over to Miden Devnet
+// when NEXT_PUBLIC_MIDEN_V015=1 is set in .env.local. The matching
+// AccountId hexes and MAST roots come from `midenConstants.ts` and
+// `midenController.ts` which read the same flag. Default stays
+// "testnet" so production deploys are unaffected.
+const MIDEN_RPC_URL: "testnet" | "devnet" =
+  typeof process !== "undefined" && process.env.NEXT_PUBLIC_MIDEN_V015 === "1"
+    ? "devnet"
+    : "testnet";
+
 export function MidenDynamicProviders({ children }: { children: ReactNode }) {
   return (
     <MidenProvider
       config={{
-        rpcUrl: "testnet",
+        rpcUrl: MIDEN_RPC_URL,
       }}
       loadingComponent={
         <div
