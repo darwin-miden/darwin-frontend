@@ -40,14 +40,22 @@ const MIDEN_CLIENT =
   process.env.DARWIN_MIDEN_CLIENT_BIN ||
   "/Users/eden/Library/Application Support/midenup/toolchains/0.14.0/bin/miden-client";
 
+// 2026-06-23: testnet was migrated to v0.15. The v0.14 hex
+// 0xbef7d2e8… is no longer reachable on the new testnet — use the
+// freshly redeployed v0.15 controller as the default. Override via
+// DARWIN_CONTROLLER_HEX for any other deployment.
 const CONTROLLER_ID =
-  process.env.DARWIN_CONTROLLER_HEX || "0xbef7d2e89e9c3e006e10f959fa16d2";
+  process.env.DARWIN_CONTROLLER_HEX || "0x719bd3a14b42533115b1bcc8e02ea5";
 
-// MAST root of `get_user_position` on the v6 controller — pinned in
+// MAST root of `get_user_position` on the v7 controller — pinned in
 // midenController.ts and mirrored here so the server doesn't need to
 // reach into client-side TS to know which proc to call.
+//
+// 2026-06-23: v0.15 MAST rotation. Wire format 0.0.2 → 0.0.3 rehashes
+// every procedure root. The v0.14 root (0xc9ccec54…) is no longer
+// callable against the new controller.
 const GET_USER_POSITION_MAST_ROOT =
-  "0xc9ccec5458661be113ea48c9d8947d10bfe4705a53a7aeee76c273733f88bf38";
+  "0x47b239ea11ad0375cca5a082369f721729c6d63a1fb170e6b5be5755dd06301f";
 
 // Field-element max (Goldilocks p = 2^64 - 2^32 + 1). Both suffix +
 // prefix must fit comfortably inside u64 well below this; AccountId
