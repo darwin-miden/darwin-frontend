@@ -68,35 +68,35 @@ const ASSET_FAUCETS_V014: Record<string, AssetFaucet> = {
   },
 };
 
-// v0.15 Devnet faucets — deployed 2026-06-20 via
-// `deploy_devnet_faucet`. The on-chain TokenSymbol is uppercase
-// (DETH, DWBTC, …) because miden-protocol 0.15's TokenSymbol requires
-// ASCII uppercase; the lowercase-d frontend label is just display.
+// v0.15 Testnet faucets — deployed 2026-06-23 after Miden's testnet
+// v0.15 migration. The on-chain TokenSymbol is uppercase (DETH, DWBTC,
+// …) because miden-protocol 0.15's TokenSymbol requires ASCII
+// uppercase; the lowercase-d frontend label is just display.
 const ASSET_FAUCETS_V015: Record<string, AssetFaucet> = {
   "darwin-eth": {
     symbol: "dETH",
-    id: "0xc2c923560dc3cb114ec24ab2291a05",
+    id: "0xb0411b0e0c4985115c03d034234110",
     decimals: 8,
     referencePriceUsd: 2000,
     minAmountHuman: "0.0005",
   },
   "darwin-wbtc": {
     symbol: "dWBTC",
-    id: "0xdb5cd1de2141b2f1713bb54529fd5f",
+    id: "0xf4779bc231d7c0713e8dd1175daa75",
     decimals: 8,
     referencePriceUsd: 60000,
     minAmountHuman: "0.00001",
   },
   "darwin-usdt": {
     symbol: "dUSDT",
-    id: "0x17f87027a35ab25112b18aed1345fc",
+    id: "0xa80e2f25818339712c73ed8d8e9fa8",
     decimals: 6,
     referencePriceUsd: 1,
     minAmountHuman: "1",
   },
   "darwin-dai": {
     symbol: "dDAI",
-    id: "0xb061f3a800d84d511948f0a5004c0b",
+    id: "0xd3ddf8c8a8bfe7715e1d92e2f8cd1f",
     decimals: 6,
     referencePriceUsd: 1,
     minAmountHuman: "1",
@@ -130,9 +130,9 @@ const BASKET_TOKEN_FAUCETS_V014: Record<BasketSymbol, BasketFaucet> = {
 };
 
 const BASKET_TOKEN_FAUCETS_V015: Record<BasketSymbol, BasketFaucet> = {
-  DCC: { symbol: "DCC", id: "0x536e8b33e2e10d915bd466faa64099", decimals: 8 },
-  DAG: { symbol: "DAG", id: "0x6c4f5da5061c6f312e99327a5b36d3", decimals: 8 },
-  DCO: { symbol: "DCO", id: "0xf1be7df227291a714c62658a3bcd18", decimals: 8 },
+  DCC: { symbol: "DCC", id: "0x4eb76287e07e90714a86ae2b89d700", decimals: 8 },
+  DAG: { symbol: "DAG", id: "0xed4219cb5ebf3d911c27dc6b24baa2", decimals: 8 },
+  DCO: { symbol: "DCO", id: "0xc58107b160df13d1157b707e3f0a3d", decimals: 8 },
 };
 
 export const BASKET_TOKEN_FAUCETS: Record<BasketSymbol, BasketFaucet> = USE_V015
@@ -145,12 +145,13 @@ export const BASKET_TOKEN_FAUCETS: Record<BasketSymbol, BasketFaucet> = USE_V015
  * recovered via `import_account_by_id`. All three baskets share this
  * one controller (per-user, per-basket positions live in slot-10).
  *
- * v0.14 (testnet): 0xbef7d2e8… (live).
- * v0.15 (devnet):  0x2388eaea… (deployed + initialized 2026-06-20,
- *                  init tx 0x05820193…, block 328295).
+ * v0.14 (legacy testnet): 0xbef7d2e8… (no longer reachable since
+ *                         Miden's testnet v0.15 migration on 2026-06-23).
+ * v0.15 (testnet):        0x719bd3a1… (deployed + initialized 2026-06-23,
+ *                         init tx 0x7dfe8ff6…, block 3417).
  */
 const FEE_ROUTING_CONTROLLER_ID_V014 = "0xbef7d2e89e9c3e006e10f959fa16d2";
-const FEE_ROUTING_CONTROLLER_ID_V015 = "0x2388eaea4ce45331214b871755e7b5";
+const FEE_ROUTING_CONTROLLER_ID_V015 = "0x719bd3a14b42533115b1bcc8e02ea5";
 
 export const FEE_ROUTING_CONTROLLER_ID = USE_V015
   ? FEE_ROUTING_CONTROLLER_ID_V015

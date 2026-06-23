@@ -34,9 +34,13 @@
 // CONTROLLER_ID is duplicated by `FEE_ROUTING_CONTROLLER_ID` in
 // midenConstants.ts — kept here for backward compatibility with code
 // that imports from this file directly. Both resolve identically.
+//
+// 2026-06-23: testnet was migrated to v0.15 on Miden's side; the v0.15
+// controller is the live one. v0.14 hex retained only as a fallback
+// for hypothetical localhost deployments running an older node.
 export const CONTROLLER_ID =
   process.env.NEXT_PUBLIC_MIDEN_V015 === "1"
-    ? "0x2388eaea4ce45331214b871755e7b5"
+    ? "0x719bd3a14b42533115b1bcc8e02ea5"
     : "0xbef7d2e89e9c3e006e10f959fa16d2";
 
 export const MAST_ROOTS_V014 = {
