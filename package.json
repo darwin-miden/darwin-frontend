@@ -14,8 +14,8 @@
   "dependencies": {
     "@epoch-protocol/epoch-intents-sdk": "^1.0.23",
     "@miden-sdk/miden-sdk": "^0.15.0",
-    "@miden-sdk/miden-wallet-adapter-base": "^0.14.3",
-    "@miden-sdk/miden-wallet-adapter-react": "^0.14.3",
+    "@miden-sdk/miden-wallet-adapter-base": "^0.15.1",
+    "@miden-sdk/miden-wallet-adapter-react": "^0.15.1",
     "@miden-sdk/react": "^0.15.0",
     "@tanstack/react-query": "^5.100.10",
     "connectkit": "^1.9.2",
