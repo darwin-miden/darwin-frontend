@@ -12,8 +12,15 @@
 
 export const TESTNET_SNAPSHOT_TAKEN_AT = "2026-05-17";
 
-export const MIDENSCAN_BASE = "https://testnet.midenscan.com";
-export const MIDEN_RPC = "https://rpc.testnet.miden.io";
+// Network-aware URLs — flip via NEXT_PUBLIC_MIDEN_V015=1 to point
+// reviewers at the Devnet explorer + RPC during the v0.15 migration.
+const _USE_V015 = process.env.NEXT_PUBLIC_MIDEN_V015 === "1";
+export const MIDENSCAN_BASE = _USE_V015
+  ? "https://explorer.devnet.miden.io"
+  : "https://testnet.midenscan.com";
+export const MIDEN_RPC = _USE_V015
+  ? "https://rpc.devnet.miden.io"
+  : "https://rpc.testnet.miden.io";
 
 export interface DeployedAccount {
   label: string;

@@ -1,21 +1,26 @@
 /**
  * Single source of truth for every hardcoded Miden AccountId hex the
- * frontend depends on. When the Miden testnet rolls a new protocol
+ * frontend depends on. When the Miden network rolls a new protocol
  * version (e.g. v0.14 → v0.15 changes the AccountId wire format from
  * v0 to v1), the migration sweep is a one-file edit instead of a
  * grep-and-replace across components.
  *
- * Values mirror what is deployed on the live Miden testnet. Static
- * snapshot history lives in `testnet-state.ts`; this file is the
- * runtime-consumed view.
+ * Two parallel snapshots are pinned during the v0.14 → v0.15 cutover:
  *
- * On migration: redeploy the controllers and faucets under the new
- * SDK, replace every hex below with the new AccountId, then bump
- * `MIDEN_TESTNET_VERSION` so consumers can short-circuit any
- * version-keyed caches.
+ *   *_V014 — what is live on Miden Testnet today.
+ *   *_V015 — what was deployed on Miden Devnet 2026-06-20 against
+ *            the v0.15 toolchain. Will become the testnet set when
+ *            Miden Testnet ships v0.15 (currently scheduled the week
+ *            of 2026-06-22).
+ *
+ * The actively-exported view chooses between them based on
+ * `NEXT_PUBLIC_MIDEN_V015`. Static snapshot history lives in
+ * `testnet-state.ts`.
  */
 
-export const MIDEN_TESTNET_VERSION = "v0.14";
+const USE_V015 = process.env.NEXT_PUBLIC_MIDEN_V015 === "1";
+
+export const MIDEN_TESTNET_VERSION = USE_V015 ? "v0.15" : "v0.14";
 
 // ─── Constituent asset faucets ───────────────────────────────────────
 // Each maps an internal `id` slug to the deployed Miden faucet account
@@ -32,7 +37,7 @@ export interface AssetFaucet {
   minAmountHuman: string;
 }
 
-export const ASSET_FAUCETS: Record<string, AssetFaucet> = {
+const ASSET_FAUCETS_V014: Record<string, AssetFaucet> = {
   "darwin-eth": {
     symbol: "dETH",
     id: "0x7b727cd8d659d72042a9872c9c68b0",
@@ -63,6 +68,45 @@ export const ASSET_FAUCETS: Record<string, AssetFaucet> = {
   },
 };
 
+// v0.15 Testnet faucets — deployed 2026-06-23 after Miden's testnet
+// v0.15 migration. The on-chain TokenSymbol is uppercase (DETH, DWBTC,
+// …) because miden-protocol 0.15's TokenSymbol requires ASCII
+// uppercase; the lowercase-d frontend label is just display.
+const ASSET_FAUCETS_V015: Record<string, AssetFaucet> = {
+  "darwin-eth": {
+    symbol: "dETH",
+    id: "0xb0411b0e0c4985115c03d034234110",
+    decimals: 8,
+    referencePriceUsd: 2000,
+    minAmountHuman: "0.0005",
+  },
+  "darwin-wbtc": {
+    symbol: "dWBTC",
+    id: "0xf4779bc231d7c0713e8dd1175daa75",
+    decimals: 8,
+    referencePriceUsd: 60000,
+    minAmountHuman: "0.00001",
+  },
+  "darwin-usdt": {
+    symbol: "dUSDT",
+    id: "0xa80e2f25818339712c73ed8d8e9fa8",
+    decimals: 6,
+    referencePriceUsd: 1,
+    minAmountHuman: "1",
+  },
+  "darwin-dai": {
+    symbol: "dDAI",
+    id: "0xd3ddf8c8a8bfe7715e1d92e2f8cd1f",
+    decimals: 6,
+    referencePriceUsd: 1,
+    minAmountHuman: "1",
+  },
+};
+
+export const ASSET_FAUCETS: Record<string, AssetFaucet> = USE_V015
+  ? ASSET_FAUCETS_V015
+  : ASSET_FAUCETS_V014;
+
 // Reverse lookup: faucet id → asset record. Used by panels that have
 // the faucet id but not the slug.
 export const ASSET_FAUCET_BY_ID: Record<string, AssetFaucet> =
@@ -79,20 +123,39 @@ export interface BasketFaucet {
   decimals: number;
 }
 
-export const BASKET_TOKEN_FAUCETS: Record<BasketSymbol, BasketFaucet> = {
+const BASKET_TOKEN_FAUCETS_V014: Record<BasketSymbol, BasketFaucet> = {
   DCC: { symbol: "DCC", id: "0x2066f2da1f91ba202af5251d39101c", decimals: 8 },
   DAG: { symbol: "DAG", id: "0xfb6811fd6399df206d44f62800620d", decimals: 8 },
   DCO: { symbol: "DCO", id: "0xbe4efc6729eb3220423b7d6d6a0942", decimals: 8 },
 };
+
+const BASKET_TOKEN_FAUCETS_V015: Record<BasketSymbol, BasketFaucet> = {
+  DCC: { symbol: "DCC", id: "0x4eb76287e07e90714a86ae2b89d700", decimals: 8 },
+  DAG: { symbol: "DAG", id: "0xed4219cb5ebf3d911c27dc6b24baa2", decimals: 8 },
+  DCO: { symbol: "DCO", id: "0xc58107b160df13d1157b707e3f0a3d", decimals: 8 },
+};
+
+export const BASKET_TOKEN_FAUCETS: Record<BasketSymbol, BasketFaucet> = USE_V015
+  ? BASKET_TOKEN_FAUCETS_V015
+  : BASKET_TOKEN_FAUCETS_V014;
 
 // ─── Controller ──────────────────────────────────────────────────────
 /**
  * v7 fee-routing controller — Public storage so future drift can be
  * recovered via `import_account_by_id`. All three baskets share this
  * one controller (per-user, per-basket positions live in slot-10).
+ *
+ * v0.14 (legacy testnet): 0xbef7d2e8… (no longer reachable since
+ *                         Miden's testnet v0.15 migration on 2026-06-23).
+ * v0.15 (testnet):        0x719bd3a1… (deployed + initialized 2026-06-23,
+ *                         init tx 0x7dfe8ff6…, block 3417).
  */
-export const FEE_ROUTING_CONTROLLER_ID =
-  "0xbef7d2e89e9c3e006e10f959fa16d2";
+const FEE_ROUTING_CONTROLLER_ID_V014 = "0xbef7d2e89e9c3e006e10f959fa16d2";
+const FEE_ROUTING_CONTROLLER_ID_V015 = "0x719bd3a14b42533115b1bcc8e02ea5";
+
+export const FEE_ROUTING_CONTROLLER_ID = USE_V015
+  ? FEE_ROUTING_CONTROLLER_ID_V015
+  : FEE_ROUTING_CONTROLLER_ID_V014;
 
 // ─── Cross-chain bridges ─────────────────────────────────────────────
 /**

@@ -90,9 +90,11 @@ export function SelfCustodyWalletPanel() {
       <button
         onClick={async () => {
           try {
+            // v0.15 dropped the `mutable` flag from CreateWalletOptions
+            // (the field was a no-op since mutability is now a property
+            // of the account components, not the wallet creation call).
             const w = await createWallet({
               storageMode: "private",
-              mutable: true,
             });
             setCreatedId(w.id().toString());
           } catch (e) {

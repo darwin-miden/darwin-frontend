@@ -13,17 +13,37 @@
  *   slot 11 (fee_recipient)  account_id_word                       (v6 only)
  *
  * MAST roots are pinned here so the tx-scripts the frontend builds
- * can call them directly. Read-side (`get_*`) roots differ from v5
- * because procedure adjacency in v6 changes the merkle hashing;
- * write-side (`set_*` / `receive_asset`) roots are byte-identical
- * to v5 so atomic notes built against v5 still consume cleanly.
+ * can call them directly.
  *
- * Roots come from `cargo run --bin build_v6_fee_routing_controller`.
+ * Two parallel sets are maintained during the v0.14 → v0.15 migration:
+ *
+ *   MAST_ROOTS_V014: pinned against the live v6 controller deployed
+ *   on Miden testnet (account 0xbef7d2e8…). These are what the
+ *   shipped production frontend uses.
+ *
+ *   MAST_ROOTS_V015: pinned against the controller package rebuilt
+ *   under miden-protocol 0.15.3 / miden-assembly 0.23.3 (MAST wire
+ *   format 0.0.3). These will replace V014 once the v0.15 controller
+ *   is redeployed on Miden Devnet — until then the redeploy address
+ *   is not known and the live frontend still uses V014.
+ *
+ *   Both sets come from `cargo run --bin build_v6_fee_routing_controller`
+ *   on their respective toolchains.
  */
 
-export const CONTROLLER_ID = "0xbef7d2e89e9c3e006e10f959fa16d2";
+// CONTROLLER_ID is duplicated by `FEE_ROUTING_CONTROLLER_ID` in
+// midenConstants.ts — kept here for backward compatibility with code
+// that imports from this file directly. Both resolve identically.
+//
+// 2026-06-23: testnet was migrated to v0.15 on Miden's side; the v0.15
+// controller is the live one. v0.14 hex retained only as a fallback
+// for hypothetical localhost deployments running an older node.
+export const CONTROLLER_ID =
+  process.env.NEXT_PUBLIC_MIDEN_V015 === "1"
+    ? "0x719bd3a14b42533115b1bcc8e02ea5"
+    : "0xbef7d2e89e9c3e006e10f959fa16d2";
 
-export const MAST_ROOTS = {
+export const MAST_ROOTS_V014 = {
   get_target_weights: "0xd63bb900370d555c4a73142cc101b1d0c8bc47cf25c7ec8ee61002891608e3c6",
   get_fees:            "0xfed5e0d0b487e48aec20a2bcd91995303f2b0cddb18ea8cb85424bdeec96dd0b",
   get_user_position:   "0xc9ccec5458661be113ea48c9d8947d10bfe4705a53a7aeee76c273733f88bf38",
@@ -35,6 +55,30 @@ export const MAST_ROOTS = {
   receive_asset:       "0x75f638c65584d058542bcf4674b066ae394183021bc9b44dc2fdd97d52f9bcfb",
   receive_and_credit:  "0xeae9e249a88021a2fb6bcae39148f528ee98d5fc884290a42f961b9a536c763e",
 } as const;
+
+// New MAST roots under miden-protocol 0.15.3 / miden-assembly 0.23.3.
+// Wire-format 0.0.3 rehashes every procedure so all 10 roots shift.
+// Sourced from `build_v6_fee_routing_controller` against the v0.15
+// workspace on 2026-06-19. Active path will swap to these once the
+// v0.15 controller is redeployed on Miden Devnet.
+export const MAST_ROOTS_V015 = {
+  get_target_weights: "0x48ce893c8e6def417c17b75c77f7b70238748253c17c5e42e7293bb7d6f4daee",
+  get_fees:            "0x3f4209cb52091cb69187ab75ff3219ab7b0ff4a17207dfccfc9c06ebe76ae93e",
+  get_user_position:   "0x47b239ea11ad0375cca5a082369f721729c6d63a1fb170e6b5be5755dd06301f",
+  get_fee_recipient:   "0xd4e46029536b4d308c52c3d501daef7bf552f0c3d6da8aead7dd094d824ad5df",
+  set_target_weights:  "0x26a369cd6781d75d40169223996afcc98602775ce4b6fe9bba8236eb70ceb8e2",
+  set_fees:            "0xfbcc4fdd3852fc7ea0325e62377af7692845f558a2f0e503c5c52edbbde1ed26",
+  set_user_position:   "0xea652ac9aa1b6ee468da0845b52008ffa4639d112f356534ba608bc00d7b6f5f",
+  set_fee_recipient:   "0xfed8024bd5134e2229d0ac853fd9191bf3f43479e85af96499c4a05785df6e6c",
+  receive_asset:       "0x6170fd6d682d91777b551fd866258f43cc657f1291f8f071500f4e56e9c153da",
+  receive_and_credit:  "0x849f526236e9a7ab84a183da209666c3e2839efaeb7d5866a6dca043fdaddc10",
+} as const;
+
+// Active set: switch via NEXT_PUBLIC_MIDEN_V015 when the v0.15 Devnet
+// redeploy is live. Falls back to V014 so production frontend
+// continues to call into the deployed v6 controller on testnet.
+export const MAST_ROOTS =
+  process.env.NEXT_PUBLIC_MIDEN_V015 === "1" ? MAST_ROOTS_V015 : MAST_ROOTS_V014;
 
 const FELT_MASK = (1n << 63n) - 1n;
 
