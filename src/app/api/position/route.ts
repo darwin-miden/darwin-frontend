@@ -45,7 +45,7 @@ const MIDEN_CLIENT =
 // freshly redeployed v0.15 controller as the default. Override via
 // DARWIN_CONTROLLER_HEX for any other deployment.
 const CONTROLLER_ID =
-  process.env.DARWIN_CONTROLLER_HEX || "0x719bd3a14b42533115b1bcc8e02ea5";
+  process.env.DARWIN_CONTROLLER_HEX || "0x6687e59f895c7e3115c654ca7ccbbb";
 
 // MAST root of `get_user_position` on the v7 controller — pinned in
 // midenController.ts and mirrored here so the server doesn't need to

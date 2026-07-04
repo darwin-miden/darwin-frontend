@@ -151,7 +151,7 @@ export const BASKET_TOKEN_FAUCETS: Record<BasketSymbol, BasketFaucet> = USE_V015
  *                         init tx 0x7dfe8ff6…, block 3417).
  */
 const FEE_ROUTING_CONTROLLER_ID_V014 = "0xbef7d2e89e9c3e006e10f959fa16d2";
-const FEE_ROUTING_CONTROLLER_ID_V015 = "0x719bd3a14b42533115b1bcc8e02ea5";
+const FEE_ROUTING_CONTROLLER_ID_V015 = "0x6687e59f895c7e3115c654ca7ccbbb";
 
 export const FEE_ROUTING_CONTROLLER_ID = USE_V015
   ? FEE_ROUTING_CONTROLLER_ID_V015
