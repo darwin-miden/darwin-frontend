@@ -2,7 +2,11 @@
 
 import { MidenProvider } from "@miden-sdk/react";
 import { MidenFiSignerProvider } from "@miden-sdk/miden-wallet-adapter-react";
-import { WalletAdapterNetwork } from "@miden-sdk/miden-wallet-adapter-base";
+import {
+  AllowedPrivateData,
+  PrivateDataPermission,
+  WalletAdapterNetwork,
+} from "@miden-sdk/miden-wallet-adapter-base";
 import type { ReactNode } from "react";
 
 /**
@@ -71,6 +75,16 @@ export function MidenDynamicProviders({ children }: { children: ReactNode }) {
           appName="Darwin Protocol"
           network={WalletAdapterNetwork.Testnet}
           autoConnect={false}
+          // MidenFi rejects the SDK defaults (UponRequest + None) with
+          // NOT_GRANTED even after the user clicks Connect in the
+          // extension's popup. Ask for `Auto` up-front — the user is
+          // shown the app-name + private-data scope once and the
+          // extension caches the grant instead of gating every request
+          // on a prompt the SDK never surfaces. `Assets` is the minimum
+          // scope Darwin needs (we call requestAssets to read the
+          // user's basket-token balance for the portfolio panel).
+          privateDataPermission={PrivateDataPermission.Auto}
+          allowedPrivateData={AllowedPrivateData.Assets}
           // Default error handler does `console.error(error)`, which
           // Next 15's dev overlay scrapes — including 'Note not found'
           // failures from the faucet claim retry loop that we already
