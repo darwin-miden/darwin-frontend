@@ -90,10 +90,18 @@ end
 
 function runExec(scriptPath: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
+    // miden-client resolves ${HOME}/.miden/store.sqlite3 for its account
+    // + note cache. On the operator's Mac the v0.15 controller (with its
+    // Falcon-512 keystore, from the fresh redeploy) lives under the
+    // relay's permanent HOME — override HOME on spawn so we point at
+    // that store instead of the legacy ~/.miden which still has the
+    // v0.14 chain state and would fail to parse v0.15 account IDs.
+    const midenHome = process.env.DARWIN_MIDEN_HOME;
+    const spawnEnv = midenHome ? { ...process.env, HOME: midenHome } : process.env;
     const child = spawn(
       MIDEN_CLIENT,
       ["exec", "-a", CONTROLLER_ID, "-s", scriptPath],
-      { env: process.env },
+      { env: spawnEnv },
     );
     let stdout = "";
     let stderr = "";
@@ -190,13 +198,10 @@ export async function POST(req: Request) {
         { status: 500 },
       );
     }
-    // Output looks like:
-    //   Program executed successfully
-    //   Output stack:
-    //   ├──  0: <amount>
-    //   ├──  1: 0
-    //   ...
-    const m = stdout.match(/0:\s*(\d+)/);
+    // v0.15 output format is a single "Result: <amount>" line — the
+    // v0.14 "Output stack: ├── 0: …" tree was collapsed to just the
+    // truncate_stack top. v0.14 fallback pattern kept for safety.
+    const m = stdout.match(/Result:\s*(\d+)/) ?? stdout.match(/0:\s*(\d+)/);
     if (!m) {
       return NextResponse.json(
         { error: "couldn't parse position from miden-client output", raw: stdout.slice(0, 500) },
