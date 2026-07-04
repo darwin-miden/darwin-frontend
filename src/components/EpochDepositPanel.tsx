@@ -11,12 +11,13 @@
  *
  * Asset: Epoch's test USDC on Sepolia (18-decimal at
  * `0x2BB4FfD7E2c6D432b697554Efd77fA13bdbefd69`) bridges to dUSDC at
- * Miden faucet `0x0a7d175ed63ec5200fb2ced86f6aa5`. The relay wallet is
- * the Miden recipient (custodial), and the existing relay worker emits
- * `atomic_deposit_note` against the v7 controller to credit slot-10.
+ * Miden faucet `0xfc90f0f4da30e51168453b60eafed7` (fresh table published
+ * by Epoch team 2026-07-04). The relay wallet is the Miden recipient
+ * (custodial), and the existing relay worker emits `atomic_deposit_note`
+ * against the v7 controller to credit slot-10.
  *
  * For the relay worker to consume the new asset, set
- * `DARWIN_RELAY_V2_FAUCET_HEX=0x0a7d175ed63ec5200fb2ced86f6aa5` in
+ * `DARWIN_RELAY_V2_FAUCET_HEX=0xfc90f0f4da30e51168453b60eafed7` in
  * `com.darwin.relay-v2-worker.plist`.
  */
 
@@ -34,6 +35,8 @@ import {
 } from "../lib/relayV2";
 import {
   ALLOCATOR_URL,
+  applySlippageBps,
+  EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
   EPOCH_USDC_SEPOLIA,
   SEPOLIA_CHAIN_ID,
   dusdcMidenBaseUnits,
@@ -181,12 +184,16 @@ export function EpochDepositPanel({ basket }: Props) {
       setIntentInit(intent);
 
       setStage("quoting");
-      // minTokenOut is Miden-side base units (6-dec) — that's what
-      // Epoch's allocator quotes against.
+      // minTokenOut is Miden-side base units (6-dec). Apply a 5% slippage
+      // buffer so the ~0.996x testnet quote isn't rejected as under-floor
+      // (see EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS in lib/epoch.ts).
       const q = await fetchQuote(sdkRef.current, {
         evmSourceAddress: address as `0x${string}`,
         midenRecipientId: intent.relay_miden_address,
-        minTokenOut: dusdcMidenBaseUnits(usdcOut),
+        minTokenOut: applySlippageBps(
+          dusdcMidenBaseUnits(usdcOut),
+          EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
+        ),
       });
       setQuote(q);
       setStage("quote-ready");

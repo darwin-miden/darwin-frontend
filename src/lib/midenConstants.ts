@@ -159,10 +159,16 @@ export const FEE_ROUTING_CONTROLLER_ID = USE_V015
 
 // ─── Cross-chain bridges ─────────────────────────────────────────────
 /**
- * Epoch's Miden-side dUSDC faucet — the token the hosted bridge
- * delivers when a user deposits USDC on Sepolia.
+ * Epoch's Miden-side faucets — tokens the hosted bridge delivers when
+ * a user deposits the matching ERC-20 on Sepolia. Full table published
+ * by Manank / Epoch team 2026-07-04. All 6-decimal on Miden.
  */
-export const EPOCH_DUSDC_FAUCET_ID = "0x0a7d175ed63ec5200fb2ced86f6aa5";
+export const EPOCH_DUSDC_FAUCET_ID = "0xfc90f0f4da30e51168453b60eafed7";
+export const EPOCH_DDAI_FAUCET_ID = "0x176275876f2fd41103257e341832b9";
+export const EPOCH_DUSDT_FAUCET_ID = "0x7725b0e9bb9406912d2ebeaeb05f4d";
+export const EPOCH_DWETH_FAUCET_ID = "0xa54717f6bd3210d128aeeaa8a2b7f3";
+export const EPOCH_DWBTC_FAUCET_ID = "0x151823cde4b7bd91352617729d7614";
+export const EPOCH_MIDEN_FAUCET_ID = "0x2458e5446128e6b150b75b8ebd9ce1";
 
 /**
  * Bali (AggLayer) bridge account on Miden side. Used by the legacy

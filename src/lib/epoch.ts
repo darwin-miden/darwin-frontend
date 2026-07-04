@@ -43,7 +43,8 @@ const ZERO_HASH =
 
 // Epoch's test USDC on Sepolia — same address the bridging-app uses.
 // EVM side is 18-decimal (NOT the canonical 6-dec USDC); Miden side is
-// 6-decimal (verified live 2026-06-10: 1e18 wei in → 2e6 dUSDC base out).
+// 6-decimal (verified live 2026-07-04 with the fresh Epoch faucet table:
+// 1 USDC in → ~0.996 dUSDC out — see EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS).
 export const EPOCH_USDC_SEPOLIA = {
   symbol: "USDC",
   address: "0x2BB4FfD7E2c6D432b697554Efd77fA13bdbefd69" as `0x${string}`,
@@ -51,6 +52,22 @@ export const EPOCH_USDC_SEPOLIA = {
   midenFaucetId: EPOCH_DUSDC_FAUCET_ID,
   midenDecimals: 6,
 } as const;
+
+/**
+ * Slippage buffer for Epoch minTokenOut on Sepolia→Miden.
+ *
+ * Epoch's testnet solver quotes ~0.996 dUSDC per 1 Sepolia USDC (small
+ * price drift between the two test tokens). Setting minTokenOut to the
+ * exact human amount makes the solver return NO_QUOTE_AVAILABLE because
+ * the buffered quote falls under the floor. 500 bps = 5% buffer keeps
+ * headroom for further testnet drift.
+ */
+export const EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS = 500;
+
+/** Apply a bps-denominated slippage discount to a base-unit amount. */
+export function applySlippageBps(baseUnits: string, bps: number): string {
+  return ((BigInt(baseUnits) * BigInt(10_000 - bps)) / 10_000n).toString();
+}
 
 export interface EpochQuoteParams {
   /** Sepolia EVM address of the signer (user wallet). */
@@ -88,7 +105,10 @@ function buildTaskData(params: EpochQuoteParams) {
     extraData: {
       midenRecipientAccount: params.midenRecipientId,
       midenFaucetId: EPOCH_USDC_SEPOLIA.midenFaucetId,
-      midenNoteType: "P2ID",
+      // Public: the note is written to the note tree so anyone (including
+      // our relay worker's brute-force scan) can consume it. Validated
+      // E2E 2026-07-04 with the fresh Epoch dUSDC faucet.
+      midenNoteType: "Public",
     },
   };
 }
