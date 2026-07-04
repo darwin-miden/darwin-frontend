@@ -16,6 +16,31 @@ export function MidenConnectButton() {
   // value is just ignored on the first render.
   const wallet = useMidenFiWallet();
 
+  // Trace state at every render so DevTools can pinpoint where a
+  // connect stalls (extension detection, wallets[] empty, connect()
+  // resolves without an address, etc). Must run BEFORE any early
+  // return — React counts hooks by call order.
+  useEffect(() => {
+    console.info("[miden-connect] state", {
+      connected: wallet.connected,
+      connecting: wallet.connecting,
+      address: wallet.address,
+      hasCurrentWallet: !!wallet.wallet,
+      currentWalletName: wallet.wallet?.adapter?.name,
+      currentReadyState: wallet.wallet?.readyState,
+      wallets: wallet.wallets.map((w) => ({
+        name: w.adapter.name,
+        readyState: w.readyState,
+      })),
+      windowMidenWallet:
+        typeof window !== "undefined" &&
+        !!(
+          (window as unknown as { midenWallet?: unknown }).midenWallet ||
+          (window as unknown as { miden?: unknown }).miden
+        ),
+    });
+  }, [wallet.connected, wallet.connecting, wallet.address, wallet.wallet, wallet.wallets]);
+
   if (!mounted) {
     return (
       <button
@@ -44,30 +69,6 @@ export function MidenConnectButton() {
       </button>
     );
   }
-
-  // Watch the wallet-adapter state and log every transition so we can
-  // trace connect failures from DevTools without having to instrument
-  // the extension itself.
-  useEffect(() => {
-    console.info("[miden-connect] state", {
-      connected,
-      connecting,
-      address,
-      hasCurrentWallet: !!wallet.wallet,
-      currentWalletName: wallet.wallet?.adapter?.name,
-      currentReadyState: wallet.wallet?.readyState,
-      wallets: wallets.map((w) => ({
-        name: w.adapter.name,
-        readyState: w.readyState,
-      })),
-      windowMidenWallet:
-        typeof window !== "undefined" &&
-        !!(
-          (window as unknown as { midenWallet?: unknown }).midenWallet ||
-          (window as unknown as { miden?: unknown }).miden
-        ),
-    });
-  }, [connected, connecting, address, wallet.wallet, wallets]);
 
   async function onClick() {
     console.info("[miden-connect] onClick — wallets=", wallets.length, "hasWallet=", !!wallet.wallet);
