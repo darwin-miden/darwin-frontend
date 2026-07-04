@@ -176,3 +176,18 @@ export const EPOCH_MIDEN_FAUCET_ID = "0x2458e5446128e6b150b75b8ebd9ce1";
  * recipient is specified.
  */
 export const BALI_DEFAULT_MIDEN_DEST = "0xed3cd5befa3207805f8529207cfc0d";
+
+// ─── Trustless controller (demo path) ────────────────────────────────
+/**
+ * v8-noauth controller — pure NoAuth account, anyone can submit txs
+ * against it without holding any signing key. Backing target for the
+ * "no server trust" ephemeral-wallet path (TrustlessDepositPanel).
+ *
+ * Deployed 2026-07-04 on Miden testnet, live-verified via
+ * darwin-protocol@9c5456b test_noauth_consume (fresh keystore-less
+ * client posts the initial commit tx at block 324496).
+ *
+ * bech32: mtst1aqkvyew9xdu0kvt3atcjuq7xgsyy95ud
+ */
+export const TRUSTLESS_CONTROLLER_HEX =
+  "0x2cc265c53378fb3171eaf12e03c644";

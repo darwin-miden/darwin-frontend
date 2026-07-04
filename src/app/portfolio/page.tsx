@@ -32,6 +32,13 @@ const SelfCustodyWalletPanel = dynamic(
     ),
   { ssr: false },
 );
+const TrustlessDepositPanel = dynamic(
+  () =>
+    import("../../components/TrustlessDepositPanel").then(
+      (m) => m.TrustlessDepositPanel,
+    ),
+  { ssr: false },
+);
 const RelayPositionsPanel = dynamic(
   () =>
     import("../../components/RelayPositionsPanel").then(
@@ -435,6 +442,7 @@ export default function PortfolioPage() {
           <UserPositionPanel />
         </DisclosureGroup>
         <SelfCustodyWalletPanel />
+        <TrustlessDepositPanel />
       </main>
     </>
   );
