@@ -176,9 +176,16 @@ export function TrustlessDepositPanel() {
       pauseSync();
       let account;
       try {
+        // storageMode "private" mirrors what SelfCustodyWalletPanel
+        // does. "public" triggers an on-chain state commit inside
+        // `newWallet` that fails with "invalid enum value passed"
+        // when the client has no gas to pay for the commit tx. The
+        // Falcon-512 key is deterministic from `initSeed` regardless
+        // of storage mode, so the same MetaMask signature still
+        // reproduces the same wallet id across sessions.
         account = await createWallet({
           initSeed: seedBytes,
-          storageMode: "public",
+          storageMode: "private",
         });
       } finally {
         resumeSync();
