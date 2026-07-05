@@ -275,28 +275,44 @@ export function TrustlessDepositPanel() {
       // future on the WASM RefCell and panics ("RefCell already
       // borrowed" from platform.rs).
       pauseSync();
-      let account;
+      let resolvedWalletId: string | null = null;
       try {
         // Explicit authScheme is load-bearing: @miden-sdk/react
         // hard-codes `DEFAULTS.AUTH_SCHEME = AuthScheme.AuthRpoFalcon512`
         // but the runtime `AuthScheme` from @miden-sdk/miden-sdk is
         // `{Falcon:"falcon", ECDSA:"ecdsa"}` — no `AuthRpoFalcon512`
         // key. So the default evaluates to `undefined` and wasm_bindgen
-        // throws "invalid enum value passed". Pass `AuthScheme.Falcon`
-        // explicitly to bypass the broken default.
+        // throws "invalid enum value passed".
         // storageMode "private" mirrors SelfCustodyWalletPanel; the
         // Falcon key is deterministic from initSeed so the same
         // signature reproduces the same wallet id.
-        account = await createWallet({
-          initSeed: seedBytes,
-          storageMode: "private",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
-        });
+        try {
+          const account = await createWallet({
+            initSeed: seedBytes,
+            storageMode: "private",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
+          });
+          resolvedWalletId = account.id().toString();
+        } catch (e) {
+          // On refresh, the previously-derived wallet is still in
+          // IndexedDB (private-mode wallets persist). `createWallet`
+          // detects the collision and throws "account with id 0x… is
+          // already being tracked" — pull the id out of the error
+          // message and treat it as success.
+          const msg = e instanceof Error ? e.message : String(e);
+          const m = msg.match(/id (0x[0-9a-fA-F]+)/);
+          if (m && /already being tracked/i.test(msg)) {
+            resolvedWalletId = m[1];
+          } else {
+            throw e;
+          }
+        }
       } finally {
         resumeSync();
       }
-      setWalletId(account.id().toString());
+      if (!resolvedWalletId) throw new Error("No wallet id resolved");
+      setWalletId(resolvedWalletId);
       setStage("ready");
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
