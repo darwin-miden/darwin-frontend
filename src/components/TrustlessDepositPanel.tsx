@@ -156,17 +156,20 @@ export function TrustlessDepositPanel() {
   const { pauseSync, resumeSync } = useSyncControl();
   const { runExclusive } = useMiden();
 
-  // Isolated debug hook — Playwright can call
-  // `window.__darwinTrustlessDebug(<hex_seed>)` and get back the
-  // derived Miden wallet id without going through MetaMask + wagmi +
-  // ConnectKit. Only used in autonomous E2E tests. Safe to keep on in
-  // prod: the seed is provided by the caller so no secret leaks; the
-  // return value is a public account id.
+  // Isolated debug hooks — the Playwright autonomous E2E test drives
+  // step 1 (derive) and step 4 (credit slot-10 on v8-noauth) directly,
+  // bypassing MetaMask + wagmi + ConnectKit. Safe to keep in prod: the
+  // caller supplies the seed / user address, no secret leaks.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    (window as unknown as {
+    const w = window as unknown as {
       __darwinTrustlessDebug?: (hex: string) => Promise<string>;
-    }).__darwinTrustlessDebug = async (hex: string) => {
+      __darwinTrustlessCredit?: (
+        evm: string,
+        amount: string,
+      ) => Promise<string>;
+    };
+    w.__darwinTrustlessDebug = async (hex: string) => {
       const clean = hex.replace(/^0x/, "");
       const seedBytes = new Uint8Array(
         clean.match(/.{2}/g)!.map((h) => parseInt(h, 16)),
@@ -184,7 +187,29 @@ export function TrustlessDepositPanel() {
         resumeSync();
       }
     };
-  }, [createWallet, pauseSync, resumeSync]);
+    // Directly credit slot-10 on v8-noauth for (evm, amount). Same tx
+    // script the full flow uses at step 4; exposes what the browser
+    // can do against a NoAuth controller with no signing key.
+    w.__darwinTrustlessCredit = async (evm, amount) => {
+      pauseSync();
+      try {
+        const { suffix, prefix } = evmToUserIdFelts(evm);
+        const amountBase = BigInt(amount);
+        const scriptSrc = buildCreditScript(suffix, prefix, amountBase);
+        const txScript = await compileTxScript({ code: scriptSrc });
+        const res = await executeTx({
+          accountId: TRUSTLESS_CONTROLLER_HEX,
+          request: () =>
+            new TransactionRequestBuilder()
+              .withCustomScript(txScript)
+              .build(),
+        });
+        return res?.transactionId?.toString?.() ?? "no-tx-id";
+      } finally {
+        resumeSync();
+      }
+    };
+  }, [createWallet, compileTxScript, executeTx, pauseSync, resumeSync]);
 
   const [stage, setStage] = useState<Stage>("idle");
   const [seedHex, setSeedHex] = useState<string | null>(null);
