@@ -31,9 +31,8 @@ import {
   useCompile,
   useConsume,
   useCreateWallet,
-  useNotes,
+  useMiden,
   useSyncControl,
-  useSyncState,
   useTransaction,
   useWaitForNotes,
 } from "@miden-sdk/react";
@@ -136,7 +135,8 @@ export function TrustlessDepositPanel() {
   const { waitForConsumableNotes } = useWaitForNotes();
   const { execute: executeTx } = useTransaction();
   const { txScript: compileTxScript } = useCompile();
-  useSyncControl();
+  const { pauseSync, resumeSync } = useSyncControl();
+  const { runExclusive } = useMiden();
 
   const [stage, setStage] = useState<Stage>("idle");
   const [seedHex, setSeedHex] = useState<string | null>(null);
@@ -149,13 +149,9 @@ export function TrustlessDepositPanel() {
   const [creditTx, setCreditTx] = useState<string | null>(null);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
 
-  useSyncState();
-  const notesResult = useNotes({ accountId: walletId ?? undefined });
-
-  const inboundNotesCount = useMemo(() => {
-    if (!notesResult || !walletId) return null;
-    return notesResult.notes?.length ?? 0;
-  }, [notesResult, walletId]);
+  // Auto-sync + auto-note-subscription cause RefCell double-borrow
+  // panics on WASM when they race against createWallet / execute. We
+  // opt out here and drive syncs manually inside onDerive / onDeposit.
 
   async function onDerive() {
     if (!evmAddress) {
@@ -173,10 +169,20 @@ export function TrustlessDepositPanel() {
       );
 
       setStage("deriving");
-      const account = await createWallet({
-        initSeed: seedBytes,
-        storageMode: "public",
-      });
+      // Pause the SDK's internal auto-sync loop for the whole
+      // createWallet call. Without this, sync races the createWallet
+      // future on the WASM RefCell and panics ("RefCell already
+      // borrowed" from platform.rs).
+      pauseSync();
+      let account;
+      try {
+        account = await createWallet({
+          initSeed: seedBytes,
+          storageMode: "public",
+        });
+      } finally {
+        resumeSync();
+      }
       setWalletId(account.id().toString());
       setStage("ready");
     } catch (e) {
@@ -187,6 +193,9 @@ export function TrustlessDepositPanel() {
 
   async function onDeposit() {
     if (!walletId || !evmAddress) return;
+    // Same reasoning as onDerive — pause the SDK's auto-sync so it
+    // doesn't race the consume / executeTx futures on the WASM RefCell.
+    pauseSync();
     try {
       setErrorMsg(null);
       setStage("quoting");
@@ -226,13 +235,16 @@ export function TrustlessDepositPanel() {
       setSepoliaTx(depTx ?? null);
 
       setStage("awaiting-delivery");
-      // Poll for the incoming dUSDC note.
-      const delivered = await waitForConsumableNotes({
-        accountId: walletId,
-        minCount: 1,
-        timeoutMs: 180_000,
-        intervalMs: 5_000,
-      });
+      // Poll for the incoming dUSDC note. Wrap in runExclusive so its
+      // internal sync loop doesn't collide with anything else.
+      const delivered = await runExclusive(() =>
+        waitForConsumableNotes({
+          accountId: walletId,
+          minCount: 1,
+          timeoutMs: 180_000,
+          intervalMs: 5_000,
+        }),
+      );
       const inbound = delivered?.[0];
       const noteId =
         (inbound as unknown as { id?: () => { toString?: () => string } })
@@ -266,6 +278,8 @@ export function TrustlessDepositPanel() {
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
       setStage("error");
+    } finally {
+      resumeSync();
     }
   }
 
@@ -453,11 +467,6 @@ export function TrustlessDepositPanel() {
         </button>
       )}
 
-      {process.env.NODE_ENV !== "production" && inboundNotesCount !== null && (
-        <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 12 }}>
-          [debug] notes tracked on wallet: {inboundNotesCount}
-        </p>
-      )}
     </section>
   );
 }
