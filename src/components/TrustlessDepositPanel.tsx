@@ -213,6 +213,15 @@ export function TrustlessDepositPanel() {
             const msg = e instanceof Error ? e.message : String(e);
             if (!/already being tracked/i.test(msg)) throw e;
           }
+          // Sync so the freshly imported account's state is materialised
+          // in the store — otherwise `applyTransaction` errors with
+          // "account data wasn't found".
+          const syncable = client as unknown as {
+            syncState?: () => Promise<unknown>;
+          };
+          try {
+            await syncable.syncState?.();
+          } catch (_) {}
         }
         const { suffix, prefix } = evmToUserIdFelts(evm);
         const amountBase = BigInt(amount);
