@@ -122,7 +122,10 @@ function evmToUserIdFelts(evmAddr: string): { suffix: bigint; prefix: bigint } {
 // same wiring but needs a bit more MASM plumbing (asset key/value on
 // stack).
 function buildCreditScript(suffix: bigint, prefix: bigint, amount: bigint): string {
-  return `use.miden::core::sys
+  // MASM directive is `use <namespace>` (space), not `use.<namespace>`.
+  // The dot form parses in some 0.14 dialects but the 0.15 assembler
+  // baked into the Miden Web SDK rejects it with "invalid syntax".
+  return `use miden::core::sys
 
 begin
     # VALUE word first (goes to bottom):
