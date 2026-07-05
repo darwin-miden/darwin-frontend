@@ -157,7 +157,7 @@ export function TrustlessDepositPanel() {
   const { execute: executeTx } = useTransaction();
   const { txScript: compileTxScript } = useCompile();
   const { pauseSync, resumeSync } = useSyncControl();
-  const { runExclusive } = useMiden();
+  const { client, runExclusive } = useMiden();
 
   // Isolated debug hooks — the Playwright autonomous E2E test drives
   // step 1 (derive) and step 4 (credit slot-10 on v8-noauth) directly,
@@ -196,6 +196,24 @@ export function TrustlessDepositPanel() {
     w.__darwinTrustlessCredit = async (evm, amount) => {
       pauseSync();
       try {
+        // The browser client only has accounts it has explicitly
+        // imported. v8-noauth needs to be pulled from the network on
+        // first use — otherwise executeTransaction throws "account
+        // data wasn't found". Swallow "already tracked" so repeat
+        // calls stay idempotent.
+        const clientAny = client as unknown as {
+          importAccountById?: (id: unknown) => Promise<unknown>;
+        };
+        if (clientAny.importAccountById) {
+          try {
+            const { AccountId } = await import("@miden-sdk/miden-sdk");
+            const accId = AccountId.fromHex(TRUSTLESS_CONTROLLER_HEX);
+            await clientAny.importAccountById(accId);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (!/already being tracked/i.test(msg)) throw e;
+          }
+        }
         const { suffix, prefix } = evmToUserIdFelts(evm);
         const amountBase = BigInt(amount);
         const scriptSrc = buildCreditScript(suffix, prefix, amountBase);
@@ -212,7 +230,7 @@ export function TrustlessDepositPanel() {
         resumeSync();
       }
     };
-  }, [createWallet, compileTxScript, executeTx, pauseSync, resumeSync]);
+  }, [client, createWallet, compileTxScript, executeTx, pauseSync, resumeSync]);
 
   const [stage, setStage] = useState<Stage>("idle");
   const [seedHex, setSeedHex] = useState<string | null>(null);
