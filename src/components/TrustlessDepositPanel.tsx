@@ -37,6 +37,7 @@ import {
   useTransaction,
   useWaitForNotes,
 } from "@miden-sdk/react";
+import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 import { useAccount, useSignMessage } from "wagmi";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keccak256, parseUnits, toBytes } from "viem";
@@ -256,21 +257,8 @@ export function TrustlessDepositPanel() {
       const txScript = await compileTxScript({ code: scriptSrc });
       const creditResult = await executeTx({
         accountId: TRUSTLESS_CONTROLLER_HEX,
-        request: (client) => {
-          const builderCtor = (
-            client as unknown as {
-              TransactionRequestBuilder: new () => {
-                withCustomScript: (s: unknown) => {
-                  build: () => unknown;
-                };
-              };
-            }
-          ).TransactionRequestBuilder;
-          const req = new builderCtor()
-            .withCustomScript(txScript as unknown)
-            .build();
-          return req as never;
-        },
+        request: () =>
+          new TransactionRequestBuilder().withCustomScript(txScript).build(),
       });
       setCreditTx(creditResult?.transactionId?.toString?.() ?? null);
 

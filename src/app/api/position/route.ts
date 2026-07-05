@@ -88,6 +88,19 @@ end
 `;
 }
 
+function runSync(): Promise<{ code: number | null }> {
+  return new Promise((resolve) => {
+    const midenHome = process.env.DARWIN_MIDEN_HOME;
+    const spawnEnv = midenHome ? { ...process.env, HOME: midenHome } : process.env;
+    // Refresh local store state for all tracked accounts so a slot-10
+    // write that landed on-chain since the last read gets picked up.
+    // Without this the exec below returns stale map root.
+    const child = spawn(MIDEN_CLIENT, ["sync"], { env: spawnEnv });
+    child.on("close", (code) => resolve({ code }));
+    setTimeout(() => child.kill("SIGKILL"), 30_000);
+  });
+}
+
 function runExec(scriptPath: string, controllerId: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
     // miden-client resolves ${HOME}/.miden/store.sqlite3 for its account
@@ -193,6 +206,11 @@ export async function POST(req: Request) {
       "utf8",
     );
     const controller = body.controllerId ?? CONTROLLER_ID;
+    // Non-blocking freshness: fire a `miden-client sync` before the read
+    // so slot-10 writes made in the last few seconds are visible. If sync
+    // fails or hangs, we still fall through to exec and return whatever
+    // the local store has — better than blocking the whole response.
+    await runSync().catch(() => undefined);
     const { stdout, stderr, code } = await runExec(scriptPath, controller);
     if (code !== 0) {
       const lastErr = (stderr + stdout)
