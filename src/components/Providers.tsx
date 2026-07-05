@@ -2,14 +2,24 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConnectKitProvider } from "connectkit";
-import { ReactNode, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
+import { ReactNode, useState } from "react";
 import { WagmiProvider } from "wagmi";
 
 import { wagmiConfig } from "../lib/wagmi";
 import { MidenContextProvider } from "./MidenContextProvider";
+import { MidenBareContextProvider } from "./MidenBareContextProvider";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(() => new QueryClient());
+  const pathname = usePathname();
+  // /trustless owns its own key derivation and needs the internal WASM
+  // keystore path. If we wrap it in the default MidenContextProvider
+  // (which includes MidenFiSignerProvider) the SDK boots in external-
+  // keystore mode and every createWallet call routes insertKey through
+  // MidenFi → "invalid enum value passed" panic. Route it to a bare
+  // provider that only wires MidenProvider (no signer wrapper).
+  const isTrustless = pathname === "/trustless";
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
@@ -20,7 +30,11 @@ export function Providers({ children }: { children: ReactNode }) {
             "--ck-accent-text-color": "#0b0b0c",
           }}
         >
-          <MidenContextProvider>{children}</MidenContextProvider>
+          {isTrustless ? (
+            <MidenBareContextProvider>{children}</MidenBareContextProvider>
+          ) : (
+            <MidenContextProvider>{children}</MidenContextProvider>
+          )}
         </ConnectKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
