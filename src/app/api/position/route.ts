@@ -88,7 +88,7 @@ end
 `;
 }
 
-function runExec(scriptPath: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
+function runExec(scriptPath: string, controllerId: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
     // miden-client resolves ${HOME}/.miden/store.sqlite3 for its account
     // + note cache. On the operator's Mac the v0.15 controller (with its
@@ -100,7 +100,7 @@ function runExec(scriptPath: string): Promise<{ stdout: string; stderr: string; 
     const spawnEnv = midenHome ? { ...process.env, HOME: midenHome } : process.env;
     const child = spawn(
       MIDEN_CLIENT,
-      ["exec", "-a", CONTROLLER_ID, "-s", scriptPath],
+      ["exec", "-a", controllerId, "-s", scriptPath],
       { env: spawnEnv },
     );
     let stdout = "";
@@ -117,6 +117,12 @@ interface Body {
   prefix?: string;
   basketSuffix?: string;
   basketPrefix?: string;
+  /**
+   * Optional override for the controller account read against. Defaults
+   * to CONTROLLER_ID (v7). Set to the v8-noauth hex to read positions
+   * credited via the TrustlessDepositPanel path.
+   */
+  controllerId?: string;
 }
 
 export async function POST(req: Request) {
@@ -186,7 +192,8 @@ export async function POST(req: Request) {
       buildReadScript(suffix, prefix, basketSuffix, basketPrefix),
       "utf8",
     );
-    const { stdout, stderr, code } = await runExec(scriptPath);
+    const controller = body.controllerId ?? CONTROLLER_ID;
+    const { stdout, stderr, code } = await runExec(scriptPath, controller);
     if (code !== 0) {
       const lastErr = (stderr + stdout)
         .split("\n")
