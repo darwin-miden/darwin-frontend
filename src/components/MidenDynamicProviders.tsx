@@ -7,6 +7,7 @@ import {
   PrivateDataPermission,
   WalletAdapterNetwork,
 } from "@miden-sdk/miden-wallet-adapter-base";
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 /**
@@ -44,6 +45,14 @@ const MIDEN_RPC_URL: "testnet" | "devnet" =
     : "testnet";
 
 export function MidenDynamicProviders({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  // /trustless owns its own key derivation (Miden wallet from a
+  // MetaMask signature) and needs the internal WASM keystore. If we
+  // wrap it in MidenFiSignerProvider the SDK boots in external-keystore
+  // mode and every insertKey callback goes through MidenFi, which
+  // rejects our `createWallet({ initSeed })` calls with
+  // "invalid enum value passed". Skip the wrapper on that route.
+  const skipSigner = SELF_CUSTODY || pathname === "/trustless";
   return (
     <MidenProvider
       config={{
@@ -68,7 +77,7 @@ export function MidenDynamicProviders({ children }: { children: ReactNode }) {
         </div>
       }
     >
-      {SELF_CUSTODY ? (
+      {skipSigner ? (
         children
       ) : (
         <MidenFiSignerProvider
