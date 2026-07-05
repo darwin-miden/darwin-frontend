@@ -38,19 +38,23 @@ import {
 } from "@miden-sdk/react";
 import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 
-// The @miden-sdk/miden-sdk module ships TWO exports named `AuthScheme`:
-//   1. `AuthScheme` as a TS-`enum` from the WASM binding
-//      (AuthEcdsaK256Keccak=1, AuthRpoFalcon512=2)
-//   2. `AuthScheme` as a `const { Falcon: "falcon", ECDSA: "ecdsa" }`
-//      from api-types.d.ts — the one the runtime actually uses.
-// TypeScript resolves the import to #1 (enum wins over const in
-// export-shadow order), which doesn't have `.Falcon`. Meanwhile
-// @miden-sdk/react's `DEFAULTS.AUTH_SCHEME = AuthScheme.AuthRpoFalcon512`
-// evaluates against the runtime #2 and returns `undefined`, so any
-// createWallet call that inherits the default throws
-// "invalid enum value passed" in wasm_bindgen.
-// Hard-code the runtime string here to bypass both traps.
-const AUTH_SCHEME_FALCON = "falcon" as const;
+// AuthScheme in @miden-sdk/miden-sdk has TWO shapes:
+//   - TS type (from wasm binding): enum {AuthEcdsaK256Keccak=1,
+//     AuthRpoFalcon512=2} — numeric.
+//   - JS runtime (from api-types.js): Object.freeze({Falcon:"falcon",
+//     ECDSA:"ecdsa"}) — string.
+// The high-level `MidenClient.accounts.create` handles both by running
+// its arg through `resolveAuthScheme(str, wasm)` that converts "falcon"
+// → wasm.AuthScheme.AuthRpoFalcon512 (2). But `@miden-sdk/react`'s
+// `useCreateWallet` calls the LOW-level `client.newWallet(storageMode,
+// authScheme, initSeed)` and forwards `authScheme` verbatim into the
+// wasm-bindgen call, which expects the number.
+// Its default (`DEFAULTS.AUTH_SCHEME = AuthScheme.AuthRpoFalcon512`)
+// evaluates against the runtime object → undefined → wasm-bindgen
+// throws "invalid enum value passed". Same failure if we pass the
+// string "falcon" — the low-level path doesn't convert.
+// Force the numeric enum value directly (2 = AuthRpoFalcon512).
+const AUTH_SCHEME_FALCON_ENUM_VALUE = 2;
 import { useAccount, useSignMessage } from "wagmi";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keccak256, parseUnits, toBytes } from "viem";
@@ -173,7 +177,7 @@ export function TrustlessDepositPanel() {
           initSeed: seedBytes,
           storageMode: "private",
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          authScheme: AUTH_SCHEME_FALCON as any,
+          authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
         });
         return account.id().toString();
       } finally {
@@ -234,7 +238,7 @@ export function TrustlessDepositPanel() {
           initSeed: seedBytes,
           storageMode: "private",
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          authScheme: AUTH_SCHEME_FALCON as any,
+          authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
         });
       } finally {
         resumeSync();
