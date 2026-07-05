@@ -37,6 +37,20 @@ import {
   useWaitForNotes,
 } from "@miden-sdk/react";
 import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
+
+// The @miden-sdk/miden-sdk module ships TWO exports named `AuthScheme`:
+//   1. `AuthScheme` as a TS-`enum` from the WASM binding
+//      (AuthEcdsaK256Keccak=1, AuthRpoFalcon512=2)
+//   2. `AuthScheme` as a `const { Falcon: "falcon", ECDSA: "ecdsa" }`
+//      from api-types.d.ts — the one the runtime actually uses.
+// TypeScript resolves the import to #1 (enum wins over const in
+// export-shadow order), which doesn't have `.Falcon`. Meanwhile
+// @miden-sdk/react's `DEFAULTS.AUTH_SCHEME = AuthScheme.AuthRpoFalcon512`
+// evaluates against the runtime #2 and returns `undefined`, so any
+// createWallet call that inherits the default throws
+// "invalid enum value passed" in wasm_bindgen.
+// Hard-code the runtime string here to bypass both traps.
+const AUTH_SCHEME_FALCON = "falcon" as const;
 import { useAccount, useSignMessage } from "wagmi";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keccak256, parseUnits, toBytes } from "viem";
@@ -176,16 +190,21 @@ export function TrustlessDepositPanel() {
       pauseSync();
       let account;
       try {
-        // storageMode "private" mirrors what SelfCustodyWalletPanel
-        // does. "public" triggers an on-chain state commit inside
-        // `newWallet` that fails with "invalid enum value passed"
-        // when the client has no gas to pay for the commit tx. The
-        // Falcon-512 key is deterministic from `initSeed` regardless
-        // of storage mode, so the same MetaMask signature still
-        // reproduces the same wallet id across sessions.
+        // Explicit authScheme is load-bearing: @miden-sdk/react
+        // hard-codes `DEFAULTS.AUTH_SCHEME = AuthScheme.AuthRpoFalcon512`
+        // but the runtime `AuthScheme` from @miden-sdk/miden-sdk is
+        // `{Falcon:"falcon", ECDSA:"ecdsa"}` — no `AuthRpoFalcon512`
+        // key. So the default evaluates to `undefined` and wasm_bindgen
+        // throws "invalid enum value passed". Pass `AuthScheme.Falcon`
+        // explicitly to bypass the broken default.
+        // storageMode "private" mirrors SelfCustodyWalletPanel; the
+        // Falcon key is deterministic from initSeed so the same
+        // signature reproduces the same wallet id.
         account = await createWallet({
           initSeed: seedBytes,
           storageMode: "private",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          authScheme: AUTH_SCHEME_FALCON as any,
         });
       } finally {
         resumeSync();
