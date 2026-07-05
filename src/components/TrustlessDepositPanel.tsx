@@ -152,6 +152,36 @@ export function TrustlessDepositPanel() {
   const { pauseSync, resumeSync } = useSyncControl();
   const { runExclusive } = useMiden();
 
+  // Isolated debug hook — Playwright can call
+  // `window.__darwinTrustlessDebug(<hex_seed>)` and get back the
+  // derived Miden wallet id without going through MetaMask + wagmi +
+  // ConnectKit. Only used in autonomous E2E tests. Safe to keep on in
+  // prod: the seed is provided by the caller so no secret leaks; the
+  // return value is a public account id.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    (window as unknown as {
+      __darwinTrustlessDebug?: (hex: string) => Promise<string>;
+    }).__darwinTrustlessDebug = async (hex: string) => {
+      const clean = hex.replace(/^0x/, "");
+      const seedBytes = new Uint8Array(
+        clean.match(/.{2}/g)!.map((h) => parseInt(h, 16)),
+      );
+      pauseSync();
+      try {
+        const account = await createWallet({
+          initSeed: seedBytes,
+          storageMode: "private",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          authScheme: AUTH_SCHEME_FALCON as any,
+        });
+        return account.id().toString();
+      } finally {
+        resumeSync();
+      }
+    };
+  }, [createWallet, pauseSync, resumeSync]);
+
   const [stage, setStage] = useState<Stage>("idle");
   const [seedHex, setSeedHex] = useState<string | null>(null);
   const [walletId, setWalletId] = useState<string | null>(null);
