@@ -59,7 +59,13 @@ import { useAccount, useSignMessage } from "wagmi";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keccak256, parseUnits, toBytes } from "viem";
 
-import { EPOCH_DUSDC_FAUCET_ID, TRUSTLESS_CONTROLLER_HEX } from "../lib/midenConstants";
+import { EPOCH_DUSDC_FAUCET_ID } from "../lib/midenConstants";
+import {
+  TRUSTLESS_CONTROLLER_HEX,
+  buildSetPositionScript,
+  evmToUserIdFelts,
+  fetchTrustlessPosition,
+} from "../lib/trustlessController";
 import {
   ALLOCATOR_URL,
   applySlippageBps,
@@ -91,57 +97,6 @@ type Stage =
   | "crediting"
   | "done"
   | "error";
-
-// MAST root of `set_user_position` on the v6/v7/v8 controller. Same MASM
-// deployed under all three; the root is stable across auth-component
-// variants (v7 SingleSig, v8 NoAuth, v8-network).
-const SET_USER_POSITION_MAST =
-  "0xea652ac9aa1b6ee468da0845b52008ffa4639d112f356534ba608bc00d7b6f5f";
-
-// EVM address → (user_id_suffix, user_id_prefix) — same encoding the
-// worker uses (bytes 12..20 = suffix, bytes 4..12 = prefix, both LE u64
-// masked to 63 bits so they fit inside a Miden Felt).
-function evmToUserIdFelts(evmAddr: string): { suffix: bigint; prefix: bigint } {
-  const hex = evmAddr.replace(/^0x/, "").toLowerCase();
-  const bytes = new Uint8Array(hex.match(/.{2}/g)!.map((h) => parseInt(h, 16)));
-  const readLE = (start: number) => {
-    let v = 0n;
-    for (let i = 0; i < 8; i++) v |= BigInt(bytes[start + i]) << BigInt(8 * i);
-    return v & ((1n << 63n) - 1n);
-  };
-  return { suffix: readLE(12), prefix: readLE(4) };
-}
-
-// The tx script that runs against v8-noauth to write slot-10 for a
-// specific (user_id, amount). Direct `set_user_position` call — no
-// asset receive, no NAV math. That short-circuit is the whole point
-// of the demo: with NoAuth on the controller anyone can submit this
-// tx bundle without holding any signing key. Production would wrap
-// this in the full `receive_and_credit` flow that also drains the
-// dUSDC into the controller vault — that path is queued behind the
-// same wiring but needs a bit more MASM plumbing (asset key/value on
-// stack).
-function buildCreditScript(suffix: bigint, prefix: bigint, amount: bigint): string {
-  // MASM directive is `use <namespace>` (space), not `use.<namespace>`.
-  // The dot form parses in some 0.14 dialects but the 0.15 assembler
-  // baked into the Miden Web SDK rejects it with "invalid syntax".
-  return `use miden::core::sys
-
-begin
-    # VALUE word first (goes to bottom):
-    #   [0, 0, 0, amount]
-    push.${amount.toString()} push.0 push.0 push.0
-
-    # KEY word on top:
-    #   [0, 0, user_prefix, user_suffix]
-    push.${suffix.toString()} push.${prefix.toString()} push.0 push.0
-
-    call.${SET_USER_POSITION_MAST}
-
-    exec.sys::truncate_stack
-end
-`;
-}
 
 const HUMAN_AMOUNT_DEFAULT = "1";
 
@@ -294,7 +249,7 @@ export function TrustlessDepositPanel() {
         console.log("[trustless] v8 fetched:", !!acc);
         const { suffix, prefix } = evmToUserIdFelts(evm);
         const amountBase = BigInt(amount);
-        const scriptSrc = buildCreditScript(suffix, prefix, amountBase);
+        const scriptSrc = buildSetPositionScript(suffix, prefix, amountBase);
         const txScript = await compileTxScript({ code: scriptSrc });
         const res = await executeTx({
           accountId: TRUSTLESS_CONTROLLER_HEX,
@@ -481,7 +436,12 @@ export function TrustlessDepositPanel() {
 
       const { suffix, prefix } = evmToUserIdFelts(evmAddress);
       const amountBase = parseUnits(humanAmount, EPOCH_USDC_SEPOLIA.midenDecimals);
-      const scriptSrc = buildCreditScript(suffix, prefix, amountBase);
+      // Read-modify-write: slot-10 stores the ABSOLUTE position, so add
+      // this deposit to whatever is already there instead of overwriting
+      // (multiple deposits must accumulate).
+      const { position: currentPos } = await fetchTrustlessPosition(evmAddress);
+      const newPos = currentPos + amountBase;
+      const scriptSrc = buildSetPositionScript(suffix, prefix, newPos);
       const txScript = await compileTxScript({ code: scriptSrc });
       let creditTxId: string | null = null;
       try {

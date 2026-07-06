@@ -20,15 +20,18 @@
  */
 
 import {
+  useCompile,
   useConsume,
   useCreateWallet,
   useMiden,
   useSend,
   useSyncControl,
   useSyncState,
+  useTransaction,
   useWaitForCommit,
   useWaitForNotes,
 } from "@miden-sdk/react";
+import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createPublicClient,
@@ -57,6 +60,12 @@ import {
   submitRedeemIntent,
   usdcSepoliaBaseUnits,
 } from "../lib/epoch";
+import {
+  TRUSTLESS_CONTROLLER_HEX,
+  buildSetPositionScript,
+  evmToUserIdFelts,
+  fetchTrustlessPosition,
+} from "../lib/trustlessController";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
@@ -169,6 +178,7 @@ type Stage =
   | "quoting"
   | "sending-note"
   | "awaiting-fill"
+  | "debiting"
   | "done"
   | "error";
 
@@ -276,7 +286,9 @@ export function TrustlessRedeemPanel() {
   const { sync: syncState } = useSyncState();
   const { waitForConsumableNotes } = useWaitForNotes();
   const { waitForCommit } = useWaitForCommit();
-  const { runExclusive } = useMiden();
+  const { runExclusive, client } = useMiden();
+  const { txScript: compileTxScript } = useCompile();
+  const { execute: executeTx } = useTransaction();
 
   const [stage, setStage] = useState<Stage>("idle");
   const [walletId, setWalletId] = useState<string | null>(null);
@@ -287,6 +299,7 @@ export function TrustlessRedeemPanel() {
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
   const [intentNonce, setIntentNonce] = useState<string | null>(null);
   const [vaultSyncMsg, setVaultSyncMsg] = useState<string | null>(null);
+  const [debitTx, setDebitTx] = useState<string | null>(null);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
 
   // Autonomous E2E flow — used by both the "Autonomous test" button and
@@ -565,6 +578,9 @@ export function TrustlessRedeemPanel() {
       consume,
       sendNote,
       waitForCommit,
+      client,
+      compileTxScript,
+      executeTx,
     ],
   );
 
@@ -726,7 +742,69 @@ export function TrustlessRedeemPanel() {
         trace.consumed = pending.length;
         await new Promise((r) => setTimeout(r, 2_000));
         setVaultSyncMsg(null);
-        log("vault funded — starting redeem leg");
+        log("vault funded — crediting slot-10 position");
+
+        // ── Credit the trustless-controller position with the deposit —
+        // full Darwin accounting: read-modify-write on slot-10.
+        const setPosition = async (newPos: bigint) => {
+          const clientAny = client as unknown as {
+            importAccountById?: (id: unknown) => Promise<unknown>;
+            syncState?: () => Promise<unknown>;
+          };
+          const { AccountId } = await import("@miden-sdk/miden-sdk");
+          const accId = AccountId.fromHex(TRUSTLESS_CONTROLLER_HEX);
+          try {
+            await clientAny.importAccountById?.(accId);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (!/already being tracked/i.test(msg)) throw e;
+          }
+          try {
+            await clientAny.syncState?.();
+          } catch (_) {}
+          const { suffix, prefix } = evmToUserIdFelts(evm);
+          const scriptSrc = buildSetPositionScript(suffix, prefix, newPos);
+          const txScript = await compileTxScript({ code: scriptSrc });
+          try {
+            const res = await executeTx({
+              accountId: TRUSTLESS_CONTROLLER_HEX,
+              request: () =>
+                new TransactionRequestBuilder()
+                  .withCustomScript(txScript)
+                  .build(),
+            });
+            return res?.transactionId?.toString?.() ?? "submitted";
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (
+              !/apply transaction result|storage error: account data wasn't found/i.test(
+                msg,
+              )
+            ) {
+              throw e;
+            }
+            return "submitted (apply-cosmetic)";
+          }
+        };
+        try {
+          const creditBase = dusdcMidenBaseUnits(DEPOSIT_HUMAN);
+          const { position: posBefore, positionKnown: knownB } =
+            await fetchTrustlessPosition(evm);
+          trace.positionBeforeCredit = posBefore.toString();
+          if (knownB) {
+            const credited = posBefore + BigInt(creditBase);
+            trace.creditTx = await setPosition(credited);
+            trace.positionAfterCreditTarget = credited.toString();
+            log("position credited", `${posBefore} -> ${credited}`);
+          } else {
+            trace.creditSkipped = "position read failed";
+            log("credit skipped — position read failed");
+          }
+        } catch (e) {
+          trace.creditError = String(e).slice(0, 200);
+          log("credit failed", trace.creditError);
+        }
+        log("starting redeem leg");
 
         // ── Redeem leg: dUSDC → USDC back to the dev EVM address.
         setStage("quoting");
@@ -834,6 +912,30 @@ export function TrustlessRedeemPanel() {
         }
         trace.fillTx = fillTx;
         setSepoliaTxHint(fillTx ?? null);
+
+        // ── Debit slot-10 with the dUSDC the redeem consumed.
+        setStage("debiting");
+        try {
+          const spentBase = BigInt(String(rQuote.quoteResult.tokenIn ?? "0"));
+          const { position: posBeforeD, positionKnown: knownD } =
+            await fetchTrustlessPosition(evm);
+          trace.positionBeforeDebit = posBeforeD.toString();
+          if (knownD) {
+            const debited =
+              posBeforeD > spentBase ? posBeforeD - spentBase : 0n;
+            trace.debitTx = await setPosition(debited);
+            setDebitTx(String(trace.debitTx));
+            trace.positionAfterDebitTarget = debited.toString();
+            log("position debited", `${posBeforeD} -> ${debited}`);
+          } else {
+            trace.debitSkipped = "position read failed";
+            log("debit skipped — position read failed");
+          }
+        } catch (e) {
+          trace.debitError = String(e).slice(0, 200);
+          log("debit failed", trace.debitError);
+        }
+
         setStage("done");
         trace.finishedAt = Date.now();
         trace.wallClockMs =
@@ -862,6 +964,9 @@ export function TrustlessRedeemPanel() {
       consume,
       sendNote,
       waitForCommit,
+      client,
+      compileTxScript,
+      executeTx,
     ],
   );
 
@@ -1147,6 +1252,78 @@ export function TrustlessRedeemPanel() {
       }
       setSepoliaTxHint(filledTxHash);
 
+      // ── Debit the slot-10 position on the trustless controller —
+      // mirror of the deposit panel's credit step, so the Darwin
+      // position tracks both legs. Read-modify-write with the dUSDC
+      // amount the redeem actually consumed.
+      setStage("debiting");
+      console.log("[redeem] debiting slot-10 position…");
+      try {
+        const spentBase = BigInt(String(quote.quoteResult.tokenIn ?? "0"));
+        const { position: currentPos, positionKnown } =
+          await fetchTrustlessPosition(evmAddress);
+        if (!positionKnown) {
+          // Never blind-write on a failed read — a debit that assumed 0
+          // would wipe a real balance. Skip and surface in the UI.
+          console.warn("[redeem] position read failed — skipping debit");
+          setDebitTx("skipped (position read failed)");
+        } else {
+          const newPos = currentPos > spentBase ? currentPos - spentBase : 0n;
+          const clientAny = client as unknown as {
+            importAccountById?: (id: unknown) => Promise<unknown>;
+            syncState?: () => Promise<unknown>;
+          };
+          const { AccountId } = await import("@miden-sdk/miden-sdk");
+          const accId = AccountId.fromHex(TRUSTLESS_CONTROLLER_HEX);
+          try {
+            await clientAny.importAccountById?.(accId);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (!/already being tracked/i.test(msg)) throw e;
+          }
+          try {
+            await clientAny.syncState?.();
+          } catch (_) {}
+          const { suffix, prefix } = evmToUserIdFelts(evmAddress);
+          const scriptSrc = buildSetPositionScript(suffix, prefix, newPos);
+          const txScript = await compileTxScript({ code: scriptSrc });
+          try {
+            const res = await executeTx({
+              accountId: TRUSTLESS_CONTROLLER_HEX,
+              request: () =>
+                new TransactionRequestBuilder()
+                  .withCustomScript(txScript)
+                  .build(),
+            });
+            setDebitTx(res?.transactionId?.toString?.() ?? "submitted");
+          } catch (e) {
+            // Same cosmetic apply-error as the deposit panel: the tx is
+            // submitted + committed on-chain but the local store can't
+            // apply the foreign-account delta. Swallow that one only.
+            const msg = e instanceof Error ? e.message : String(e);
+            if (
+              !/apply transaction result|storage error: account data wasn't found/i.test(
+                msg,
+              )
+            ) {
+              throw e;
+            }
+            setDebitTx("submitted (see midenscan)");
+          }
+          console.log(
+            "[redeem] position debited:",
+            currentPos.toString(),
+            "→",
+            newPos.toString(),
+          );
+        }
+      } catch (e) {
+        // A debit failure shouldn't mask a successful redeem — the USDC
+        // is already on Sepolia. Record and continue to done.
+        console.warn("[redeem] debit failed:", e);
+        setDebitTx("failed (redeem itself succeeded)");
+      }
+
       setStage("done");
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
@@ -1360,6 +1537,7 @@ export function TrustlessRedeemPanel() {
         stage === "quoting" ||
         stage === "sending-note" ||
         stage === "awaiting-fill" ||
+        stage === "debiting" ||
         stage === "done") && (
         <div
           style={{
@@ -1455,7 +1633,7 @@ export function TrustlessRedeemPanel() {
             state={
               stage === "awaiting-fill"
                 ? "running"
-                : sepoliaTxHint || stage === "done"
+                : sepoliaTxHint || stage === "debiting" || stage === "done"
                   ? "done"
                   : "idle"
             }
@@ -1469,6 +1647,29 @@ export function TrustlessRedeemPanel() {
             link={
               sepoliaTxHint && sepoliaTxHint.startsWith("0x")
                 ? `https://sepolia.etherscan.io/tx/${sepoliaTxHint}`
+                : null
+            }
+          />
+          <StageRow
+            label="debit slot-10"
+            testId="row-debit"
+            state={
+              stage === "debiting"
+                ? "running"
+                : debitTx || stage === "done"
+                  ? "done"
+                  : "idle"
+            }
+            detail={
+              stage === "debiting"
+                ? "Reading position + submitting set_user_position against v8-noauth…"
+                : debitTx
+                  ? debitTx
+                  : "waiting"
+            }
+            link={
+              debitTx && debitTx.startsWith("0x")
+                ? `https://testnet.midenscan.com/tx/${debitTx}`
                 : null
             }
           />
