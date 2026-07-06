@@ -30,6 +30,7 @@ import {
 } from "@miden-sdk/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  createPublicClient,
   createWalletClient,
   custom,
   http,
@@ -47,10 +48,68 @@ import {
   MIDEN_DESTINATION_CHAIN_ID,
   SEPOLIA_CHAIN_ID,
   applySlippageBps,
+  dusdcMidenBaseUnits,
+  fetchQuote,
   fetchRedeemQuote,
+  submitIntent,
   submitRedeemIntent,
   usdcSepoliaBaseUnits,
 } from "../lib/epoch";
+
+const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
+
+// viem walletClient whose transport signs everything locally with the
+// given private-key account. The Epoch SDK's sendTransactionSync path
+// emits the non-standard eth_sendRawTransactionSync — public RPCs reject
+// it, so translate to eth_sendRawTransaction + waitForTransactionReceipt
+// and hand back a raw-RPC-shaped receipt (hex fields) for viem's
+// formatter. Same wrapper validated in the Node E2E harness.
+function localSepoliaSigningClient(
+  account: ReturnType<typeof privateKeyToAccount>,
+) {
+  const pub = createPublicClient({
+    chain: sepolia,
+    transport: http(SEPOLIA_RPC_URL),
+  });
+  return createWalletClient({
+    account,
+    chain: sepolia,
+    transport: custom({
+      async request({ method, params }) {
+        if (method === "eth_sendRawTransactionSync") {
+          const hash = (await pub.request({
+            method: "eth_sendRawTransaction",
+            params: params as never,
+          })) as `0x${string}`;
+          const r = await pub.waitForTransactionReceipt({
+            hash,
+            timeout: 150_000,
+          });
+          return {
+            transactionHash: hash,
+            transactionIndex: "0x" + r.transactionIndex.toString(16),
+            blockHash: r.blockHash,
+            blockNumber: "0x" + r.blockNumber.toString(16),
+            from: r.from,
+            to: r.to,
+            cumulativeGasUsed: "0x" + r.cumulativeGasUsed.toString(16),
+            gasUsed: "0x" + r.gasUsed.toString(16),
+            effectiveGasPrice:
+              r.effectiveGasPrice != null
+                ? "0x" + r.effectiveGasPrice.toString(16)
+                : "0x0",
+            contractAddress: r.contractAddress ?? null,
+            logs: [],
+            logsBloom: "0x" + "00".repeat(256),
+            status: r.status === "success" ? "0x1" : "0x0",
+            type: "0x2",
+          };
+        }
+        return pub.request({ method: method as never, params: params as never });
+      },
+    }),
+  });
+}
 
 const DERIVE_MESSAGE = (evm: string) =>
   `Darwin Protocol\n\nDerive Miden signing key.\n\nEVM address: ${evm}\n\nSigning this reveals nothing about your ETH funds and is safe to sign.`;
@@ -455,6 +514,292 @@ export function TrustlessRedeemPanel() {
     ],
   );
 
+  // Full autonomous ROUNDTRIP: deposit (Sepolia→Miden) into a FRESH
+  // derived wallet, consume the delivered note, then redeem it back
+  // (Miden→Sepolia). Solves the fresh-IndexedDB problem an autonomous
+  // runner hits: a brand-new browser profile has no vault balance, so a
+  // redeem-only test can never spend. The deposit leg funds the wallet
+  // first — and as a bonus the loop covers BOTH bridge directions
+  // against the real Epoch allocator + real Miden network, no mocks.
+  const runAutonomousRoundtrip = useCallback(
+    async (devKeyHex: string, redeemAmount: string, salt?: string) => {
+      const trace: Record<string, unknown> = {
+        redeemAmount,
+        startedAt: Date.now(),
+      };
+      const log = (step: string, extra?: unknown) => {
+        const t = (
+          (Date.now() - (trace.startedAt as number)) /
+          1000
+        ).toFixed(1);
+        console.log(`[roundtrip t+${t}s] ${step}`, extra ?? "");
+      };
+      setErrorMsg(null);
+      setNoteId(null);
+      setMidenTxId(null);
+      setSepoliaTxHint(null);
+      setIntentNonce(null);
+      pauseSync();
+      try {
+        const runSalt = salt ?? String(Math.floor(Math.random() * 1e9));
+        trace.salt = runSalt;
+        log("start", `salt=${runSalt}`);
+        const account = privateKeyToAccount(devKeyHex as `0x${string}`);
+        const evm = account.address as `0x${string}`;
+        trace.evm = evm;
+
+        // ── Fresh wallet: salt the derive message so each run gets its
+        // own Miden account with clean local state.
+        setStage("deriving");
+        const sig = await account.signMessage({
+          message: DERIVE_MESSAGE(evm) + `\n\nRoundtrip salt: ${runSalt}`,
+        });
+        const seed = keccak256(toBytes(sig));
+        const seedBytes = new Uint8Array(
+          seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
+        );
+        let freshWalletId: string | null = null;
+        try {
+          const acc = await createWallet({
+            initSeed: seedBytes,
+            storageMode: "private",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
+          });
+          freshWalletId = acc.id().toString();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          const m = msg.match(/id (0x[0-9a-fA-F]+)/);
+          if (m && /already being tracked/i.test(msg)) {
+            freshWalletId = m[1];
+          } else {
+            throw e;
+          }
+        }
+        if (!freshWalletId) throw new Error("no fresh wallet id");
+        setWalletId(freshWalletId);
+        trace.walletId = freshWalletId;
+        log("fresh wallet", freshWalletId);
+
+        // ── Deposit leg: Sepolia USDC → dUSDC note to the fresh wallet.
+        setStage("sync-vault");
+        setVaultSyncMsg("deposit leg: quoting Sepolia→Miden…");
+        const sepoliaWC = localSepoliaSigningClient(account);
+        const sdkDep = new EpochIntentSDK({
+          apiBaseUrl: ALLOCATOR_URL,
+          walletClient: sepoliaWC,
+        });
+        const DEPOSIT_HUMAN = "0.5"; // dUSDC out — covers any redeem ≤ ~0.45
+        const minTokenOut = applySlippageBps(
+          dusdcMidenBaseUnits(DEPOSIT_HUMAN),
+          EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
+        );
+        const dQuote = await fetchQuote(sdkDep, {
+          evmSourceAddress: evm,
+          midenRecipientId: freshWalletId,
+          minTokenOut,
+        });
+        trace.depositTokenIn = String(dQuote.quoteResult.tokenIn ?? "");
+        log("deposit quote OK", trace.depositTokenIn);
+
+        setVaultSyncMsg(
+          "deposit leg: signing Compact deposit on Sepolia (local key)…",
+        );
+        const dSubmit = await submitIntent(sdkDep, dQuote);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const dS = dSubmit as any;
+        const dNonce = String(
+          dS?.nonce ?? dS?.submittedIntentData?.compact?.nonce ?? "",
+        );
+        trace.depositNonce = dNonce;
+        log("deposit intent submitted", dNonce.slice(-6));
+
+        setVaultSyncMsg("deposit leg: waiting for Epoch delivery (~60s)…");
+        let depositNoteId: string | undefined;
+        for (let t = 0; t < 24; t++) {
+          try {
+            const r = await fetch(
+              `${ALLOCATOR_URL}/intentStatus/${evm}/${dNonce}`,
+            ).then((r) => r.json());
+            if (Array.isArray(r) && r.length > 0) {
+              const st = r[0];
+              if (st?.status === "success") {
+                depositNoteId = st?.midenNoteId;
+                break;
+              }
+              if (st?.status === "failed") {
+                throw new Error(
+                  `deposit intent failed: ${JSON.stringify(st).slice(0, 150)}`,
+                );
+              }
+            }
+          } catch (e) {
+            if (String(e).includes("deposit intent failed")) throw e;
+          }
+          await new Promise((r) => setTimeout(r, 5_000));
+        }
+        if (!depositNoteId) throw new Error("deposit never resolved");
+        trace.depositNoteId = depositNoteId;
+        log("deposit delivered", depositNoteId);
+
+        // ── Consume the delivered P2ID note into the fresh vault.
+        setVaultSyncMsg("deposit leg: syncing to pick up the note…");
+        for (let i = 0; i < 3; i++) {
+          try {
+            await runExclusive(() => syncState());
+          } catch (_) {}
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        setVaultSyncMsg("deposit leg: waiting for the note to be consumable…");
+        const raced = await Promise.race<unknown[] | undefined>([
+          waitForConsumableNotes({
+            accountId: freshWalletId!,
+            minCount: 1,
+            timeoutMs: 90_000,
+            intervalMs: 5_000,
+          }) as Promise<unknown[] | undefined>,
+          new Promise<unknown[]>((resolve) =>
+            setTimeout(() => resolve([]), 95_000),
+          ),
+        ]);
+        const pending = Array.isArray(raced) ? raced : [];
+        if (pending.length === 0) {
+          throw new Error("delivered note never became consumable locally");
+        }
+        setVaultSyncMsg(`deposit leg: consuming ${pending.length} note(s)…`);
+        log("consuming", pending.length);
+        await runExclusive(() =>
+          consume({ accountId: freshWalletId!, notes: pending as never[] }),
+        );
+        trace.consumed = pending.length;
+        await new Promise((r) => setTimeout(r, 2_000));
+        setVaultSyncMsg(null);
+        log("vault funded — starting redeem leg");
+
+        // ── Redeem leg: dUSDC → USDC back to the dev EVM address.
+        setStage("quoting");
+        const midenWC = {
+          ...sepoliaWC,
+          chain: { ...sepoliaWC.chain, id: MIDEN_DESTINATION_CHAIN_ID },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any;
+        const sdkRed = new EpochIntentSDK({
+          apiBaseUrl: ALLOCATOR_URL,
+          walletClient: midenWC,
+        });
+        const minSepoliaOut = applySlippageBps(
+          usdcSepoliaBaseUnits(redeemAmount),
+          EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
+        );
+        const rQuote = await fetchRedeemQuote(sdkRed, {
+          midenSourceId: freshWalletId!,
+          evmRecipient: evm,
+          minUsdcSepoliaBaseUnits: minSepoliaOut,
+        });
+        trace.redeemTokenIn = String(rQuote.quoteResult.tokenIn ?? "");
+        log("redeem quote OK", trace.redeemTokenIn);
+
+        setStage("sending-note");
+        let capturedMidenTxId: string | undefined;
+        let capturedNoteId: string | undefined;
+        const rSubmit = await submitRedeemIntent(
+          sdkRed,
+          rQuote,
+          async (faucetId, amount, allocatorId) => {
+            log("createMidenP2IDNote fired", amount);
+            try {
+              const out = await runExclusive(() =>
+                sendNote({
+                  from: freshWalletId!,
+                  to: allocatorId,
+                  assetId: faucetId,
+                  amount: BigInt(amount),
+                  noteType: "public",
+                  recallHeight: 100_000,
+                }),
+              );
+              capturedMidenTxId = out?.txId;
+              capturedNoteId =
+                (out?.note as unknown as {
+                  id?: () => { toString?: () => string };
+                })
+                  ?.id?.()
+                  ?.toString?.() ?? undefined;
+              setNoteId(capturedNoteId ?? null);
+              setMidenTxId(capturedMidenTxId ?? null);
+              log("P2IDE note created", capturedNoteId);
+              return { success: true, noteId: capturedNoteId };
+            } catch (e) {
+              trace.p2ideError = String(e).slice(0, 200);
+              log("sendNote threw", trace.p2ideError);
+              return { success: false };
+            }
+          },
+        );
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rS = rSubmit as any;
+        const rNonce = String(
+          rS?.nonce ?? rS?.submittedIntentData?.compact?.nonce ?? "",
+        );
+        if (rNonce) setIntentNonce(rNonce);
+        trace.redeemNonce = rNonce;
+        trace.midenTxId = capturedMidenTxId;
+        trace.noteId = capturedNoteId;
+
+        setStage("awaiting-fill");
+        log("polling redeem fill", rNonce.slice(-6));
+        let fillTx: string | undefined;
+        for (let t = 0; t < 24; t++) {
+          try {
+            const r = await fetch(
+              `${ALLOCATOR_URL}/intentStatus/${evm}/${rNonce}`,
+            ).then((r) => r.json());
+            if (Array.isArray(r) && r.length > 0) {
+              const st = r[0];
+              if (st?.status === "success") {
+                fillTx = st?.transactionHash;
+                break;
+              }
+              if (st?.status === "failed") {
+                trace.fillFailed = st;
+                break;
+              }
+            }
+          } catch (_) {}
+          await new Promise((r) => setTimeout(r, 5_000));
+        }
+        trace.fillTx = fillTx;
+        setSepoliaTxHint(fillTx ?? null);
+        setStage("done");
+        trace.finishedAt = Date.now();
+        trace.wallClockMs =
+          (trace.finishedAt as number) - (trace.startedAt as number);
+        log("ROUNDTRIP DONE", `${trace.wallClockMs}ms fillTx=${fillTx}`);
+        console.log("[roundtrip-trace]", JSON.stringify(trace));
+        return trace;
+      } catch (e) {
+        trace.error = e instanceof Error ? e.message : String(e);
+        trace.finishedAt = Date.now();
+        setErrorMsg(String(trace.error));
+        setStage("error");
+        console.log("[roundtrip-trace]", JSON.stringify(trace));
+        return trace;
+      } finally {
+        resumeSync();
+      }
+    },
+    [
+      createWallet,
+      pauseSync,
+      resumeSync,
+      runExclusive,
+      syncState,
+      waitForConsumableNotes,
+      consume,
+      sendNote,
+    ],
+  );
+
   // Expose the same flow via a window function for direct JS testing.
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -463,14 +808,23 @@ export function TrustlessRedeemPanel() {
         devKeyHex: string,
         humanAmount: string,
       ) => Promise<unknown>;
+      __darwinTrustlessRoundtrip?: (
+        devKeyHex: string,
+        redeemAmount: string,
+        salt?: string,
+      ) => Promise<unknown>;
     };
     w.__darwinTrustlessRedeem = runAutonomousFlow;
+    w.__darwinTrustlessRoundtrip = runAutonomousRoundtrip;
     return () => {
       if (w.__darwinTrustlessRedeem === runAutonomousFlow) {
         delete w.__darwinTrustlessRedeem;
       }
+      if (w.__darwinTrustlessRoundtrip === runAutonomousRoundtrip) {
+        delete w.__darwinTrustlessRoundtrip;
+      }
     };
-  }, [runAutonomousFlow]);
+  }, [runAutonomousFlow, runAutonomousRoundtrip]);
 
 
   // Silence the internal @miden-sdk error banner when it's just "already
@@ -796,6 +1150,44 @@ export function TrustlessRedeemPanel() {
             }}
           >
             ⚙ Autonomous test (dev key)
+          </button>
+        )}
+
+      {stage !== "signing" &&
+        stage !== "deriving" &&
+        stage !== "quoting" &&
+        stage !== "sending-note" &&
+        stage !== "awaiting-fill" && (
+          <button
+            data-testid="autonomous-roundtrip"
+            onClick={() => {
+              const w = window as unknown as {
+                __devKey?: string;
+                __devAmount?: string;
+                __devSalt?: string;
+              };
+              let key = w.__devKey;
+              const amt = w.__devAmount ?? "0.1";
+              if (!key) {
+                key =
+                  window.prompt("Dev private key (testnet only):", "") ??
+                  undefined;
+                if (!key) return;
+              }
+              void runAutonomousRoundtrip(key, amt, w.__devSalt);
+            }}
+            style={{
+              fontSize: 11,
+              fontFamily: "var(--font-mono-stack)",
+              padding: "6px 10px",
+              border: "1px dashed var(--rule)",
+              background: "transparent",
+              color: "var(--ink-3)",
+              cursor: "pointer",
+              marginBottom: 12,
+            }}
+          >
+            ⚙⚙ Roundtrip test (deposit → redeem, fresh wallet)
           </button>
         )}
 
