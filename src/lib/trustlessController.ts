@@ -46,9 +46,16 @@ export function buildSetPositionScript(
   suffix: bigint,
   prefix: bigint,
   amount: bigint,
+  basketSuffix: bigint = 0n,
+  basketPrefix: bigint = 0n,
 ): string {
   // MASM directive is `use <namespace>` (space), not `use.<namespace>` —
   // the 0.15 assembler in the Miden Web SDK rejects the dot form.
+  //
+  // Key word = [basket_prefix, basket_suffix, user_prefix, user_suffix]
+  // (top-down) — the exact layout atomic_deposit_note_v2 and the
+  // /api/position read script use, so per-basket entries line up with
+  // the rest of the stack. basket (0, 0) = the legacy flat demo slot.
   return `use miden::core::sys
 
 begin
@@ -57,14 +64,32 @@ begin
     push.${amount.toString()} push.0 push.0 push.0
 
     # KEY word on top:
-    #   [0, 0, user_prefix, user_suffix]
-    push.${suffix.toString()} push.${prefix.toString()} push.0 push.0
+    #   [basket_prefix, basket_suffix, user_prefix, user_suffix]
+    push.${suffix.toString()} push.${prefix.toString()}
+    push.${basketSuffix.toString()} push.${basketPrefix.toString()}
 
     call.${SET_USER_POSITION_MAST}
 
     exec.sys::truncate_stack
 end
 `;
+}
+
+/**
+ * Derive the (suffix, prefix) felts of a basket-token faucet AccountId —
+ * the basket half of the slot-10 key. Same derivation
+ * MidenPortfolioSection uses for its reads.
+ */
+export async function basketFelts(faucetHex: string): Promise<{
+  basketSuffix: bigint;
+  basketPrefix: bigint;
+}> {
+  const { AccountId } = await import("@miden-sdk/miden-sdk");
+  const id = AccountId.fromHex(faucetHex);
+  return {
+    basketSuffix: BigInt(id.suffix().asInt().toString()),
+    basketPrefix: BigInt(id.prefix().asInt().toString()),
+  };
 }
 
 /**
@@ -79,7 +104,10 @@ end
  * on the credit path (they add to 0). The debit path double-checks
  * with `positionKnown` to avoid wiping a real balance on a failed read.
  */
-export async function fetchTrustlessPosition(evmAddr: string): Promise<{
+export async function fetchTrustlessPosition(
+  evmAddr: string,
+  basket?: { basketSuffix: bigint; basketPrefix: bigint },
+): Promise<{
   position: bigint;
   positionKnown: boolean;
 }> {
@@ -91,6 +119,8 @@ export async function fetchTrustlessPosition(evmAddr: string): Promise<{
       body: JSON.stringify({
         suffix: suffix.toString(),
         prefix: prefix.toString(),
+        basketSuffix: (basket?.basketSuffix ?? 0n).toString(),
+        basketPrefix: (basket?.basketPrefix ?? 0n).toString(),
         controllerId: TRUSTLESS_CONTROLLER_HEX,
       }),
     });

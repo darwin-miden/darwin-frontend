@@ -63,6 +63,7 @@ import { keccak256, parseUnits, toBytes } from "viem";
 import { EPOCH_DUSDC_FAUCET_ID } from "../lib/midenConstants";
 import {
   TRUSTLESS_CONTROLLER_HEX,
+  basketFelts,
   buildSetPositionScript,
   evmToUserIdFelts,
   fetchTrustlessPosition,
@@ -173,7 +174,15 @@ function StageRow({
   );
 }
 
-export function TrustlessDepositPanel() {
+export function TrustlessDepositPanel({
+  basket,
+  compact = false,
+}: {
+  /** Basket to credit — keys slot-10 per (user, basket). Omit = legacy flat slot. */
+  basket?: { symbol: string; faucetHex: string };
+  /** Embedded mode: hides the demo headline + explainer copy. */
+  compact?: boolean;
+} = {}) {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
   const { switchChainAsync } = useSwitchChain();
@@ -388,8 +397,13 @@ export function TrustlessDepositPanel() {
       });
       setStage("signing-sepolia");
       const submit = await submitIntent(sdkRef.current, quote);
-      // solveIntent's shape varies — extract what we can.
-      const depTx = (submit as { transactionHash?: string })?.transactionHash;
+      // The Sepolia deposit hash lives on depositResult (depositToCompact's
+      // return), not at the top level — the old read left the row stuck
+      // on 'waiting' even after the tx confirmed.
+      const depTx =
+        (submit as { depositResult?: { transactionHash?: string } })
+          ?.depositResult?.transactionHash ??
+        (submit as { transactionHash?: string })?.transactionHash;
       setSepoliaTx(depTx ?? null);
       const intentNonce = extractNonce(submit);
 
@@ -512,10 +526,23 @@ export function TrustlessDepositPanel() {
       const amountBase = parseUnits(humanAmount, EPOCH_USDC_SEPOLIA.midenDecimals);
       // Read-modify-write: slot-10 stores the ABSOLUTE position, so add
       // this deposit to whatever is already there instead of overwriting
-      // (multiple deposits must accumulate).
-      const { position: currentPos } = await fetchTrustlessPosition(evmAddress);
+      // (multiple deposits must accumulate). When a basket is supplied
+      // the key is per-(user, basket) — the native Darwin accounting.
+      const bFelts = basket
+        ? await basketFelts(basket.faucetHex)
+        : { basketSuffix: 0n, basketPrefix: 0n };
+      const { position: currentPos } = await fetchTrustlessPosition(
+        evmAddress,
+        bFelts,
+      );
       const newPos = currentPos + amountBase;
-      const scriptSrc = buildSetPositionScript(suffix, prefix, newPos);
+      const scriptSrc = buildSetPositionScript(
+        suffix,
+        prefix,
+        newPos,
+        bFelts.basketSuffix,
+        bFelts.basketPrefix,
+      );
       const txScript = await compileTxScript({ code: scriptSrc });
       let creditTxId: string | null = null;
       try {
@@ -555,32 +582,43 @@ export function TrustlessDepositPanel() {
   }
 
   return (
-    <section style={{ marginTop: 48 }}>
-      <h2
-        style={{
-          fontSize: 14,
-          fontFamily: "var(--font-mono-stack)",
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          borderBottom: "1px solid var(--ink)",
-          paddingBottom: 8,
-          marginBottom: 16,
-        }}
-      >
-        Trustless deposit · demo (no server, no extension)
-      </h2>
+    <section style={{ marginTop: compact ? 0 : 48 }}>
+      {!compact && (
+        <h2
+          style={{
+            fontSize: 14,
+            fontFamily: "var(--font-mono-stack)",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            borderBottom: "1px solid var(--ink)",
+            paddingBottom: 8,
+            marginBottom: 16,
+          }}
+        >
+          Trustless deposit · demo (no server, no extension)
+        </h2>
+      )}
 
-      <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
-        Sign one message with MetaMask → your Miden signing key is derived
-        from that signature (deterministic — same sig on any device gives
-        the same wallet). Deposits credit position slot-10 on the{" "}
-        <code>NoAuth</code> Darwin controller
-        <br />
-        <code>{TRUSTLESS_CONTROLLER_HEX}</code>
-        <br />
-        which lets anyone submit txs against it without a signing key. No
-        Darwin backend is involved.
-      </p>
+      {compact ? (
+        <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
+          Self-custody rail{basket ? ` for ${basket.symbol}` : ""} — your
+          browser derives a Miden key from one MetaMask signature, bridges
+          via Epoch, and writes your position itself. No Darwin server
+          ever touches your funds.
+        </p>
+      ) : (
+        <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
+          Sign one message with MetaMask → your Miden signing key is derived
+          from that signature (deterministic — same sig on any device gives
+          the same wallet). Deposits credit position slot-10 on the{" "}
+          <code>NoAuth</code> Darwin controller
+          <br />
+          <code>{TRUSTLESS_CONTROLLER_HEX}</code>
+          <br />
+          which lets anyone submit txs against it without a signing key. No
+          Darwin backend is involved.
+        </p>
+      )}
 
       {!ethConnected && (
         <p style={{ fontSize: 13, color: "var(--ink-3)" }}>

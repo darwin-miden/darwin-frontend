@@ -14,6 +14,13 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ConnectKitButton } from "connectkit";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+
+import {
+  BASKET_TOKEN_FAUCETS,
+  type BasketSymbol,
+} from "../../lib/midenConstants";
 
 const TrustlessDepositPanel = dynamic(
   () =>
@@ -24,7 +31,19 @@ const TrustlessDepositPanel = dynamic(
 );
 
 
-export default function TrustlessPage() {
+function TrustlessPageInner() {
+  // ?basket=DCC → credit the per-(user, basket) slot instead of the
+  // legacy flat demo slot. Set by the Self-custody tab on the basket
+  // pages.
+  const params = useSearchParams();
+  const rawSymbol = params.get("basket");
+  const faucet =
+    rawSymbol && rawSymbol in BASKET_TOKEN_FAUCETS
+      ? BASKET_TOKEN_FAUCETS[rawSymbol as BasketSymbol]
+      : null;
+  const basket = faucet
+    ? { symbol: faucet.symbol, faucetHex: faucet.id }
+    : undefined;
   return (
     <main
       style={{
@@ -78,7 +97,7 @@ export default function TrustlessPage() {
       <p style={{ fontSize: 13, marginBottom: 32 }}>
         Need to redeem?{" "}
         <Link
-          href="/trustless/redeem"
+          href={basket ? `/trustless/redeem?basket=${basket.symbol}` : "/trustless/redeem"}
           style={{
             fontFamily: "var(--font-mono-stack)",
             textDecoration: "underline",
@@ -89,7 +108,16 @@ export default function TrustlessPage() {
         </Link>
       </p>
 
-      <TrustlessDepositPanel />
+      <TrustlessDepositPanel basket={basket} />
     </main>
+  );
+}
+
+
+export default function TrustlessPage() {
+  return (
+    <Suspense fallback={null}>
+      <TrustlessPageInner />
+    </Suspense>
   );
 }

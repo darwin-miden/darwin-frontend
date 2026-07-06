@@ -13,6 +13,13 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ConnectKitButton } from "connectkit";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+
+import {
+  BASKET_TOKEN_FAUCETS,
+  type BasketSymbol,
+} from "../../../lib/midenConstants";
 
 const TrustlessRedeemPanel = dynamic(
   () =>
@@ -22,7 +29,16 @@ const TrustlessRedeemPanel = dynamic(
   { ssr: false },
 );
 
-export default function TrustlessRedeemPage() {
+function TrustlessRedeemPageInner() {
+  const params = useSearchParams();
+  const rawSymbol = params.get("basket");
+  const faucet =
+    rawSymbol && rawSymbol in BASKET_TOKEN_FAUCETS
+      ? BASKET_TOKEN_FAUCETS[rawSymbol as BasketSymbol]
+      : null;
+  const basket = faucet
+    ? { symbol: faucet.symbol, faucetHex: faucet.id }
+    : undefined;
   return (
     <main
       style={{
@@ -73,7 +89,16 @@ export default function TrustlessRedeemPage() {
         to your Sepolia address. No user tx on Sepolia, no Darwin backend.
       </p>
 
-      <TrustlessRedeemPanel />
+      <TrustlessRedeemPanel basket={basket} />
     </main>
+  );
+}
+
+
+export default function TrustlessRedeemPage() {
+  return (
+    <Suspense fallback={null}>
+      <TrustlessRedeemPageInner />
+    </Suspense>
   );
 }

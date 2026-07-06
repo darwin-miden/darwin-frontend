@@ -62,6 +62,7 @@ import {
 } from "../lib/epoch";
 import {
   TRUSTLESS_CONTROLLER_HEX,
+  basketFelts,
   buildSetPositionScript,
   evmToUserIdFelts,
   fetchTrustlessPosition,
@@ -275,7 +276,12 @@ function StageRow({
 
 const REDEEM_AMOUNT_DEFAULT = "1";
 
-export function TrustlessRedeemPanel() {
+export function TrustlessRedeemPanel({
+  basket,
+}: {
+  /** Basket to debit — keys slot-10 per (user, basket). Omit = legacy flat slot. */
+  basket?: { symbol: string; faucetHex: string };
+} = {}) {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
   const { switchChainAsync } = useSwitchChain();
@@ -1277,8 +1283,11 @@ export function TrustlessRedeemPanel() {
       console.log("[redeem] debiting slot-10 position…");
       try {
         const spentBase = BigInt(String(quote.quoteResult.tokenIn ?? "0"));
+        const bFelts = basket
+          ? await basketFelts(basket.faucetHex)
+          : { basketSuffix: 0n, basketPrefix: 0n };
         const { position: currentPos, positionKnown } =
-          await fetchTrustlessPosition(evmAddress);
+          await fetchTrustlessPosition(evmAddress, bFelts);
         if (!positionKnown) {
           // Never blind-write on a failed read — a debit that assumed 0
           // would wipe a real balance. Skip and surface in the UI.
@@ -1302,7 +1311,13 @@ export function TrustlessRedeemPanel() {
             await clientAny.syncState?.();
           } catch (_) {}
           const { suffix, prefix } = evmToUserIdFelts(evmAddress);
-          const scriptSrc = buildSetPositionScript(suffix, prefix, newPos);
+          const scriptSrc = buildSetPositionScript(
+            suffix,
+            prefix,
+            newPos,
+            bFelts.basketSuffix,
+            bFelts.basketPrefix,
+          );
           const txScript = await compileTxScript({ code: scriptSrc });
           try {
             const res = await executeTx({

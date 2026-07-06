@@ -52,7 +52,7 @@ const EpochDepositPanel = dynamic(
   { ssr: false },
 );
 
-type Tab = "epoch" | "miden";
+type Tab = "epoch" | "miden" | "selfcustody";
 
 export function DepositTabs({ basket }: { basket: BasketDef }) {
   const [tab, setTab] = useState<Tab>("epoch");
@@ -81,10 +81,56 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
           label="Miden wallet"
           subtitle="Atomic deposit note, browser-proven"
         />
+        <TabButton
+          active={tab === "selfcustody"}
+          onClick={() => setTab("selfcustody")}
+          label="Self-custody"
+          subtitle="No server, no extension — browser only"
+        />
       </div>
 
       {tab === "epoch" && <EpochDepositPanel basket={basket} />}
       {tab === "miden" && <MidenDepositPanel basket={manifest} />}
+      {tab === "selfcustody" && <SelfCustodyPane symbol={basket.symbol} />}
+    </div>
+  );
+}
+
+/**
+ * The self-custody rail runs on its own route rather than inline: the
+ * trustless panel needs the bare Miden provider (internal keystore, no
+ * MidenFi signer wrapper) and exclusive WASM-client access — mounting
+ * it next to MidenDepositPanel would re-create the RefCell contention
+ * the /trustless route exists to avoid. The tab sells the rail and
+ * hands off with the basket preselected.
+ */
+function SelfCustodyPane({ symbol }: { symbol: string }) {
+  return (
+    <div
+      style={{
+        padding: "1.2rem 1.4rem",
+        background: "var(--paper-2)",
+        borderLeft: "3px solid var(--orange)",
+      }}
+    >
+      <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6, marginBottom: 6 }}>
+        Deposit into <strong>{symbol}</strong> without trusting any Darwin
+        server: your browser derives a Miden key from one MetaMask
+        signature, bridges Sepolia USDC via Epoch, consumes the note and
+        writes your {symbol} position itself — proofs included.
+      </p>
+      <ul style={{ fontSize: 12.5, color: "var(--ink-3)", lineHeight: 1.7, margin: "0 0 14px 18px", padding: 0 }}>
+        <li>One signature — same wallet on any device, nothing to back up</li>
+        <li>No browser extension, no Darwin backend in the loop</li>
+        <li>Redeem back to Sepolia USDC the same way, anytime</li>
+      </ul>
+      <a
+        href={`/trustless?basket=${encodeURIComponent(symbol)}`}
+        className="nav-cta"
+        style={{ display: "inline-block", textDecoration: "none" }}
+      >
+        Open self-custody deposit →
+      </a>
     </div>
   );
 }
