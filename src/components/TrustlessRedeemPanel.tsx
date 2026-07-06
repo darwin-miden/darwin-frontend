@@ -423,10 +423,17 @@ export function TrustlessRedeemPanel() {
           setVaultSyncMsg(`draining ${pending.length} note(s) into vault…`);
           log(`consume ${pending.length}`);
           try {
+            const autoPendingIds = (pending as Array<{
+              inputNoteRecord?: () =>
+                | { id?: () => { toString?: () => string } }
+                | null;
+            }>)
+              .map((n) => n.inputNoteRecord?.()?.id?.()?.toString?.() ?? "")
+              .filter(Boolean);
             await consume({
-                accountId: derivedWalletId!,
-                notes: pending as never[],
-              });
+              accountId: derivedWalletId!,
+              notes: autoPendingIds,
+            });
             trace.drained = pending.length;
           } catch (e) {
             trace.drainError = String(e).slice(0, 200);
@@ -738,7 +745,12 @@ export function TrustlessRedeemPanel() {
         }
         setVaultSyncMsg(`deposit leg: consuming ${pending.length} note(s)…`);
         log("consuming", pending.length);
-        await consume({ accountId: freshWalletId!, notes: pending as never[] });
+        const rtPendingIds = (pending as Array<{
+          inputNoteRecord?: () => { id?: () => { toString?: () => string } } | null;
+        }>)
+          .map((n) => n.inputNoteRecord?.()?.id?.()?.toString?.() ?? "")
+          .filter(Boolean);
+        await consume({ accountId: freshWalletId!, notes: rtPendingIds });
         trace.consumed = pending.length;
         await new Promise((r) => setTimeout(r, 2_000));
         setVaultSyncMsg(null);
@@ -1155,7 +1167,12 @@ export function TrustlessRedeemPanel() {
           `draining ${pendingNotes.length} note(s) into vault…`,
         );
         try {
-          await consume({ accountId: walletId, notes: pendingNotes as never[] });
+          const pendingIds = (pendingNotes as Array<{
+          inputNoteRecord?: () => { id?: () => { toString?: () => string } } | null;
+        }>)
+          .map((n) => n.inputNoteRecord?.()?.id?.()?.toString?.() ?? "")
+          .filter(Boolean);
+        await consume({ accountId: walletId, notes: pendingIds });
           // Small settle beat so IndexedDB reflects the new vault balance
           // by the time send() reads it.
           await new Promise((res) => setTimeout(res, 1500));

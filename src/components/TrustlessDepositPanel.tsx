@@ -465,17 +465,26 @@ export function TrustlessDepositPanel() {
             : "Epoch never confirmed delivery and no note reached the wallet.",
         );
       }
-      const inbound = delivered[0];
-      const noteId =
-        (inbound as unknown as { id?: () => { toString?: () => string } })
-          ?.id?.()
-          ?.toString?.() ?? epochNoteId;
-      setMidenNoteId(noteId);
+      // The consume hook resolves note IDs (strings) or Note/InputNoteRecord
+      // objects — a raw ConsumableNoteRecord throws 'array contains a value
+      // of the wrong type' in wasm. Extract id strings, same as the
+      // reference app's NotesInboxPanel.
+      const inboundIds = (delivered as Array<{
+        inputNoteRecord?: () => { id?: () => { toString?: () => string } } | null;
+      }>)
+        .map((n) => n.inputNoteRecord?.()?.id?.()?.toString?.() ?? "")
+        .filter(Boolean);
+      if (inboundIds.length === 0) {
+        throw new Error("Consumable notes had no readable ids");
+      }
+      setMidenNoteId(inboundIds[0] ?? epochNoteId);
 
       setStage("consuming");
+      // Consume everything pending (a stuck prior delivery may be queued
+      // alongside this deposit's note — drain them all into the vault).
       const consumeResult = await consume({
         accountId: walletId,
-        notes: (inbound ? [inbound] : []) as never[],
+        notes: inboundIds,
       });
       setConsumeTx(consumeResult?.transactionId?.toString?.() ?? null);
 
