@@ -473,7 +473,6 @@ export function TrustlessRedeemPanel() {
                   assetId: faucetId,
                   amount: BigInt(amount),
                   noteType: "public",
-                  recallHeight: 100_000,
                 }),
               );
               capturedMidenTxId = out?.txId;
@@ -756,7 +755,6 @@ export function TrustlessRedeemPanel() {
                   assetId: faucetId,
                   amount: BigInt(amount),
                   noteType: "public",
-                  recallHeight: 100_000,
                 }),
               );
               capturedMidenTxId = out?.txId;
@@ -946,9 +944,10 @@ export function TrustlessRedeemPanel() {
               assetId: faucetId,
               amount: BigInt(amount),
               noteType: "public",
-              // recallHeight makes it a P2IDE per the reference-app spec:
-              // sender can reclaim the note if the solver never consumes.
-              recallHeight: 100_000,
+              // Plain public P2ID — matches the reference app's
+              // crosschain IntentForm exactly (SendTransaction(..., 'public',
+              // amount), NO recallHeight). A recall height in the past made
+              // the note reclaimable immediately and solvers may skip it.
             }),
           );
           const outNoteId =
