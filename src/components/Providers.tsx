@@ -19,7 +19,14 @@ export function Providers({ children }: { children: ReactNode }) {
   // keystore mode and every createWallet call routes insertKey through
   // MidenFi → "invalid enum value passed" panic. Route it to a bare
   // provider that only wires MidenProvider (no signer wrapper).
-  const isTrustless = pathname === "/trustless";
+  // Cover /trustless and every subroute (/trustless/redeem, etc.). Exact
+  // match missed the redeem page and boot it into MidenContextProvider,
+  // which wraps MidenFiSignerProvider → createWallet routes through the
+  // MidenFi keystore path and the wrong DB name (mdev not mtst) is
+  // opened. Verified live via a Playwright run that hit
+  // "MidenClientDB_mdev" on /trustless/redeem despite the parent route
+  // being locked to testnet.
+  const isTrustless = pathname?.startsWith("/trustless") ?? false;
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
