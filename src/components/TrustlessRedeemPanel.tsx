@@ -1152,6 +1152,7 @@ export function TrustlessRedeemPanel() {
           selector can find it without depending on the label text. */}
       {stage !== "signing" &&
         stage !== "deriving" &&
+        stage !== "sync-vault" &&
         stage !== "quoting" &&
         stage !== "sending-note" &&
         stage !== "awaiting-fill" && (
@@ -1196,6 +1197,7 @@ export function TrustlessRedeemPanel() {
 
       {stage !== "signing" &&
         stage !== "deriving" &&
+        stage !== "sync-vault" &&
         stage !== "quoting" &&
         stage !== "sending-note" &&
         stage !== "awaiting-fill" && (
