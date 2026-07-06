@@ -154,6 +154,113 @@ export function usdcSepoliaBaseUnits(human: string): string {
   return parseUnits(human || "0", EPOCH_USDC_SEPOLIA.decimals).toString();
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+ * Redeem path — Miden → Sepolia via Epoch (reverse of the deposit)
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * Mirror of buildTaskData / fetchQuote / submitIntent for the "give me
+ * back Sepolia USDC" direction. User creates a P2ID(E) note on Miden
+ * targeting Epoch's allocator; solver consumes the note and pays USDC
+ * on Sepolia.
+ */
+
+export interface EpochRedeemParams {
+  /** User's derived Miden wallet — the P2ID note sender. */
+  midenSourceId: string;
+  /** User's Sepolia address — where USDC lands. */
+  evmRecipient: `0x${string}`;
+  /** Min Sepolia USDC out, base units (18 decimals for Epoch's test USDC). */
+  minUsdcSepoliaBaseUnits: string;
+}
+
+export interface EpochRedeemQuote {
+  taskTypeString: string;
+  intentData: unknown;
+  quoteResult: IntentQuoteResult;
+  params: EpochRedeemParams;
+}
+
+function buildRedeemTaskData(params: EpochRedeemParams) {
+  return {
+    taskType: "gettokenout" as const,
+    intentData: {
+      // isNative=false: tokenIn is address(0) here because the Miden side is
+      // "off-chain" — the SDK's Miden bridging path expects zero-address
+      // depositTokenAddress + midenSourceAccount + midenFaucetId in extraData.
+      isNative: false,
+      depositTokenAddress: ZERO_ADDRESS,
+      tokenInAmount: "0", // reverse quote: backend computes dUSDC input
+      outputTokenAddress: EPOCH_USDC_SEPOLIA.address,
+      minTokenOut: params.minUsdcSepoliaBaseUnits,
+      destinationChainId: String(SEPOLIA_CHAIN_ID),
+      protocolHashIdentifier: ZERO_HASH,
+      recipient: params.evmRecipient,
+    },
+    extraDataTypestring:
+      "string midenSourceAccount,string midenFaucetId,string midenNoteType,string midenNoteId,uint256 midenReclaimHeight",
+    extraData: {
+      midenSourceAccount: params.midenSourceId,
+      midenFaucetId: EPOCH_USDC_SEPOLIA.midenFaucetId,
+      // P2IDE = P2ID + Extra data (reclaim height) — reference-app spec.
+      midenNoteType: "P2IDE",
+      midenNoteId: "", // set by SDK after createMidenP2IDNote callback
+      midenReclaimHeight: "1000",
+    },
+  };
+}
+
+export async function fetchRedeemQuote(
+  sdk: EpochIntentSDK,
+  params: EpochRedeemParams,
+): Promise<EpochRedeemQuote> {
+  const taskDataParams = buildRedeemTaskData(params);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { taskTypeString, intentData } = await sdk.getTaskData(
+    taskDataParams as any,
+  );
+  const quoteResult = await sdk.getIntentQuote({
+    sponsorAddress: params.evmRecipient,
+    taskTypeString,
+    intentData,
+    isNative: false,
+  });
+  if (!quoteResult.success) {
+    throw new Error(quoteResult.error ?? "Epoch redeem quote failed");
+  }
+  return { taskTypeString, intentData, quoteResult, params };
+}
+
+/**
+ * Submit the redeem intent — user creates a P2IDE note on Miden, and Epoch
+ * solver consumes it and pays USDC on Sepolia. `createMidenP2IDNote` is the
+ * callback the SDK invokes to build the note (via useSend on the derived
+ * wallet). No Sepolia tx is signed by the user.
+ */
+export async function submitRedeemIntent(
+  sdk: EpochIntentSDK,
+  quote: EpochRedeemQuote,
+  createMidenP2IDNote: (
+    faucetId: string,
+    amount: string,
+    allocatorId: string,
+  ) => Promise<{ success: boolean; noteId?: string }>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any> {
+  return sdk.solveIntent({
+    isNative: false,
+    sponsorAddress: quote.params.evmRecipient,
+    taskTypeString: quote.taskTypeString,
+    intentData: quote.intentData,
+    quoteResult: quote.quoteResult,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    collateralType: "miden" as any,
+    midenSourceAccount: quote.params.midenSourceId,
+    midenFaucetId: EPOCH_USDC_SEPOLIA.midenFaucetId,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    createMidenP2IDNote: createMidenP2IDNote as any,
+  });
+}
+
 /** Convert human dUSDC amount to Miden 6-dec base units (Epoch `minTokenOut`). */
 export function dusdcMidenBaseUnits(human: string): string {
   return parseUnits(human || "0", EPOCH_USDC_SEPOLIA.midenDecimals).toString();
