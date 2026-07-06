@@ -35,6 +35,7 @@ import {
   custom,
   http,
   keccak256,
+  parseTransaction,
   toBytes,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -77,9 +78,49 @@ function localSepoliaSigningClient(
     transport: custom({
       async request({ method, params }) {
         if (method === "eth_sendRawTransactionSync") {
+          // publicnode rejects the browser-built eip1559 raw with
+          // "Invalid parameters" (the same viem prepare path works from
+          // Node — cause unclear, likely a stricter pool node). Decode
+          // the raw, re-sign as a plain legacy tx with fresh
+          // nonce/gasPrice, and submit that instead. Legacy raw sends
+          // are reliably accepted (verified live).
+          const parsed = parseTransaction(
+            (params as [/* signedTx */ `0x${string}`])[0],
+          );
+          const nonce = await pub.getTransactionCount({
+            address: account.address,
+            blockTag: "pending",
+          });
+          const gasPrice = ((await pub.getGasPrice()) * 15n) / 10n;
+          let gas = parsed.gas;
+          if (!gas) {
+            try {
+              gas =
+                ((await pub.estimateGas({
+                  account: account.address,
+                  to: parsed.to ?? undefined,
+                  data: parsed.data,
+                  value: parsed.value ?? 0n,
+                })) *
+                  13n) /
+                10n;
+            } catch {
+              gas = 500_000n;
+            }
+          }
+          const signed = await account.signTransaction({
+            type: "legacy",
+            chainId: sepolia.id,
+            nonce,
+            to: parsed.to ?? undefined,
+            data: parsed.data,
+            value: parsed.value ?? 0n,
+            gas,
+            gasPrice,
+          });
           const hash = (await pub.request({
             method: "eth_sendRawTransaction",
-            params: params as never,
+            params: [signed],
           })) as `0x${string}`;
           const r = await pub.waitForTransactionReceipt({
             hash,
