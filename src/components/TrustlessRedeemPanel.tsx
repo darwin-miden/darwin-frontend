@@ -154,15 +154,22 @@ export function TrustlessRedeemPanel() {
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
   const [intentNonce, setIntentNonce] = useState<string | null>(null);
   const [vaultSyncMsg, setVaultSyncMsg] = useState<string | null>(null);
+  // useNotes runs a periodic query into IndexedDB. Left on during the
+  // send() prove pass, it races the WASM client and panics with
+  // "RefCell already borrowed" (verified live). Toggle it off the moment
+  // sync-vault completes so send() has exclusive access.
+  const [notesActive, setNotesActive] = useState(true);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
 
   // Live subscription to the wallet's committed notes — same pattern as
   // the epoch reference app's NotesInboxPanel. Reactively updates when
-  // syncState finds new notes for this wallet in IndexedDB.
+  // syncState finds new notes for this wallet in IndexedDB. Passing
+  // `undefined` accountId shuts the internal polling loop down (per
+  // @miden-sdk/react docs: "useNotes only runs when accountId is set").
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const notesResult = (useNotes as any)({
     status: "committed",
-    accountId: walletId ?? undefined,
+    accountId: notesActive ? walletId ?? undefined : undefined,
   }) as {
     consumableNotes: Array<{
       inputNoteRecord: () => { id: () => { toString: () => string } } | null;
@@ -322,6 +329,13 @@ export function TrustlessRedeemPanel() {
         await new Promise((res) => setTimeout(res, 1500));
       }
       setVaultSyncMsg(null);
+
+      // Kill the useNotes subscription before we hand the WASM client to
+      // send() — otherwise the reactive query races the prove pass and
+      // panics on RefCell.
+      setNotesActive(false);
+      // Let React re-render + unsubscribe before we proceed.
+      await new Promise((res) => setTimeout(res, 300));
 
       setStage("quoting");
 
