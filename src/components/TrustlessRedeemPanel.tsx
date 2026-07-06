@@ -26,6 +26,7 @@ import {
   useSend,
   useSyncControl,
   useSyncState,
+  useWaitForCommit,
   useWaitForNotes,
 } from "@miden-sdk/react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -274,6 +275,7 @@ export function TrustlessRedeemPanel() {
   const { pauseSync, resumeSync } = useSyncControl();
   const { sync: syncState } = useSyncState();
   const { waitForConsumableNotes } = useWaitForNotes();
+  const { waitForCommit } = useWaitForCommit();
   const { runExclusive } = useMiden();
 
   const [stage, setStage] = useState<Stage>("idle");
@@ -476,6 +478,17 @@ export function TrustlessRedeemPanel() {
                 }),
               );
               capturedMidenTxId = out?.txId;
+              // Reference app waits for the note tx to COMMIT before
+              // handing the noteId to the SDK (its 12s wait alone can be
+              // shorter than a Miden block); mirror that here.
+              if (capturedMidenTxId) {
+                try {
+                  await waitForCommit(capturedMidenTxId, {
+                    timeoutMs: 120_000,
+                    intervalMs: 4_000,
+                  });
+                } catch (_) {}
+              }
               capturedNoteId =
                 (out?.note as unknown as {
                   id?: () => { toString?: () => string };
@@ -551,6 +564,7 @@ export function TrustlessRedeemPanel() {
       waitForConsumableNotes,
       consume,
       sendNote,
+      waitForCommit,
     ],
   );
 
@@ -758,6 +772,17 @@ export function TrustlessRedeemPanel() {
                 }),
               );
               capturedMidenTxId = out?.txId;
+              // Reference app waits for the note tx to COMMIT before
+              // handing the noteId to the SDK (its 12s wait alone can be
+              // shorter than a Miden block); mirror that here.
+              if (capturedMidenTxId) {
+                try {
+                  await waitForCommit(capturedMidenTxId, {
+                    timeoutMs: 120_000,
+                    intervalMs: 4_000,
+                  });
+                } catch (_) {}
+              }
               capturedNoteId =
                 (out?.note as unknown as {
                   id?: () => { toString?: () => string };
@@ -836,6 +861,7 @@ export function TrustlessRedeemPanel() {
       waitForConsumableNotes,
       consume,
       sendNote,
+      waitForCommit,
     ],
   );
 
@@ -950,6 +976,14 @@ export function TrustlessRedeemPanel() {
               // the note reclaimable immediately and solvers may skip it.
             }),
           );
+          if (out?.txId) {
+            try {
+              await waitForCommit(out.txId, {
+                timeoutMs: 120_000,
+                intervalMs: 4_000,
+              });
+            } catch (_) {}
+          }
           const outNoteId =
             (out?.note as unknown as { id?: () => { toString?: () => string } })
               ?.id?.()
@@ -964,7 +998,7 @@ export function TrustlessRedeemPanel() {
         }
       };
     },
-    [runExclusive, sendNote],
+    [runExclusive, sendNote, waitForCommit],
   );
 
   async function onRedeem() {
