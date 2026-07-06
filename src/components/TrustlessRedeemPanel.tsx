@@ -20,10 +20,12 @@
  */
 
 import {
+  useConsume,
   useCreateWallet,
   useMiden,
   useSend,
   useSyncControl,
+  useWaitForNotes,
 } from "@miden-sdk/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createWalletClient, custom, keccak256, parseUnits, toBytes } from "viem";
@@ -56,6 +58,7 @@ type Stage =
   | "signing"
   | "deriving"
   | "ready"
+  | "sync-vault"
   | "quoting"
   | "sending-note"
   | "awaiting-fill"
@@ -141,6 +144,8 @@ export function TrustlessRedeemPanel() {
   const { client } = useMiden();
   const { createWallet, isCreating, error: createErr } = useCreateWallet();
   const { send: sendNote } = useSend();
+  const { consume } = useConsume();
+  const { waitForConsumableNotes } = useWaitForNotes();
   const { pauseSync, resumeSync } = useSyncControl();
 
   const [stage, setStage] = useState<Stage>("idle");
@@ -151,6 +156,7 @@ export function TrustlessRedeemPanel() {
   const [midenTxId, setMidenTxId] = useState<string | null>(null);
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
   const [intentNonce, setIntentNonce] = useState<string | null>(null);
+  const [vaultSyncMsg, setVaultSyncMsg] = useState<string | null>(null);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
 
   // Silence the internal @miden-sdk error banner when it's just "already
@@ -252,6 +258,38 @@ export function TrustlessRedeemPanel() {
     pauseSync();
     try {
       setErrorMsg(null);
+
+      // Force-sync the derived wallet and drain any consumable notes into
+      // the vault before we try to spend dUSDC. The deposit flow's Step 3
+      // consumes the delivered P2ID note into the vault, but if the user
+      // did the deposit in a different tab / earlier session, IndexedDB's
+      // note state may still be "committed but not consumed" — trying to
+      // send dUSDC then would underflow at 0 balance.
+      setStage("sync-vault");
+      setVaultSyncMsg("syncing derived wallet + draining pending notes…");
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const clientAny = client as any;
+        await clientAny?.syncState?.();
+      } catch (_) {}
+      try {
+        const pending = await waitForConsumableNotes({
+          accountId: walletId,
+          minCount: 1,
+          timeoutMs: 10_000,
+          intervalMs: 3_000,
+        });
+        if (pending && pending.length > 0) {
+          setVaultSyncMsg(`draining ${pending.length} note(s) into vault…`);
+          await consume({ accountId: walletId, notes: pending });
+        }
+      } catch (_) {
+        // No consumable notes in the window is OK — if the wallet already
+        // has vault balance, we'll spend that. Any actual failure surfaces
+        // as an underflow at send time.
+      }
+      setVaultSyncMsg(null);
+
       setStage("quoting");
 
       // Epoch requires walletClient.chain.id = MIDEN_DESTINATION_CHAIN_ID
@@ -442,7 +480,8 @@ export function TrustlessRedeemPanel() {
           </div>
         )}
 
-      {(stage === "quoting" ||
+      {(stage === "sync-vault" ||
+        stage === "quoting" ||
         stage === "sending-note" ||
         stage === "awaiting-fill" ||
         stage === "done") && (
@@ -456,6 +495,24 @@ export function TrustlessRedeemPanel() {
             marginTop: 16,
           }}
         >
+          <StageRow
+            label="sync vault"
+            state={
+              stage === "sync-vault"
+                ? "running"
+                : stage === "quoting" ||
+                    stage === "sending-note" ||
+                    stage === "awaiting-fill" ||
+                    stage === "done"
+                  ? "done"
+                  : "idle"
+            }
+            detail={
+              stage === "sync-vault"
+                ? vaultSyncMsg ?? "syncing…"
+                : "vault ready (pending notes drained)"
+            }
+          />
           <StageRow
             label="quote"
             state={
