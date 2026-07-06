@@ -78,11 +78,13 @@ function StageRow({
   state,
   detail,
   link,
+  testId,
 }: {
   label: string;
   state: StageState;
   detail: string;
   link?: string | null;
+  testId?: string;
 }) {
   const badge = state === "done" ? "✓" : state === "running" ? "◐" : "·";
   const badgeColor =
@@ -95,6 +97,8 @@ function StageRow({
   const running = state === "running";
   return (
     <div
+      data-testid={testId}
+      data-stage-state={state}
       style={{
         display: "grid",
         gridTemplateColumns: "28px 150px 1fr",
@@ -183,79 +187,88 @@ export function TrustlessRedeemPanel() {
   const [vaultSyncMsg, setVaultSyncMsg] = useState<string | null>(null);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
 
-  // Autonomous E2E hook — called by Playwright with the dev key. Bypasses
-  // wagmi/MetaMask entirely by building a local viem walletClient from the
-  // private key; every WASM interaction still goes through runExclusive
-  // and the SDK still hits real Epoch endpoints + real Miden network. No
-  // mocks anywhere. Returns full trace so the runner can loop autonomously.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const w = window as unknown as {
-      __darwinTrustlessRedeem?: (
-        devKeyHex: string,
-        humanAmount: string,
-      ) => Promise<unknown>;
-    };
-    w.__darwinTrustlessRedeem = async (devKeyHex, humanAmount) => {
-      const trace: Record<string, unknown> = { humanAmount, startedAt: Date.now() };
-      const log = (step: string, extra?: unknown) => {
-        const t = ((Date.now() - (trace.startedAt as number)) / 1000).toFixed(1);
-        console.log(`[redeem-hook t+${t}s] ${step}`, extra ?? "");
+  // Autonomous E2E flow — used by both the "Autonomous test" button and
+  // the window.__darwinTrustlessRedeem debug hook. Bypasses wagmi entirely
+  // by signing with a local viem account, and drives the panel's stage
+  // machine as it progresses (so Playwright / a human watching the panel
+  // can follow along without polling internal state).
+  const runAutonomousFlow = useCallback(
+    async (devKeyHex: string, humanAmount: string) => {
+      const trace: Record<string, unknown> = {
+        humanAmount,
+        startedAt: Date.now(),
       };
+      const log = (step: string, extra?: unknown) => {
+        const t = (
+          (Date.now() - (trace.startedAt as number)) /
+          1000
+        ).toFixed(1);
+        console.log(`[redeem-auto t+${t}s] ${step}`, extra ?? "");
+      };
+      // Reset any prior run's UI state.
+      setErrorMsg(null);
+      setNoteId(null);
+      setMidenTxId(null);
+      setSepoliaTxHint(null);
+      setIntentNonce(null);
+      setVaultSyncMsg(null);
+      pauseSync();
       try {
         log("start");
         const account = privateKeyToAccount(devKeyHex as `0x${string}`);
         const evm = account.address as `0x${string}`;
         trace.evm = evm;
 
-        // Derive wallet — deterministic from the signature on the same
-        // message the UI would use.
+        // Same message the UI's onDerive uses → same seed → same wallet.
+        setStage("signing");
         log("signing derive message");
-        const sig = await account.signMessage({ message: DERIVE_MESSAGE(evm) });
+        const sig = await account.signMessage({
+          message: DERIVE_MESSAGE(evm),
+        });
         const seed = keccak256(toBytes(sig));
         const seedBytes = new Uint8Array(
           seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
         );
-        log("derived seed", seed.slice(0, 20));
-        pauseSync();
+
+        setStage("deriving");
+        log("createWallet");
         let derivedWalletId: string | null = null;
         try {
-          try {
-            log("createWallet");
-            const acc = await createWallet({
-              initSeed: seedBytes,
-              storageMode: "private",
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
-            });
-            derivedWalletId = acc.id().toString();
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            const m = msg.match(/id (0x[0-9a-fA-F]+)/);
-            if (m && /already being tracked/i.test(msg)) {
-              derivedWalletId = m[1];
-            } else {
-              throw e;
-            }
+          const acc = await createWallet({
+            initSeed: seedBytes,
+            storageMode: "private",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
+          });
+          derivedWalletId = acc.id().toString();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          const m = msg.match(/id (0x[0-9a-fA-F]+)/);
+          if (m && /already being tracked/i.test(msg)) {
+            derivedWalletId = m[1];
+          } else {
+            throw e;
           }
-        } finally {
-          resumeSync();
         }
         if (!derivedWalletId) throw new Error("no wallet id");
+        setWalletId(derivedWalletId);
         trace.walletId = derivedWalletId;
         log("walletId", derivedWalletId);
 
-        // Drain any consumable notes into the vault.
-        pauseSync();
+        // Sync + drain any consumable notes into the vault.
+        setStage("sync-vault");
         for (let i = 0; i < 3; i++) {
+          setVaultSyncMsg(`syncing derived wallet (${i + 1}/3)…`);
           log(`syncState ${i + 1}/3`);
           try {
             await runExclusive(() => syncState());
           } catch (e) {
             log(`syncState ${i + 1}/3 failed`, String(e).slice(0, 100));
           }
-          await new Promise((res) => setTimeout(res, 1200));
+          await new Promise((r) => setTimeout(r, 1200));
         }
+        setVaultSyncMsg("scanning for pending P2ID notes (~15s)…");
+        log("waitForConsumableNotes");
         let pending: unknown[] = [];
         try {
           pending =
@@ -267,9 +280,13 @@ export function TrustlessRedeemPanel() {
                 intervalMs: 3_000,
               }),
             )) ?? [];
-        } catch (_) {}
+        } catch (e) {
+          log("waitForConsumableNotes threw", String(e).slice(0, 100));
+        }
         trace.pendingNotesFound = pending.length;
         if (pending.length > 0) {
+          setVaultSyncMsg(`draining ${pending.length} note(s) into vault…`);
+          log(`consume ${pending.length}`);
           try {
             await runExclusive(() =>
               consume({
@@ -280,13 +297,14 @@ export function TrustlessRedeemPanel() {
             trace.drained = pending.length;
           } catch (e) {
             trace.drainError = String(e).slice(0, 200);
+            log("consume threw", trace.drainError);
           }
-          await new Promise((res) => setTimeout(res, 1000));
+          await new Promise((r) => setTimeout(r, 1000));
         }
+        setVaultSyncMsg(null);
 
-        // Build the Epoch SDK — same shape the UI creates. Wallet client
-        // chain id is overridden to MIDEN_DESTINATION_CHAIN_ID for the
-        // Miden-collateral path.
+        // Build the Epoch SDK — Miden virtual chain ID for the collateral
+        // path.
         const sepoliaWC = createWalletClient({
           account,
           chain: sepolia,
@@ -301,11 +319,14 @@ export function TrustlessRedeemPanel() {
           apiBaseUrl: ALLOCATOR_URL,
           walletClient: midenWC,
         });
+        sdkRef.current = sdk;
 
+        setStage("quoting");
         const minSepoliaOut = applySlippageBps(
           usdcSepoliaBaseUnits(humanAmount),
           EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
         );
+        log("fetchRedeemQuote");
         const quote = await fetchRedeemQuote(sdk, {
           midenSourceId: derivedWalletId!,
           evmRecipient: evm,
@@ -313,48 +334,59 @@ export function TrustlessRedeemPanel() {
         });
         trace.quoteOk = true;
         trace.tokenIn = String(quote.quoteResult.tokenIn ?? "");
+        log("quote OK", trace.tokenIn);
 
+        setStage("sending-note");
+        log("submitRedeemIntent");
         let capturedMidenTxId: string | undefined;
         let capturedNoteId: string | undefined;
-        const submit = await submitRedeemIntent(sdk, quote, async (
-          faucetId,
-          amount,
-          allocatorId,
-        ) => {
-          try {
-            const out = await runExclusive(() =>
-              sendNote({
-                from: derivedWalletId!,
-                to: allocatorId,
-                assetId: faucetId,
-                amount: BigInt(amount),
-                noteType: "public",
-                recallHeight: 100_000,
-              }),
-            );
-            capturedMidenTxId = out?.txId;
-            capturedNoteId =
-              (out?.note as unknown as {
-                id?: () => { toString?: () => string };
-              })
-                ?.id?.()
-                ?.toString?.() ?? undefined;
-            return { success: true, noteId: capturedNoteId };
-          } catch (e) {
-            trace.p2ideError = String(e).slice(0, 200);
-            return { success: false };
-          }
-        });
+        const submit = await submitRedeemIntent(
+          sdk,
+          quote,
+          async (faucetId, amount, allocatorId) => {
+            log("createMidenP2IDNote callback fired");
+            try {
+              const out = await runExclusive(() =>
+                sendNote({
+                  from: derivedWalletId!,
+                  to: allocatorId,
+                  assetId: faucetId,
+                  amount: BigInt(amount),
+                  noteType: "public",
+                  recallHeight: 100_000,
+                }),
+              );
+              capturedMidenTxId = out?.txId;
+              capturedNoteId =
+                (out?.note as unknown as {
+                  id?: () => { toString?: () => string };
+                })
+                  ?.id?.()
+                  ?.toString?.() ?? undefined;
+              setNoteId(capturedNoteId ?? null);
+              setMidenTxId(capturedMidenTxId ?? null);
+              log("P2IDE note created", capturedNoteId);
+              return { success: true, noteId: capturedNoteId };
+            } catch (e) {
+              trace.p2ideError = String(e).slice(0, 200);
+              log("sendNote threw", trace.p2ideError);
+              return { success: false };
+            }
+          },
+        );
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const s = submit as any;
-        trace.midenTxId = capturedMidenTxId;
-        trace.noteId = capturedNoteId;
-        trace.intentNonce = String(
+        const nonce = String(
           s?.nonce ?? s?.submittedIntentData?.compact?.nonce ?? "",
         );
+        if (nonce) setIntentNonce(nonce);
+        trace.midenTxId = capturedMidenTxId;
+        trace.noteId = capturedNoteId;
+        trace.intentNonce = nonce;
 
-        // Poll intent status until success/failed/timeout.
-        const url = `${ALLOCATOR_URL}/intentStatus/${evm}/${trace.intentNonce}`;
+        setStage("awaiting-fill");
+        log("polling intentStatus", nonce);
+        const url = `${ALLOCATOR_URL}/intentStatus/${evm}/${nonce}`;
         let fillTx: string | undefined;
         for (let t = 0; t < 24; t++) {
           try {
@@ -371,30 +403,55 @@ export function TrustlessRedeemPanel() {
               }
             }
           } catch (_) {}
-          await new Promise((res) => setTimeout(res, 5_000));
+          await new Promise((r) => setTimeout(r, 5_000));
         }
         trace.fillTx = fillTx;
+        setSepoliaTxHint(fillTx ?? null);
+        setStage("done");
         trace.finishedAt = Date.now();
-        trace.wallClockMs = (trace.finishedAt as number) - (trace.startedAt as number);
+        trace.wallClockMs =
+          (trace.finishedAt as number) - (trace.startedAt as number);
+        log("done", trace.wallClockMs + "ms");
         return trace;
       } catch (e) {
         trace.error = e instanceof Error ? e.message : String(e);
         trace.finishedAt = Date.now();
+        setErrorMsg(String(trace.error));
+        setStage("error");
         return trace;
       } finally {
         resumeSync();
       }
+    },
+    [
+      createWallet,
+      pauseSync,
+      resumeSync,
+      runExclusive,
+      syncState,
+      waitForConsumableNotes,
+      consume,
+      sendNote,
+    ],
+  );
+
+  // Expose the same flow via a window function for direct JS testing.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window as unknown as {
+      __darwinTrustlessRedeem?: (
+        devKeyHex: string,
+        humanAmount: string,
+      ) => Promise<unknown>;
     };
-  }, [
-    createWallet,
-    pauseSync,
-    resumeSync,
-    runExclusive,
-    syncState,
-    waitForConsumableNotes,
-    consume,
-    sendNote,
-  ]);
+    w.__darwinTrustlessRedeem = runAutonomousFlow;
+    return () => {
+      if (w.__darwinTrustlessRedeem === runAutonomousFlow) {
+        delete w.__darwinTrustlessRedeem;
+      }
+    };
+  }, [runAutonomousFlow]);
+
 
   // Silence the internal @miden-sdk error banner when it's just "already
   // being tracked" — that's expected on re-derive; onDerive handles it.
@@ -673,6 +730,55 @@ export function TrustlessRedeemPanel() {
         </p>
       )}
 
+      {/* Autonomous test — Playwright-driven E2E. Same real WASM + real
+          Epoch + real network as the manual flow; the only shortcut is
+          skipping wagmi/MetaMask by signing the derive message with a
+          dev-only test key. Hidden behind a data-testid so a Playwright
+          selector can find it without depending on the label text. */}
+      {stage !== "signing" &&
+        stage !== "deriving" &&
+        stage !== "quoting" &&
+        stage !== "sending-note" &&
+        stage !== "awaiting-fill" && (
+          <button
+            data-testid="autonomous-redeem"
+            onClick={() => {
+              // Playwright pre-injects window.__devKey / __devAmount via
+              // addInitScript so the click is a plain no-argument DOM
+              // event. Manual users get a browser prompt fallback so the
+              // button is still usable interactively.
+              const w = window as unknown as {
+                __devKey?: string;
+                __devAmount?: string;
+              };
+              let key = w.__devKey;
+              let amt = w.__devAmount ?? humanAmount;
+              if (!key) {
+                key =
+                  window.prompt("Dev private key (testnet only):", "") ??
+                  undefined;
+                if (!key) return;
+                amt = window.prompt("USDC amount to redeem:", humanAmount) ??
+                  humanAmount;
+              }
+              void runAutonomousFlow(key, amt);
+            }}
+            style={{
+              fontSize: 11,
+              fontFamily: "var(--font-mono-stack)",
+              padding: "6px 10px",
+              border: "1px dashed var(--rule)",
+              background: "transparent",
+              color: "var(--ink-3)",
+              cursor: "pointer",
+              marginBottom: 12,
+              marginRight: 8,
+            }}
+          >
+            ⚙ Autonomous test (dev key)
+          </button>
+        )}
+
       {ethConnected &&
         !walletId &&
         stage !== "signing" &&
@@ -767,6 +873,7 @@ export function TrustlessRedeemPanel() {
         >
           <StageRow
             label="sync vault"
+            testId="row-sync-vault"
             state={
               stage === "sync-vault"
                 ? "running"
@@ -790,6 +897,7 @@ export function TrustlessRedeemPanel() {
           />
           <StageRow
             label="quote"
+            testId="row-quote"
             state={
               stage === "quoting"
                 ? "running"
@@ -811,6 +919,7 @@ export function TrustlessRedeemPanel() {
           />
           <StageRow
             label="p2ide note"
+            testId="row-p2ide"
             state={
               stage === "sending-note" && !noteId
                 ? "running"
@@ -831,6 +940,7 @@ export function TrustlessRedeemPanel() {
           />
           <StageRow
             label="miden tx"
+            testId="row-miden-tx"
             state={midenTxId ? "done" : stage === "sending-note" ? "running" : "idle"}
             detail={midenTxId ?? "waiting"}
             link={
@@ -841,6 +951,7 @@ export function TrustlessRedeemPanel() {
           />
           <StageRow
             label="epoch fill"
+            testId="row-epoch-fill"
             state={
               stage === "awaiting-fill"
                 ? "running"
