@@ -410,12 +410,10 @@ export function TrustlessRedeemPanel() {
           setVaultSyncMsg(`draining ${pending.length} note(s) into vault…`);
           log(`consume ${pending.length}`);
           try {
-            await runExclusive(() =>
-              consume({
+            await consume({
                 accountId: derivedWalletId!,
                 notes: pending as never[],
-              }),
-            );
+              });
             trace.drained = pending.length;
           } catch (e) {
             trace.drainError = String(e).slice(0, 200);
@@ -468,15 +466,13 @@ export function TrustlessRedeemPanel() {
           async (faucetId, amount, allocatorId) => {
             log("createMidenP2IDNote callback fired");
             try {
-              const out = await runExclusive(() =>
-                sendNote({
+              const out = await sendNote({
                   from: derivedWalletId!,
                   to: allocatorId,
                   assetId: faucetId,
                   amount: BigInt(amount),
                   noteType: "public",
-                }),
-              );
+                });
               capturedMidenTxId = out?.txId;
               // Reference app waits for the note tx to COMMIT before
               // handing the noteId to the SDK (its 12s wait alone can be
@@ -722,9 +718,7 @@ export function TrustlessRedeemPanel() {
         }
         setVaultSyncMsg(`deposit leg: consuming ${pending.length} note(s)…`);
         log("consuming", pending.length);
-        await runExclusive(() =>
-          consume({ accountId: freshWalletId!, notes: pending as never[] }),
-        );
+        await consume({ accountId: freshWalletId!, notes: pending as never[] });
         trace.consumed = pending.length;
         await new Promise((r) => setTimeout(r, 2_000));
         setVaultSyncMsg(null);
@@ -762,15 +756,13 @@ export function TrustlessRedeemPanel() {
           async (faucetId, amount, allocatorId) => {
             log("createMidenP2IDNote fired", amount);
             try {
-              const out = await runExclusive(() =>
-                sendNote({
+              const out = await sendNote({
                   from: freshWalletId!,
                   to: allocatorId,
                   assetId: faucetId,
                   amount: BigInt(amount),
                   noteType: "public",
-                }),
-              );
+                });
               capturedMidenTxId = out?.txId;
               // Reference app waits for the note tx to COMMIT before
               // handing the noteId to the SDK (its 12s wait alone can be
@@ -949,12 +941,11 @@ export function TrustlessRedeemPanel() {
   }
 
   // Callback the Epoch SDK invokes to spend dUSDC from the derived wallet
-  // into a P2IDE note targeting Epoch's allocator on Miden. useSend does
-  // WASM proving + submit; runExclusive serialises access to the single
-  // WASM client instance so nothing else (background sync, another hook's
-  // store query) races the prove pass and panics on RefCell borrow. This
-  // is the same runExclusive pattern the deposit panel uses around
-  // waitForConsumableNotes / executeTx.
+  // into a P2ID note targeting Epoch's allocator on Miden. useSend does
+  // WASM proving + submit. IMPORTANT: consume()/sendNote() must be called
+  // BARE — they acquire the client mutex internally, so wrapping them in
+  // runExclusive self-deadlocks (verified live: 'draining N notes' hung
+  // forever). Only syncState() gets the runExclusive treatment.
   const buildCreateNoteCallback = useCallback(
     (fromWallet: string) => {
       return async (
@@ -963,8 +954,7 @@ export function TrustlessRedeemPanel() {
         allocatorId: string,
       ) => {
         try {
-          const out = await runExclusive(() =>
-            sendNote({
+          const out = await sendNote({
               from: fromWallet,
               to: allocatorId,
               assetId: faucetId,
@@ -974,8 +964,7 @@ export function TrustlessRedeemPanel() {
               // crosschain IntentForm exactly (SendTransaction(..., 'public',
               // amount), NO recallHeight). A recall height in the past made
               // the note reclaimable immediately and solvers may skip it.
-            }),
-          );
+            });
           if (out?.txId) {
             try {
               await waitForCommit(out.txId, {
@@ -1050,9 +1039,7 @@ export function TrustlessRedeemPanel() {
           `draining ${pendingNotes.length} note(s) into vault…`,
         );
         try {
-          await runExclusive(() =>
-            consume({ accountId: walletId, notes: pendingNotes as never[] }),
-          );
+          await consume({ accountId: walletId, notes: pendingNotes as never[] });
           // Small settle beat so IndexedDB reflects the new vault balance
           // by the time send() reads it.
           await new Promise((res) => setTimeout(res, 1500));
