@@ -754,11 +754,24 @@ export function TrustlessDepositPanel() {
         </div>
       )}
 
-      {(errorMsg || createErr) && (
-        <p style={{ fontSize: 13, color: "crimson" }}>
-          {errorMsg ?? createErr?.message}
-        </p>
-      )}
+      {(() => {
+        // The "already being tracked" error from createWallet is expected on
+        // re-derive: IndexedDB still has the wallet from the previous session
+        // and onDerive catches + recovers cleanly. Suppress that specific
+        // error from the visible errorbar; anything else surfaces.
+        const isTrackedNoise =
+          createErr?.message &&
+          /already being tracked/i.test(createErr.message);
+        const visibleErr = errorMsg
+          ? errorMsg
+          : isTrackedNoise
+            ? null
+            : createErr?.message ?? null;
+        if (!visibleErr) return null;
+        return (
+          <p style={{ fontSize: 13, color: "crimson" }}>{visibleErr}</p>
+        );
+      })()}
 
       {stage === "ready" && (
         <button
