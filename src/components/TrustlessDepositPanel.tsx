@@ -145,6 +145,77 @@ end
 
 const HUMAN_AMOUNT_DEFAULT = "1";
 
+type StageState = "idle" | "running" | "done";
+
+function StageRow({
+  label,
+  state,
+  detail,
+  link,
+}: {
+  label: string;
+  state: StageState;
+  detail: string;
+  link?: string | null;
+}) {
+  const badge =
+    state === "done" ? "✓" : state === "running" ? "…" : "·";
+  const badgeColor =
+    state === "done"
+      ? "#0a7a3e"
+      : state === "running"
+        ? "#c47a00"
+        : "var(--ink-3)";
+  const detailColor =
+    state === "idle" ? "var(--ink-3)" : "var(--ink)";
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "22px 130px 1fr",
+        gap: 8,
+        alignItems: "baseline",
+        padding: "4px 0",
+        borderBottom: "1px dashed var(--rule)",
+      }}
+    >
+      <span style={{ color: badgeColor, fontWeight: 700, textAlign: "center" }}>
+        {badge}
+      </span>
+      <span
+        style={{
+          textTransform: "uppercase",
+          fontSize: 11,
+          letterSpacing: "0.05em",
+          color: "var(--ink-2)",
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          color: detailColor,
+          wordBreak: "break-all",
+          fontSize: 12,
+        }}
+      >
+        {link ? (
+          <a
+            href={link}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: detailColor, textDecoration: "underline" }}
+          >
+            {detail}
+          </a>
+        ) : (
+          detail
+        )}
+      </span>
+    </div>
+  );
+}
+
 export function TrustlessDepositPanel() {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
@@ -550,26 +621,12 @@ export function TrustlessDepositPanel() {
         </div>
       )}
 
-      {stage === "quoting" && <p style={{ fontSize: 13 }}>Getting Epoch quote…</p>}
-      {stage === "signing-sepolia" && (
-        <p style={{ fontSize: 13 }}>Sign the Compact deposit tx on Sepolia in your ETH wallet…</p>
-      )}
-      {stage === "awaiting-delivery" && (
-        <p style={{ fontSize: 13 }}>
-          Waiting for Epoch to deliver dUSDC on Miden (~30–60s)…
-        </p>
-      )}
-      {stage === "consuming" && (
-        <p style={{ fontSize: 13 }}>Consuming the inbound note into your derived wallet (in-browser proof)…</p>
-      )}
-      {stage === "crediting" && (
-        <p style={{ fontSize: 13 }}>
-          Compiling <code>set_user_position</code> tx script and submitting
-          against v8-noauth (no key required — NoAuth account)…
-        </p>
-      )}
-
-      {stage === "done" && (
+      {(stage === "quoting" ||
+        stage === "signing-sepolia" ||
+        stage === "awaiting-delivery" ||
+        stage === "consuming" ||
+        stage === "crediting" ||
+        stage === "done") && (
         <div
           style={{
             fontSize: 12,
@@ -580,26 +637,120 @@ export function TrustlessDepositPanel() {
             marginTop: 16,
           }}
         >
-          <div>
-            <strong>Sepolia deposit tx</strong>: <code>{sepoliaTx}</code>
-          </div>
-          <div>
-            <strong>Miden note delivered</strong>: <code>{midenNoteId}</code>
-          </div>
-          <div>
-            <strong>Consumed at tx</strong>: <code>{consumeTx}</code>
-          </div>
-          <div>
-            <strong>slot-10 credit tx (v8-noauth)</strong>:{" "}
-            <code>{creditTx ?? "—"}</code>
-          </div>
-          <div style={{ marginTop: 8, color: "var(--ink-3)" }}>
-            The position is credited on the trustless controller
-            (<code>{TRUSTLESS_CONTROLLER_HEX.slice(0, 12)}…</code>) by a tx
-            script that the browser compiled + submitted with no signing
-            key — v8-noauth accepts any tx bundle. Zero server touches
-            anything from step 1 to step 4.
-          </div>
+          <StageRow
+            label="quote"
+            state={
+              stage === "quoting"
+                ? "running"
+                : stage === "signing-sepolia" ||
+                    stage === "awaiting-delivery" ||
+                    stage === "consuming" ||
+                    stage === "crediting" ||
+                    stage === "done"
+                  ? "done"
+                  : "idle"
+            }
+            detail={
+              stage === "quoting"
+                ? "Fetching Epoch quote…"
+                : "quote ready"
+            }
+          />
+          <StageRow
+            label="deposit"
+            state={
+              stage === "signing-sepolia"
+                ? "running"
+                : sepoliaTx
+                  ? "done"
+                  : "idle"
+            }
+            detail={
+              stage === "signing-sepolia"
+                ? "Sign the Compact deposit tx in your ETH wallet…"
+                : sepoliaTx
+                  ? sepoliaTx
+                  : "waiting"
+            }
+            link={
+              sepoliaTx
+                ? `https://sepolia.etherscan.io/tx/${sepoliaTx}`
+                : null
+            }
+          />
+          <StageRow
+            label="epoch delivery"
+            state={
+              stage === "awaiting-delivery"
+                ? "running"
+                : midenNoteId
+                  ? "done"
+                  : "idle"
+            }
+            detail={
+              stage === "awaiting-delivery"
+                ? "Epoch solver is filling your intent (~30–60s)…"
+                : midenNoteId
+                  ? midenNoteId
+                  : "waiting"
+            }
+            link={
+              midenNoteId
+                ? `https://testnet.midenscan.com/note/${midenNoteId}`
+                : null
+            }
+          />
+          <StageRow
+            label="consume"
+            state={
+              stage === "consuming"
+                ? "running"
+                : consumeTx
+                  ? "done"
+                  : "idle"
+            }
+            detail={
+              stage === "consuming"
+                ? "Draining the P2ID note into your derived wallet…"
+                : consumeTx
+                  ? consumeTx
+                  : "waiting"
+            }
+            link={
+              consumeTx
+                ? `https://testnet.midenscan.com/tx/${consumeTx}`
+                : null
+            }
+          />
+          <StageRow
+            label="credit slot-10"
+            state={
+              stage === "crediting"
+                ? "running"
+                : creditTx
+                  ? "done"
+                  : "idle"
+            }
+            detail={
+              stage === "crediting"
+                ? "Compiling set_user_position script + submitting against v8-noauth…"
+                : creditTx
+                  ? creditTx
+                  : "waiting"
+            }
+            link={
+              creditTx && creditTx.startsWith("0x")
+                ? `https://testnet.midenscan.com/tx/${creditTx}`
+                : null
+            }
+          />
+          {stage === "done" && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--rule)", color: "var(--ink-3)" }}>
+              ✅ Position credited on <code>{TRUSTLESS_CONTROLLER_HEX.slice(0, 12)}…</code> by
+              a tx script the browser compiled + submitted with no signing key.
+              v8-noauth accepts any tx bundle. Zero server touches from step 1 to step 4.
+            </div>
+          )}
         </div>
       )}
 
