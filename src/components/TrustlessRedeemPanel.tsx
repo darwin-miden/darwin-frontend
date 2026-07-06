@@ -472,6 +472,10 @@ export function TrustlessRedeemPanel() {
                   assetId: faucetId,
                   amount: BigInt(amount),
                   noteType: "public",
+                  // returnNote builds the P2ID note explicitly and returns
+                  // the Note object — without it SendResult.note is null and
+                  // the Epoch SDK rejects our callback for missing noteId.
+                  returnNote: true,
                 });
               capturedMidenTxId = out?.txId;
               // Reference app waits for the note tx to COMMIT before
@@ -762,6 +766,10 @@ export function TrustlessRedeemPanel() {
                   assetId: faucetId,
                   amount: BigInt(amount),
                   noteType: "public",
+                  // returnNote builds the P2ID note explicitly and returns
+                  // the Note object — without it SendResult.note is null and
+                  // the Epoch SDK rejects our callback for missing noteId.
+                  returnNote: true,
                 });
               capturedMidenTxId = out?.txId;
               // Reference app waits for the note tx to COMMIT before
@@ -964,6 +972,9 @@ export function TrustlessRedeemPanel() {
               // crosschain IntentForm exactly (SendTransaction(..., 'public',
               // amount), NO recallHeight). A recall height in the past made
               // the note reclaimable immediately and solvers may skip it.
+              // returnNote: SendResult.note is null without it, and the
+              // Epoch SDK rejects a callback result with no noteId.
+              returnNote: true,
             });
           if (out?.txId) {
             try {
