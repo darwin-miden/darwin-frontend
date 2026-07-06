@@ -32,6 +32,14 @@ const SelfCustodyWalletPanel = dynamic(
     ),
   { ssr: false },
 );
+const SelfCustodyPositionsSection = dynamic(
+  () =>
+    import("../../components/SelfCustodyPositionsSection").then(
+      (m) => m.SelfCustodyPositionsSection,
+    ),
+  { ssr: false },
+);
+
 const RelayPositionsPanel = dynamic(
   () =>
     import("../../components/RelayPositionsPanel").then(
@@ -312,6 +320,8 @@ export default function PortfolioPage() {
                 )}
               </p>
             </section>
+
+            <SelfCustodyPositionsSection />
 
             <section style={{ marginTop: 48 }}>
               <h2

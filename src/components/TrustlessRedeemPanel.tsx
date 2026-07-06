@@ -594,6 +594,7 @@ export function TrustlessRedeemPanel({
       client,
       compileTxScript,
       executeTx,
+      basket,
     ],
   );
 
@@ -764,6 +765,12 @@ export function TrustlessRedeemPanel({
 
         // ── Credit the trustless-controller position with the deposit —
         // full Darwin accounting: read-modify-write on slot-10.
+        // Per-basket keying when the panel has a basket prop — the
+        // roundtrip then exercises the exact native accounting path.
+        const rtFelts = basket
+          ? await basketFelts(basket.faucetHex)
+          : { basketSuffix: 0n, basketPrefix: 0n };
+        trace.basket = basket?.symbol ?? "flat";
         const setPosition = async (newPos: bigint) => {
           const clientAny = client as unknown as {
             importAccountById?: (id: unknown) => Promise<unknown>;
@@ -781,7 +788,13 @@ export function TrustlessRedeemPanel({
             await clientAny.syncState?.();
           } catch (_) {}
           const { suffix, prefix } = evmToUserIdFelts(evm);
-          const scriptSrc = buildSetPositionScript(suffix, prefix, newPos);
+          const scriptSrc = buildSetPositionScript(
+            suffix,
+            prefix,
+            newPos,
+            rtFelts.basketSuffix,
+            rtFelts.basketPrefix,
+          );
           const txScript = await compileTxScript({ code: scriptSrc });
           try {
             const res = await executeTx({
@@ -807,7 +820,7 @@ export function TrustlessRedeemPanel({
         try {
           const creditBase = dusdcMidenBaseUnits(DEPOSIT_HUMAN);
           const { position: posBefore, positionKnown: knownB } =
-            await fetchTrustlessPosition(evm);
+            await fetchTrustlessPosition(evm, rtFelts);
           trace.positionBeforeCredit = posBefore.toString();
           if (knownB) {
             const credited = posBefore + BigInt(creditBase);
@@ -936,7 +949,7 @@ export function TrustlessRedeemPanel({
         try {
           const spentBase = BigInt(String(rQuote.quoteResult.tokenIn ?? "0"));
           const { position: posBeforeD, positionKnown: knownD } =
-            await fetchTrustlessPosition(evm);
+            await fetchTrustlessPosition(evm, rtFelts);
           trace.positionBeforeDebit = posBeforeD.toString();
           if (knownD) {
             const debited =
@@ -985,6 +998,7 @@ export function TrustlessRedeemPanel({
       client,
       compileTxScript,
       executeTx,
+      basket,
     ],
   );
 
