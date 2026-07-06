@@ -988,23 +988,30 @@ export function TrustlessRedeemPanel() {
         await new Promise((res) => setTimeout(res, 1500));
       }
       setVaultSyncMsg("scanning for pending P2ID notes (~15s)…");
-      // Short window: if there are consumable notes, they surface fast
-      // after syncState. Longer than that just wastes wall-clock when
-      // the wallet has no committed notes (already drained).
+      console.log("[redeem] waitForConsumableNotes start");
+      // Same hard Promise.race cap as the autonomous flow —
+      // waitForConsumableNotes' internal timeout isn't honoured in some
+      // contexts and it must NOT run inside runExclusive (a hang there
+      // would hold the mutex and block the send() prove downstream).
       let pendingNotes: unknown[] = [];
       try {
-        pendingNotes =
-          (await runExclusive(() =>
-            waitForConsumableNotes({
-              accountId: walletId,
-              minCount: 1,
-              timeoutMs: 15_000,
-              intervalMs: 3_000,
-            }),
-          )) ?? [];
-      } catch (_) {
+        const raced = await Promise.race<unknown[] | undefined>([
+          waitForConsumableNotes({
+            accountId: walletId,
+            minCount: 1,
+            timeoutMs: 15_000,
+            intervalMs: 3_000,
+          }) as Promise<unknown[] | undefined>,
+          new Promise<unknown[]>((resolve) =>
+            setTimeout(() => resolve([]), 18_000),
+          ),
+        ]);
+        pendingNotes = Array.isArray(raced) ? raced : [];
+      } catch (e) {
+        console.log("[redeem] scan threw:", String(e).slice(0, 120));
         pendingNotes = [];
       }
+      console.log("[redeem] scan done, consumable:", pendingNotes.length);
       if (pendingNotes.length > 0) {
         setVaultSyncMsg(
           `draining ${pendingNotes.length} note(s) into vault…`,
@@ -1059,18 +1066,25 @@ export function TrustlessRedeemPanel() {
         usdcSepoliaBaseUnits(humanAmount),
         EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
       );
+      console.log("[redeem] fetching reverse quote…");
       const quote = await fetchRedeemQuote(sdkRef.current, {
         midenSourceId: walletId,
         evmRecipient: evmAddress as `0x${string}`,
         minUsdcSepoliaBaseUnits: minSepoliaOut,
       });
+      console.log(
+        "[redeem] quote OK — dUSDC in:",
+        String(quote.quoteResult.tokenIn ?? "?"),
+      );
 
       setStage("sending-note");
+      console.log("[redeem] submitting intent (P2IDE note will prove in WASM)…");
       const submit = await submitRedeemIntent(
         sdkRef.current,
         quote,
         buildCreateNoteCallback(walletId),
       );
+      console.log("[redeem] intent submitted");
 
       const nonce =
         (submit as { nonce?: string })?.nonce ??
