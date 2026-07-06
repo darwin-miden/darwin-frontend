@@ -22,10 +22,11 @@
 import {
   useConsume,
   useCreateWallet,
-  useNotes,
+  useMiden,
   useSend,
   useSyncControl,
   useSyncState,
+  useWaitForNotes,
 } from "@miden-sdk/react";
 import { useCallback, useRef, useState } from "react";
 import { createWalletClient, custom, keccak256, toBytes } from "viem";
@@ -144,6 +145,8 @@ export function TrustlessRedeemPanel() {
   const { consume } = useConsume();
   const { pauseSync, resumeSync } = useSyncControl();
   const { sync: syncState } = useSyncState();
+  const { waitForConsumableNotes } = useWaitForNotes();
+  const { runExclusive } = useMiden();
 
   const [stage, setStage] = useState<Stage>("idle");
   const [walletId, setWalletId] = useState<string | null>(null);
@@ -154,30 +157,7 @@ export function TrustlessRedeemPanel() {
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
   const [intentNonce, setIntentNonce] = useState<string | null>(null);
   const [vaultSyncMsg, setVaultSyncMsg] = useState<string | null>(null);
-  // useNotes runs a periodic query into IndexedDB. Left on during the
-  // send() prove pass, it races the WASM client and panics with
-  // "RefCell already borrowed" (verified live). Toggle it off the moment
-  // sync-vault completes so send() has exclusive access.
-  const [notesActive, setNotesActive] = useState(true);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
-
-  // Live subscription to the wallet's committed notes — same pattern as
-  // the epoch reference app's NotesInboxPanel. Reactively updates when
-  // syncState finds new notes for this wallet in IndexedDB. Passing
-  // `undefined` accountId shuts the internal polling loop down (per
-  // @miden-sdk/react docs: "useNotes only runs when accountId is set").
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const notesResult = (useNotes as any)({
-    status: "committed",
-    accountId: notesActive ? walletId ?? undefined : undefined,
-  }) as {
-    consumableNotes: Array<{
-      inputNoteRecord: () => { id: () => { toString: () => string } } | null;
-    }>;
-    refetch: () => Promise<void>;
-  };
-  const notesRef = useRef(notesResult);
-  notesRef.current = notesResult;
 
   // Silence the internal @miden-sdk error banner when it's just "already
   // being tracked" — that's expected on re-derive; onDerive handles it.
@@ -236,8 +216,12 @@ export function TrustlessRedeemPanel() {
   }
 
   // Callback the Epoch SDK invokes to spend dUSDC from the derived wallet
-  // into a P2IDE note targeting Epoch's allocator on Miden. useSend takes
-  // care of proving + submitting via WASM.
+  // into a P2IDE note targeting Epoch's allocator on Miden. useSend does
+  // WASM proving + submit; runExclusive serialises access to the single
+  // WASM client instance so nothing else (background sync, another hook's
+  // store query) races the prove pass and panics on RefCell borrow. This
+  // is the same runExclusive pattern the deposit panel uses around
+  // waitForConsumableNotes / executeTx.
   const buildCreateNoteCallback = useCallback(
     (fromWallet: string) => {
       return async (
@@ -246,16 +230,18 @@ export function TrustlessRedeemPanel() {
         allocatorId: string,
       ) => {
         try {
-          const out = await sendNote({
-            from: fromWallet,
-            to: allocatorId,
-            assetId: faucetId,
-            amount: BigInt(amount),
-            noteType: "public",
-            // recallHeight makes it a P2IDE per the reference-app spec:
-            // sender can reclaim the note if the solver never consumes.
-            recallHeight: 100_000,
-          });
+          const out = await runExclusive(() =>
+            sendNote({
+              from: fromWallet,
+              to: allocatorId,
+              assetId: faucetId,
+              amount: BigInt(amount),
+              noteType: "public",
+              // recallHeight makes it a P2IDE per the reference-app spec:
+              // sender can reclaim the note if the solver never consumes.
+              recallHeight: 100_000,
+            }),
+          );
           const outNoteId =
             (out?.note as unknown as { id?: () => { toString?: () => string } })
               ?.id?.()
@@ -270,7 +256,7 @@ export function TrustlessRedeemPanel() {
         }
       };
     },
-    [sendNote],
+    [runExclusive, sendNote],
   );
 
   async function onRedeem() {
@@ -280,62 +266,54 @@ export function TrustlessRedeemPanel() {
       setErrorMsg(null);
 
       // Force-sync the derived wallet and drain any consumable notes into
-      // the vault before we try to spend dUSDC. Verified live: after the
-      // deposit flow, the P2ID notes from Epoch's solver are COMMITTED
-      // on-chain but the browser's local note store often doesn't have
-      // them ingested (single-shot syncState misses them). Do multiple
-      // sync cycles + poll useNotes reactively (matches the epoch
-      // reference-app NotesInboxPanel pattern).
+      // the vault before we spend dUSDC. Every WASM call goes through
+      // runExclusive so the background auto-sync + any other Miden hook
+      // can't race and panic on RefCell (the /trustless route already
+      // isolates this panel; runExclusive is belt-and-braces).
       setStage("sync-vault");
-      const collectConsumableIds = (): string[] => {
-        const cn = notesRef.current?.consumableNotes ?? [];
-        return cn
-          .map((n) => n.inputNoteRecord()?.id()?.toString() ?? "")
-          .filter(Boolean);
-      };
-      for (let i = 0; i < 6; i++) {
-        setVaultSyncMsg(`syncing derived wallet (${i + 1}/6)…`);
+      for (let i = 0; i < 3; i++) {
+        setVaultSyncMsg(`syncing derived wallet (${i + 1}/3)…`);
         try {
-          await syncState();
+          await runExclusive(() => syncState());
         } catch (_) {}
-        try {
-          await notesRef.current?.refetch?.();
-        } catch (_) {}
-        const ids = collectConsumableIds();
-        if (ids.length > 0) {
-          setVaultSyncMsg(`found ${ids.length} consumable note(s), draining…`);
-          break;
-        }
-        await new Promise((res) => setTimeout(res, 2500));
+        await new Promise((res) => setTimeout(res, 1500));
       }
-      const idsToConsume = collectConsumableIds();
-      if (idsToConsume.length > 0) {
-        setVaultSyncMsg(`draining ${idsToConsume.length} note(s) into vault…`);
+      setVaultSyncMsg("scanning for pending P2ID notes (up to 60s)…");
+      let pendingNotes: unknown[] = [];
+      try {
+        pendingNotes =
+          (await runExclusive(() =>
+            waitForConsumableNotes({
+              accountId: walletId,
+              minCount: 1,
+              timeoutMs: 60_000,
+              intervalMs: 5_000,
+            }),
+          )) ?? [];
+      } catch (_) {
+        pendingNotes = [];
+      }
+      if (pendingNotes.length > 0) {
+        setVaultSyncMsg(
+          `draining ${pendingNotes.length} note(s) into vault…`,
+        );
         try {
-          await consume({ accountId: walletId, notes: idsToConsume });
-          // Give IndexedDB a beat to reflect the new vault balance.
-          await new Promise((res) => setTimeout(res, 2000));
-          try {
-            await notesRef.current?.refetch?.();
-          } catch (_) {}
+          await runExclusive(() =>
+            consume({ accountId: walletId, notes: pendingNotes as never[] }),
+          );
+          // Small settle beat so IndexedDB reflects the new vault balance
+          // by the time send() reads it.
+          await new Promise((res) => setTimeout(res, 1500));
         } catch (e) {
           console.warn("[redeem] consume failed:", e);
         }
       } else {
         setVaultSyncMsg(
-          "no consumable notes detected — vault may already be funded",
+          "no consumable notes — vault already funded from a prior drain",
         );
-        // Small hold so the user can read the message before we move on.
-        await new Promise((res) => setTimeout(res, 1500));
+        await new Promise((res) => setTimeout(res, 1000));
       }
       setVaultSyncMsg(null);
-
-      // Kill the useNotes subscription before we hand the WASM client to
-      // send() — otherwise the reactive query races the prove pass and
-      // panics on RefCell.
-      setNotesActive(false);
-      // Let React re-render + unsubscribe before we proceed.
-      await new Promise((res) => setTimeout(res, 300));
 
       setStage("quoting");
 

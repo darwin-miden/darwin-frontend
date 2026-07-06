@@ -23,13 +23,6 @@ const TrustlessDepositPanel = dynamic(
   { ssr: false },
 );
 
-const TrustlessRedeemPanel = dynamic(
-  () =>
-    import("../../components/TrustlessRedeemPanel").then(
-      (m) => m.TrustlessRedeemPanel,
-    ),
-  { ssr: false },
-);
 
 export default function TrustlessPage() {
   return (
@@ -74,19 +67,29 @@ export default function TrustlessPage() {
           marginBottom: 8,
         }}
       >
-        Trustless flow
+        Trustless deposit
       </h1>
-      <p style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 32 }}>
+      <p style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
         Fully browser-side flow — Miden signing key derived from a
-        MetaMask signature. <strong>Deposit</strong> bridges Sepolia →
-        Miden via Epoch and credits a <code>NoAuth</code> Darwin
-        controller. <strong>Redeem</strong> reverses via Epoch:
-        Miden → Sepolia through a P2IDE note. Zero Darwin backend
-        involved in either direction.
+        MetaMask signature, Sepolia → Miden bridge via Epoch, position
+        credit written against a <code>NoAuth</code> Darwin controller.
+        Zero Darwin backend involved after the initial page load.
+      </p>
+      <p style={{ fontSize: 13, marginBottom: 32 }}>
+        Need to redeem?{" "}
+        <Link
+          href="/trustless/redeem"
+          style={{
+            fontFamily: "var(--font-mono-stack)",
+            textDecoration: "underline",
+            color: "var(--ink)",
+          }}
+        >
+          Miden → Sepolia via Epoch →
+        </Link>
       </p>
 
       <TrustlessDepositPanel />
-      <TrustlessRedeemPanel />
     </main>
   );
 }
