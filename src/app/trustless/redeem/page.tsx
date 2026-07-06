@@ -68,11 +68,9 @@ export default function TrustlessRedeemPage() {
         Trustless redeem
       </h1>
       <p style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 32 }}>
-        Reverse path — dUSDC on Miden → USDC on Sepolia via Epoch. Your
-        derived Miden wallet spends dUSDC into a P2IDE note targeting
-        Epoch&apos;s allocator; the solver consumes the note on Miden
-        and delivers USDC to your Sepolia address. No user tx on Sepolia,
-        no Darwin backend.
+        Miden → Sepolia via Epoch. Your derived wallet spends dUSDC into
+        a P2IDE note; Epoch&apos;s solver consumes it and delivers USDC
+        to your Sepolia address. No user tx on Sepolia, no Darwin backend.
       </p>
 
       <TrustlessRedeemPanel />

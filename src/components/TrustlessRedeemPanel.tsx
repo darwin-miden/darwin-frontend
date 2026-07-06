@@ -28,8 +28,15 @@ import {
   useSyncState,
   useWaitForNotes,
 } from "@miden-sdk/react";
-import { useCallback, useRef, useState } from "react";
-import { createWalletClient, custom, keccak256, toBytes } from "viem";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createWalletClient,
+  custom,
+  http,
+  keccak256,
+  toBytes,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
 import { useAccount, useSignMessage, useSwitchChain } from "wagmi";
 import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
@@ -77,8 +84,7 @@ function StageRow({
   detail: string;
   link?: string | null;
 }) {
-  const badge =
-    state === "done" ? "✓" : state === "running" ? "…" : "·";
+  const badge = state === "done" ? "✓" : state === "running" ? "◐" : "·";
   const badgeColor =
     state === "done"
       ? "#0a7a3e"
@@ -86,26 +92,43 @@ function StageRow({
         ? "#c47a00"
         : "var(--ink-3)";
   const detailColor = state === "idle" ? "var(--ink-3)" : "var(--ink)";
+  const running = state === "running";
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "22px 130px 1fr",
-        gap: 8,
-        alignItems: "baseline",
-        padding: "4px 0",
+        gridTemplateColumns: "28px 150px 1fr",
+        gap: 10,
+        alignItems: "center",
+        padding: "8px 10px",
+        borderRadius: 4,
+        background: running ? "#fff4dc" : "transparent",
+        borderLeft: running
+          ? "3px solid #c47a00"
+          : "3px solid transparent",
         borderBottom: "1px dashed var(--rule)",
+        transition: "background 120ms ease-out",
       }}
     >
-      <span style={{ color: badgeColor, fontWeight: 700, textAlign: "center" }}>
+      <span
+        style={{
+          color: badgeColor,
+          fontWeight: 700,
+          fontSize: 16,
+          textAlign: "center",
+          display: "inline-block",
+          animation: running ? "trustlessSpin 1.2s linear infinite" : undefined,
+        }}
+      >
         {badge}
       </span>
       <span
         style={{
           textTransform: "uppercase",
           fontSize: 11,
-          letterSpacing: "0.05em",
-          color: "var(--ink-2)",
+          letterSpacing: "0.08em",
+          color: running ? "#8b5500" : "var(--ink-2)",
+          fontWeight: running ? 700 : 500,
         }}
       >
         {label}
@@ -115,6 +138,7 @@ function StageRow({
           color: detailColor,
           wordBreak: "break-all",
           fontSize: 12,
+          fontFamily: link ? "var(--font-mono-stack)" : undefined,
         }}
       >
         {link ? (
@@ -158,6 +182,207 @@ export function TrustlessRedeemPanel() {
   const [intentNonce, setIntentNonce] = useState<string | null>(null);
   const [vaultSyncMsg, setVaultSyncMsg] = useState<string | null>(null);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
+
+  // Autonomous E2E hook — called by Playwright with the dev key. Bypasses
+  // wagmi/MetaMask entirely by building a local viem walletClient from the
+  // private key; every WASM interaction still goes through runExclusive
+  // and the SDK still hits real Epoch endpoints + real Miden network. No
+  // mocks anywhere. Returns full trace so the runner can loop autonomously.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window as unknown as {
+      __darwinTrustlessRedeem?: (
+        devKeyHex: string,
+        humanAmount: string,
+      ) => Promise<unknown>;
+    };
+    w.__darwinTrustlessRedeem = async (devKeyHex, humanAmount) => {
+      const trace: Record<string, unknown> = { humanAmount, startedAt: Date.now() };
+      try {
+        const account = privateKeyToAccount(devKeyHex as `0x${string}`);
+        const evm = account.address as `0x${string}`;
+        trace.evm = evm;
+
+        // Derive wallet — deterministic from the signature on the same
+        // message the UI would use.
+        const sig = await account.signMessage({ message: DERIVE_MESSAGE(evm) });
+        const seed = keccak256(toBytes(sig));
+        const seedBytes = new Uint8Array(
+          seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
+        );
+        pauseSync();
+        let derivedWalletId: string | null = null;
+        try {
+          try {
+            const acc = await createWallet({
+              initSeed: seedBytes,
+              storageMode: "private",
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
+            });
+            derivedWalletId = acc.id().toString();
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            const m = msg.match(/id (0x[0-9a-fA-F]+)/);
+            if (m && /already being tracked/i.test(msg)) {
+              derivedWalletId = m[1];
+            } else {
+              throw e;
+            }
+          }
+        } finally {
+          resumeSync();
+        }
+        if (!derivedWalletId) throw new Error("no wallet id");
+        trace.walletId = derivedWalletId;
+
+        // Drain any consumable notes into the vault.
+        pauseSync();
+        for (let i = 0; i < 3; i++) {
+          try {
+            await runExclusive(() => syncState());
+          } catch (_) {}
+          await new Promise((res) => setTimeout(res, 1200));
+        }
+        let pending: unknown[] = [];
+        try {
+          pending =
+            (await runExclusive(() =>
+              waitForConsumableNotes({
+                accountId: derivedWalletId!,
+                minCount: 1,
+                timeoutMs: 15_000,
+                intervalMs: 3_000,
+              }),
+            )) ?? [];
+        } catch (_) {}
+        trace.pendingNotesFound = pending.length;
+        if (pending.length > 0) {
+          try {
+            await runExclusive(() =>
+              consume({
+                accountId: derivedWalletId!,
+                notes: pending as never[],
+              }),
+            );
+            trace.drained = pending.length;
+          } catch (e) {
+            trace.drainError = String(e).slice(0, 200);
+          }
+          await new Promise((res) => setTimeout(res, 1000));
+        }
+
+        // Build the Epoch SDK — same shape the UI creates. Wallet client
+        // chain id is overridden to MIDEN_DESTINATION_CHAIN_ID for the
+        // Miden-collateral path.
+        const sepoliaWC = createWalletClient({
+          account,
+          chain: sepolia,
+          transport: http(),
+        });
+        const midenWC = {
+          ...sepoliaWC,
+          chain: { ...sepoliaWC.chain, id: MIDEN_DESTINATION_CHAIN_ID },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any;
+        const sdk = new EpochIntentSDK({
+          apiBaseUrl: ALLOCATOR_URL,
+          walletClient: midenWC,
+        });
+
+        const minSepoliaOut = applySlippageBps(
+          usdcSepoliaBaseUnits(humanAmount),
+          EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
+        );
+        const quote = await fetchRedeemQuote(sdk, {
+          midenSourceId: derivedWalletId!,
+          evmRecipient: evm,
+          minUsdcSepoliaBaseUnits: minSepoliaOut,
+        });
+        trace.quoteOk = true;
+        trace.tokenIn = String(quote.quoteResult.tokenIn ?? "");
+
+        let capturedMidenTxId: string | undefined;
+        let capturedNoteId: string | undefined;
+        const submit = await submitRedeemIntent(sdk, quote, async (
+          faucetId,
+          amount,
+          allocatorId,
+        ) => {
+          try {
+            const out = await runExclusive(() =>
+              sendNote({
+                from: derivedWalletId!,
+                to: allocatorId,
+                assetId: faucetId,
+                amount: BigInt(amount),
+                noteType: "public",
+                recallHeight: 100_000,
+              }),
+            );
+            capturedMidenTxId = out?.txId;
+            capturedNoteId =
+              (out?.note as unknown as {
+                id?: () => { toString?: () => string };
+              })
+                ?.id?.()
+                ?.toString?.() ?? undefined;
+            return { success: true, noteId: capturedNoteId };
+          } catch (e) {
+            trace.p2ideError = String(e).slice(0, 200);
+            return { success: false };
+          }
+        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const s = submit as any;
+        trace.midenTxId = capturedMidenTxId;
+        trace.noteId = capturedNoteId;
+        trace.intentNonce = String(
+          s?.nonce ?? s?.submittedIntentData?.compact?.nonce ?? "",
+        );
+
+        // Poll intent status until success/failed/timeout.
+        const url = `${ALLOCATOR_URL}/intentStatus/${evm}/${trace.intentNonce}`;
+        let fillTx: string | undefined;
+        for (let t = 0; t < 24; t++) {
+          try {
+            const r = await fetch(url).then((r) => r.json());
+            if (Array.isArray(r) && r.length > 0) {
+              const st = r[0];
+              if (st?.status === "success") {
+                fillTx = st?.transactionHash;
+                break;
+              }
+              if (st?.status === "failed") {
+                trace.fillFailed = st;
+                break;
+              }
+            }
+          } catch (_) {}
+          await new Promise((res) => setTimeout(res, 5_000));
+        }
+        trace.fillTx = fillTx;
+        trace.finishedAt = Date.now();
+        trace.wallClockMs = (trace.finishedAt as number) - (trace.startedAt as number);
+        return trace;
+      } catch (e) {
+        trace.error = e instanceof Error ? e.message : String(e);
+        trace.finishedAt = Date.now();
+        return trace;
+      } finally {
+        resumeSync();
+      }
+    };
+  }, [
+    createWallet,
+    pauseSync,
+    resumeSync,
+    runExclusive,
+    syncState,
+    waitForConsumableNotes,
+    consume,
+    sendNote,
+  ]);
 
   // Silence the internal @miden-sdk error banner when it's just "already
   // being tracked" — that's expected on re-derive; onDerive handles it.
@@ -278,7 +503,10 @@ export function TrustlessRedeemPanel() {
         } catch (_) {}
         await new Promise((res) => setTimeout(res, 1500));
       }
-      setVaultSyncMsg("scanning for pending P2ID notes (up to 60s)…");
+      setVaultSyncMsg("scanning for pending P2ID notes (~15s)…");
+      // Short window: if there are consumable notes, they surface fast
+      // after syncState. Longer than that just wastes wall-clock when
+      // the wallet has no committed notes (already drained).
       let pendingNotes: unknown[] = [];
       try {
         pendingNotes =
@@ -286,8 +514,8 @@ export function TrustlessRedeemPanel() {
             waitForConsumableNotes({
               accountId: walletId,
               minCount: 1,
-              timeoutMs: 60_000,
-              intervalMs: 5_000,
+              timeoutMs: 15_000,
+              intervalMs: 3_000,
             }),
           )) ?? [];
       } catch (_) {
@@ -400,7 +628,13 @@ export function TrustlessRedeemPanel() {
   }
 
   return (
-    <section style={{ marginTop: 48 }}>
+    <section style={{ marginTop: 24 }}>
+      <style>{`
+        @keyframes trustlessSpin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
       <h2
         style={{
           fontSize: 14,
@@ -412,14 +646,13 @@ export function TrustlessRedeemPanel() {
           marginBottom: 16,
         }}
       >
-        Trustless redeem · Miden → Sepolia
+        Redeem · demo (no server, no extension)
       </h2>
 
       <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
-        Reverse path — burn dUSDC from your derived Miden wallet into a
-        P2IDE note targeting Epoch&apos;s allocator; the Epoch solver
-        consumes it and pays USDC to your Sepolia address. No Sepolia tx
-        on your side, no Darwin backend.
+        Same MetaMask signature as the deposit → same derived Miden
+        wallet. Burn its dUSDC into a P2IDE note; Epoch&apos;s solver
+        pays USDC to your Sepolia address.
       </p>
 
       {!ethConnected && (
