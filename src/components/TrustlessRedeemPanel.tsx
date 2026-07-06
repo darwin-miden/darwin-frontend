@@ -269,17 +269,35 @@ export function TrustlessRedeemPanel() {
         }
         setVaultSyncMsg("scanning for pending P2ID notes (~15s)…");
         log("waitForConsumableNotes");
+        // waitForConsumableNotes' internal timeout isn't honoured in some
+        // fresh-IndexedDB contexts (verified: hangs indefinitely in a
+        // Playwright test even with timeoutMs=15_000). Wrap in a manual
+        // Promise.race so the flow can't get stuck — if there's no
+        // vault balance, we'll fall through and let send() throw the
+        // real underflow error instead.
+        const HARD_TIMEOUT_MS = 18_000;
         let pending: unknown[] = [];
         try {
-          pending =
-            (await runExclusive(() =>
+          const raced = await Promise.race<unknown[] | undefined>([
+            runExclusive(() =>
               waitForConsumableNotes({
                 accountId: derivedWalletId!,
                 minCount: 1,
                 timeoutMs: 15_000,
                 intervalMs: 3_000,
               }),
-            )) ?? [];
+            ) as Promise<unknown[] | undefined>,
+            new Promise<unknown[]>((resolve) =>
+              setTimeout(() => resolve([]), HARD_TIMEOUT_MS),
+            ),
+          ]);
+          pending = Array.isArray(raced) ? raced : [];
+          if (
+            !Array.isArray(pending) ||
+            (pending as unknown[]).length === 0
+          ) {
+            log("no consumable notes after hard timeout");
+          }
         } catch (e) {
           log("waitForConsumableNotes threw", String(e).slice(0, 100));
         }
