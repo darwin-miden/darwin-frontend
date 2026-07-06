@@ -275,18 +275,20 @@ export function TrustlessRedeemPanel() {
         // Promise.race so the flow can't get stuck — if there's no
         // vault balance, we'll fall through and let send() throw the
         // real underflow error instead.
+        // NB: NOT wrapped in runExclusive — waitForConsumableNotes is a
+        // read + it internally holds the mutex on hangs, blocking every
+        // downstream runExclusive (like the send() proving pass). We
+        // hard-cap it with Promise.race so the flow can't stall.
         const HARD_TIMEOUT_MS = 18_000;
         let pending: unknown[] = [];
         try {
           const raced = await Promise.race<unknown[] | undefined>([
-            runExclusive(() =>
-              waitForConsumableNotes({
-                accountId: derivedWalletId!,
-                minCount: 1,
-                timeoutMs: 15_000,
-                intervalMs: 3_000,
-              }),
-            ) as Promise<unknown[] | undefined>,
+            waitForConsumableNotes({
+              accountId: derivedWalletId!,
+              minCount: 1,
+              timeoutMs: 15_000,
+              intervalMs: 3_000,
+            }) as Promise<unknown[] | undefined>,
             new Promise<unknown[]>((resolve) =>
               setTimeout(() => resolve([]), HARD_TIMEOUT_MS),
             ),
