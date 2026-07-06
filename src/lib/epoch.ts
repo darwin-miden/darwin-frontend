@@ -108,7 +108,7 @@ function buildTaskData(params: EpochQuoteParams) {
       // Public: the note is written to the note tree so anyone (including
       // our relay worker's brute-force scan) can consume it. Validated
       // E2E 2026-07-04 with the fresh Epoch dUSDC faucet.
-      midenNoteType: "Public",
+      midenNoteType: "P2ID",
     },
   };
 }
