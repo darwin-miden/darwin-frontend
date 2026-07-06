@@ -780,7 +780,12 @@ export function TrustlessRedeemPanel() {
             detail={
               stage === "sync-vault"
                 ? vaultSyncMsg ?? "syncing…"
-                : "vault ready (pending notes drained)"
+                : stage === "quoting" ||
+                    stage === "sending-note" ||
+                    stage === "awaiting-fill" ||
+                    stage === "done"
+                  ? "vault ready"
+                  : "waiting"
             }
           />
           <StageRow
@@ -797,7 +802,11 @@ export function TrustlessRedeemPanel() {
             detail={
               stage === "quoting"
                 ? "Reverse-quoting Miden→Sepolia via Epoch…"
-                : "quote ready"
+                : stage === "sending-note" ||
+                    stage === "awaiting-fill" ||
+                    stage === "done"
+                  ? "quote ready"
+                  : "waiting"
             }
           />
           <StageRow
