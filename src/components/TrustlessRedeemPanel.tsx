@@ -260,33 +260,40 @@ export function TrustlessRedeemPanel() {
       setErrorMsg(null);
 
       // Force-sync the derived wallet and drain any consumable notes into
-      // the vault before we try to spend dUSDC. The deposit flow's Step 3
-      // consumes the delivered P2ID note into the vault, but if the user
-      // did the deposit in a different tab / earlier session, IndexedDB's
-      // note state may still be "committed but not consumed" — trying to
-      // send dUSDC then would underflow at 0 balance.
+      // the vault before we try to spend dUSDC. Verified live: after the
+      // deposit flow, the P2ID notes from Epoch's solver are COMMITTED
+      // on-chain but the browser's local note store often doesn't have
+      // them ingested (single-shot syncState misses them). Do multiple
+      // sync cycles + a long wait window to give the client time to
+      // catch the note tag(s) for the wallet.
       setStage("sync-vault");
-      setVaultSyncMsg("syncing derived wallet + draining pending notes…");
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const clientAny = client as any;
-        await clientAny?.syncState?.();
-      } catch (_) {}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const clientAny = client as unknown as { syncState?: () => Promise<unknown> };
+      for (let i = 0; i < 5; i++) {
+        setVaultSyncMsg(`syncing derived wallet (${i + 1}/5)…`);
+        try {
+          await clientAny?.syncState?.();
+        } catch (_) {}
+        await new Promise((res) => setTimeout(res, 2000));
+      }
+      setVaultSyncMsg("scanning for pending notes (up to 90s)…");
       try {
         const pending = await waitForConsumableNotes({
           accountId: walletId,
           minCount: 1,
-          timeoutMs: 10_000,
-          intervalMs: 3_000,
+          timeoutMs: 90_000,
+          intervalMs: 5_000,
         });
         if (pending && pending.length > 0) {
           setVaultSyncMsg(`draining ${pending.length} note(s) into vault…`);
           await consume({ accountId: walletId, notes: pending });
+          // Give the vault state a beat to settle in IndexedDB.
+          await new Promise((res) => setTimeout(res, 2000));
+        } else {
+          setVaultSyncMsg("no pending notes found — vault may already be funded");
         }
-      } catch (_) {
-        // No consumable notes in the window is OK — if the wallet already
-        // has vault balance, we'll spend that. Any actual failure surfaces
-        // as an underflow at send time.
+      } catch (e) {
+        console.warn("[redeem] consume-pending step failed:", e);
       }
       setVaultSyncMsg(null);
 
