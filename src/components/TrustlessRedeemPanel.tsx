@@ -22,13 +22,13 @@
 import {
   useConsume,
   useCreateWallet,
-  useMiden,
+  useNotes,
   useSend,
   useSyncControl,
-  useWaitForNotes,
+  useSyncState,
 } from "@miden-sdk/react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { createWalletClient, custom, keccak256, parseUnits, toBytes } from "viem";
+import { useCallback, useRef, useState } from "react";
+import { createWalletClient, custom, keccak256, toBytes } from "viem";
 import { sepolia } from "viem/chains";
 import { useAccount, useSignMessage, useSwitchChain } from "wagmi";
 import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
@@ -36,11 +36,9 @@ import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
 import {
   ALLOCATOR_URL,
   EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
-  EPOCH_USDC_SEPOLIA,
   MIDEN_DESTINATION_CHAIN_ID,
   SEPOLIA_CHAIN_ID,
   applySlippageBps,
-  dusdcMidenBaseUnits,
   fetchRedeemQuote,
   submitRedeemIntent,
   usdcSepoliaBaseUnits,
@@ -141,12 +139,11 @@ export function TrustlessRedeemPanel() {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
   const { switchChainAsync } = useSwitchChain();
-  const { client } = useMiden();
   const { createWallet, isCreating, error: createErr } = useCreateWallet();
   const { send: sendNote } = useSend();
   const { consume } = useConsume();
-  const { waitForConsumableNotes } = useWaitForNotes();
   const { pauseSync, resumeSync } = useSyncControl();
+  const { sync: syncState } = useSyncState();
 
   const [stage, setStage] = useState<Stage>("idle");
   const [walletId, setWalletId] = useState<string | null>(null);
@@ -158,6 +155,22 @@ export function TrustlessRedeemPanel() {
   const [intentNonce, setIntentNonce] = useState<string | null>(null);
   const [vaultSyncMsg, setVaultSyncMsg] = useState<string | null>(null);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
+
+  // Live subscription to the wallet's committed notes — same pattern as
+  // the epoch reference app's NotesInboxPanel. Reactively updates when
+  // syncState finds new notes for this wallet in IndexedDB.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const notesResult = (useNotes as any)({
+    status: "committed",
+    accountId: walletId ?? undefined,
+  }) as {
+    consumableNotes: Array<{
+      inputNoteRecord: () => { id: () => { toString: () => string } } | null;
+    }>;
+    refetch: () => Promise<void>;
+  };
+  const notesRef = useRef(notesResult);
+  notesRef.current = notesResult;
 
   // Silence the internal @miden-sdk error banner when it's just "already
   // being tracked" — that's expected on re-derive; onDerive handles it.
@@ -264,36 +277,49 @@ export function TrustlessRedeemPanel() {
       // deposit flow, the P2ID notes from Epoch's solver are COMMITTED
       // on-chain but the browser's local note store often doesn't have
       // them ingested (single-shot syncState misses them). Do multiple
-      // sync cycles + a long wait window to give the client time to
-      // catch the note tag(s) for the wallet.
+      // sync cycles + poll useNotes reactively (matches the epoch
+      // reference-app NotesInboxPanel pattern).
       setStage("sync-vault");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const clientAny = client as unknown as { syncState?: () => Promise<unknown> };
-      for (let i = 0; i < 5; i++) {
-        setVaultSyncMsg(`syncing derived wallet (${i + 1}/5)…`);
+      const collectConsumableIds = (): string[] => {
+        const cn = notesRef.current?.consumableNotes ?? [];
+        return cn
+          .map((n) => n.inputNoteRecord()?.id()?.toString() ?? "")
+          .filter(Boolean);
+      };
+      for (let i = 0; i < 6; i++) {
+        setVaultSyncMsg(`syncing derived wallet (${i + 1}/6)…`);
         try {
-          await clientAny?.syncState?.();
+          await syncState();
         } catch (_) {}
-        await new Promise((res) => setTimeout(res, 2000));
-      }
-      setVaultSyncMsg("scanning for pending notes (up to 90s)…");
-      try {
-        const pending = await waitForConsumableNotes({
-          accountId: walletId,
-          minCount: 1,
-          timeoutMs: 90_000,
-          intervalMs: 5_000,
-        });
-        if (pending && pending.length > 0) {
-          setVaultSyncMsg(`draining ${pending.length} note(s) into vault…`);
-          await consume({ accountId: walletId, notes: pending });
-          // Give the vault state a beat to settle in IndexedDB.
-          await new Promise((res) => setTimeout(res, 2000));
-        } else {
-          setVaultSyncMsg("no pending notes found — vault may already be funded");
+        try {
+          await notesRef.current?.refetch?.();
+        } catch (_) {}
+        const ids = collectConsumableIds();
+        if (ids.length > 0) {
+          setVaultSyncMsg(`found ${ids.length} consumable note(s), draining…`);
+          break;
         }
-      } catch (e) {
-        console.warn("[redeem] consume-pending step failed:", e);
+        await new Promise((res) => setTimeout(res, 2500));
+      }
+      const idsToConsume = collectConsumableIds();
+      if (idsToConsume.length > 0) {
+        setVaultSyncMsg(`draining ${idsToConsume.length} note(s) into vault…`);
+        try {
+          await consume({ accountId: walletId, notes: idsToConsume });
+          // Give IndexedDB a beat to reflect the new vault balance.
+          await new Promise((res) => setTimeout(res, 2000));
+          try {
+            await notesRef.current?.refetch?.();
+          } catch (_) {}
+        } catch (e) {
+          console.warn("[redeem] consume failed:", e);
+        }
+      } else {
+        setVaultSyncMsg(
+          "no consumable notes detected — vault may already be funded",
+        );
+        // Small hold so the user can read the message before we move on.
+        await new Promise((res) => setTimeout(res, 1500));
       }
       setVaultSyncMsg(null);
 
