@@ -198,22 +198,30 @@ export function TrustlessRedeemPanel() {
     };
     w.__darwinTrustlessRedeem = async (devKeyHex, humanAmount) => {
       const trace: Record<string, unknown> = { humanAmount, startedAt: Date.now() };
+      const log = (step: string, extra?: unknown) => {
+        const t = ((Date.now() - (trace.startedAt as number)) / 1000).toFixed(1);
+        console.log(`[redeem-hook t+${t}s] ${step}`, extra ?? "");
+      };
       try {
+        log("start");
         const account = privateKeyToAccount(devKeyHex as `0x${string}`);
         const evm = account.address as `0x${string}`;
         trace.evm = evm;
 
         // Derive wallet — deterministic from the signature on the same
         // message the UI would use.
+        log("signing derive message");
         const sig = await account.signMessage({ message: DERIVE_MESSAGE(evm) });
         const seed = keccak256(toBytes(sig));
         const seedBytes = new Uint8Array(
           seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
         );
+        log("derived seed", seed.slice(0, 20));
         pauseSync();
         let derivedWalletId: string | null = null;
         try {
           try {
+            log("createWallet");
             const acc = await createWallet({
               initSeed: seedBytes,
               storageMode: "private",
@@ -235,13 +243,17 @@ export function TrustlessRedeemPanel() {
         }
         if (!derivedWalletId) throw new Error("no wallet id");
         trace.walletId = derivedWalletId;
+        log("walletId", derivedWalletId);
 
         // Drain any consumable notes into the vault.
         pauseSync();
         for (let i = 0; i < 3; i++) {
+          log(`syncState ${i + 1}/3`);
           try {
             await runExclusive(() => syncState());
-          } catch (_) {}
+          } catch (e) {
+            log(`syncState ${i + 1}/3 failed`, String(e).slice(0, 100));
+          }
           await new Promise((res) => setTimeout(res, 1200));
         }
         let pending: unknown[] = [];
