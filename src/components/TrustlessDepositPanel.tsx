@@ -33,6 +33,7 @@ import {
   useCreateWallet,
   useMiden,
   useSyncControl,
+  useSyncState,
   useTransaction,
   useWaitForNotes,
 } from "@miden-sdk/react";
@@ -76,6 +77,7 @@ import {
   fetchQuote,
   submitIntent,
   usdcSepoliaBaseUnits,
+  extractNonce,
 } from "../lib/epoch";
 import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
 import { createWalletClient, custom } from "viem";
@@ -180,6 +182,7 @@ export function TrustlessDepositPanel() {
     useCreateWallet();
   const { consume, isLoading: isConsuming } = useConsume();
   const { waitForConsumableNotes } = useWaitForNotes();
+  const { sync: syncState } = useSyncState();
   const { execute: executeTx } = useTransaction();
   const { txScript: compileTxScript } = useCompile();
   const { pauseSync, resumeSync } = useSyncControl();
@@ -388,29 +391,91 @@ export function TrustlessDepositPanel() {
       // solveIntent's shape varies — extract what we can.
       const depTx = (submit as { transactionHash?: string })?.transactionHash;
       setSepoliaTx(depTx ?? null);
+      const intentNonce = extractNonce(submit);
 
       setStage("awaiting-delivery");
-      // Poll for the incoming dUSDC note. Wrap in runExclusive so its
-      // internal sync loop doesn't collide with anything else.
-      const delivered = await runExclusive(() =>
-        waitForConsumableNotes({
-          accountId: walletId,
-          minCount: 1,
-          timeoutMs: 180_000,
-          intervalMs: 5_000,
-        }),
-      );
-      const inbound = delivered?.[0];
+      // Authoritative delivery signal first: poll Epoch's /intentStatus,
+      // which flips to success (with the miden note id) as soon as the
+      // solver delivers — usually well before the local WASM client has
+      // synced the note tag. The old flow only watched the local client,
+      // so the panel showed 'filling your intent…' minutes after the
+      // note was already on-chain.
+      console.log("[deposit] polling Epoch intentStatus", intentNonce);
+      let epochNoteId: string | null = null;
+      if (intentNonce) {
+        const url = `${ALLOCATOR_URL}/intentStatus/${evmAddress}/${intentNonce}`;
+        const start = Date.now();
+        while (Date.now() - start < 120_000) {
+          try {
+            const r = await fetch(url).then((r) => r.json());
+            if (Array.isArray(r) && r.length > 0) {
+              const s = r[0];
+              if (s.status === "success") {
+                epochNoteId = s.midenNoteId ?? null;
+                break;
+              }
+              if (s.status === "failed") {
+                throw new Error(
+                  `Epoch reported failed: ${JSON.stringify(s).slice(0, 150)}`,
+                );
+              }
+            }
+          } catch (e) {
+            if (String(e).includes("Epoch reported failed")) throw e;
+          }
+          await new Promise((res) => setTimeout(res, 5_000));
+        }
+      }
+      if (epochNoteId) {
+        console.log("[deposit] delivered on Miden:", epochNoteId);
+        setMidenNoteId(epochNoteId);
+      }
+
+      // Then wait for the local client to actually see the note so we
+      // can consume it. Bare call + hard Promise.race — same fix as the
+      // redeem panel (waitForConsumableNotes can outlive its timeoutMs,
+      // and inside runExclusive a hang would starve the consume).
+      console.log("[deposit] waiting for local client to sync the note…");
+      let delivered: unknown[] = [];
+      for (let attempt = 0; attempt < 4 && delivered.length === 0; attempt++) {
+        try {
+          await runExclusive(() => syncState());
+        } catch (_) {}
+        try {
+          const raced = await Promise.race<unknown[] | undefined>([
+            waitForConsumableNotes({
+              accountId: walletId,
+              minCount: 1,
+              timeoutMs: 30_000,
+              intervalMs: 5_000,
+            }) as Promise<unknown[] | undefined>,
+            new Promise<unknown[]>((resolve) =>
+              setTimeout(() => resolve([]), 33_000),
+            ),
+          ]);
+          delivered = Array.isArray(raced) ? raced : [];
+        } catch (_) {
+          delivered = [];
+        }
+      }
+      if (delivered.length === 0) {
+        throw new Error(
+          epochNoteId
+            ? `Note ${epochNoteId.slice(0, 18)}… is delivered on-chain but the local client never synced it — refresh and retry, the funds are safe.`
+            : "Epoch never confirmed delivery and no note reached the wallet.",
+        );
+      }
+      const inbound = delivered[0];
       const noteId =
         (inbound as unknown as { id?: () => { toString?: () => string } })
           ?.id?.()
-          ?.toString?.() ?? null;
+          ?.toString?.() ?? epochNoteId;
       setMidenNoteId(noteId);
 
       setStage("consuming");
       const consumeResult = await consume({
         accountId: walletId,
-        notes: inbound ? [inbound] : [],
+        notes: (inbound ? [inbound] : []) as never[],
       });
       setConsumeTx(consumeResult?.transactionId?.toString?.() ?? null);
 
