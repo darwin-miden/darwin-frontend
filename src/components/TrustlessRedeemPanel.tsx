@@ -102,7 +102,11 @@ function localSepoliaSigningClient(
             address: account.address,
             blockTag: "pending",
           });
-          const gasPrice = ((await pub.getGasPrice()) * 15n) / 10n;
+          // 2.5x: a slow legacy tx here is fatal — the Compact nonce the SDK
+          // grabbed at quote time expires if the receipt takes minutes, and
+          // Epoch then rejects the allocation with "Nonce has already been
+          // used". Overpaying a few gwei on testnet is the cheap fix.
+          const gasPrice = ((await pub.getGasPrice()) * 25n) / 10n;
           let gas = parsed.gas;
           if (!gas) {
             try {
