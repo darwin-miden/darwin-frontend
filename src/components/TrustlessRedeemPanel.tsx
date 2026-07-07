@@ -310,6 +310,15 @@ export function TrustlessRedeemPanel({
   const [intentNonce, setIntentNonce] = useState<string | null>(null);
   const [vaultSyncMsg, setVaultSyncMsg] = useState<string | null>(null);
   const [debitTx, setDebitTx] = useState<string | null>(null);
+  // Dev-only test buttons: hidden in normal use, shown with ?dev=1 or a
+  // pre-injected window.__devKey (Playwright).
+  const [devMode, setDevMode] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window as unknown as { __devKey?: string };
+    const qs = new URLSearchParams(window.location.search);
+    setDevMode(Boolean(w.__devKey) || qs.has("dev"));
+  }, []);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
 
   // Autonomous E2E flow — used by both the "Autonomous test" button and
@@ -1422,7 +1431,8 @@ export function TrustlessRedeemPanel({
           skipping wagmi/MetaMask by signing the derive message with a
           dev-only test key. Hidden behind a data-testid so a Playwright
           selector can find it without depending on the label text. */}
-      {stage !== "signing" &&
+      {devMode &&
+        stage !== "signing" &&
         stage !== "deriving" &&
         stage !== "sync-vault" &&
         stage !== "quoting" &&
@@ -1467,7 +1477,8 @@ export function TrustlessRedeemPanel({
           </button>
         )}
 
-      {stage !== "signing" &&
+      {devMode &&
+        stage !== "signing" &&
         stage !== "deriving" &&
         stage !== "sync-vault" &&
         stage !== "quoting" &&
