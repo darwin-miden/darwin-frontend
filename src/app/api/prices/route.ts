@@ -35,6 +35,21 @@ const CG_URL =
   "https://api.coingecko.com/api/v3/simple/price" +
   "?ids=ethereum,wrapped-bitcoin,tether,dai&vs_currencies=usd";
 
+// Last successful response, kept per edge isolate. CoinGecko's public
+// tier rate-limits in bursts; serving a <5-minute-old price with 200
+// beats a 502 that turns the basket page's NAV badge into an error
+// (display feed only — settlement stays on Pragma).
+let lastGood: PricesResponse | null = null;
+const STALE_MAX_MS = 5 * 60_000;
+
+function staleFallback(): Response | null {
+  if (!lastGood || Date.now() - lastGood.fetchedAt > STALE_MAX_MS) return null;
+  return Response.json(
+    { ...lastGood, stale: true },
+    { headers: { "cache-control": "public, max-age=5" } },
+  );
+}
+
 export async function GET(): Promise<Response> {
   const start = Date.now();
   try {
@@ -42,9 +57,12 @@ export async function GET(): Promise<Response> {
       headers: { accept: "application/json" },
     });
     if (!upstream.ok) {
-      return Response.json(
-        { error: `coingecko HTTP ${upstream.status}` },
-        { status: 502 },
+      return (
+        staleFallback() ??
+        Response.json(
+          { error: `coingecko HTTP ${upstream.status}` },
+          { status: 502 },
+        )
       );
     }
     const data = (await upstream.json()) as Record<string, { usd: number }>;
@@ -57,15 +75,19 @@ export async function GET(): Promise<Response> {
       dai: data.dai?.usd ?? 0,
       latencyMs: Date.now() - start,
     };
+    lastGood = body;
     return Response.json(body, {
       headers: {
         "cache-control": "public, max-age=15, stale-while-revalidate=60",
       },
     });
   } catch (e) {
-    return Response.json(
-      { error: e instanceof Error ? e.message : "unknown" },
-      { status: 502 },
+    return (
+      staleFallback() ??
+      Response.json(
+        { error: e instanceof Error ? e.message : "unknown" },
+        { status: 502 },
+      )
     );
   }
 }
