@@ -81,7 +81,7 @@ function TrustlessRedeemPageInner() {
           marginBottom: 8,
         }}
       >
-        Trustless redeem
+        {basket ? `Self-custody withdraw · ${basket.symbol}` : "Trustless redeem"}
       </h1>
       <p style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 32 }}>
         Miden → Sepolia via Epoch. Your derived wallet spends dUSDC into

@@ -86,7 +86,7 @@ function TrustlessPageInner() {
           marginBottom: 8,
         }}
       >
-        Trustless deposit
+        {basket ? `Self-custody deposit · ${basket.symbol}` : "Trustless deposit"}
       </h1>
       <p style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
         Fully browser-side flow — Miden signing key derived from a
@@ -108,7 +108,7 @@ function TrustlessPageInner() {
         </Link>
       </p>
 
-      <TrustlessDepositPanel basket={basket} />
+      <TrustlessDepositPanel basket={basket} compact={!!basket} />
     </main>
   );
 }
