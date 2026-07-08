@@ -177,11 +177,20 @@ function StageRow({
 export function TrustlessDepositPanel({
   basket,
   compact = false,
+  network = false,
 }: {
   /** Basket to credit — keys slot-10 per (user, basket). Omit = legacy flat slot. */
   basket?: { symbol: string; faucetHex: string };
   /** Embedded mode: hides the demo headline + explainer copy. */
   compact?: boolean;
+  /**
+   * Network rail: instead of the browser writing slot-10 on the NoAuth
+   * controller, it emits an atomic deposit note at the NETWORK
+   * controller and the testnet's NTX builder executes the credit (vault
+   * + position) — no NoAuth, no operator, validation runs in the
+   * controller's own MASM under network execution.
+   */
+  network?: boolean;
 } = {}) {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
@@ -501,6 +510,56 @@ export function TrustlessDepositPanel({
         notes: inboundIds,
       });
       setConsumeTx(consumeResult?.transactionId?.toString?.() ?? null);
+
+      // Step 4 (network rail): emit an atomic deposit note at the
+      // NETWORK controller from the user's own derived wallet. The note
+      // carries the dUSDC and the NetworkAccountTarget attachment; the
+      // testnet's NTX builder consumes it and executes the credit
+      // (receive_asset + slot-10 accumulate) — the browser only signs
+      // the emitting tx. The note bytes come pre-assembled from
+      // /api/network-note because the 0.15 web SDK can't put
+      // attachments on custom notes; the endpoint is a pure function
+      // (no keys) and the browser still proves + submits everything.
+      if (network) {
+        setStage("crediting");
+        // Emit what the solver guaranteed to deliver (minTokenOut =
+        // 95% of the target) — the vault is certain to hold it, and
+        // the position credits exactly what the note moves. Any
+        // delivery surplus stays in the user's own wallet.
+        const amountBaseNet =
+          (parseUnits(humanAmount, EPOCH_USDC_SEPOLIA.midenDecimals) * 95n) / 100n;
+        const r = await fetch("/api/network-note", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sender: walletId,
+            userEvm: evmAddress,
+            basket: basket?.symbol ?? "DCC",
+            amount: amountBaseNet.toString(),
+          }),
+        });
+        const built = (await r.json()) as {
+          noteId?: string;
+          noteB64?: string;
+          error?: string;
+        };
+        if (!r.ok || !built.noteB64) {
+          throw new Error(built.error ?? `network-note API ${r.status}`);
+        }
+        const { Note, NoteArray } = await import("@miden-sdk/miden-sdk");
+        const bytes = Uint8Array.from(atob(built.noteB64), (c) => c.charCodeAt(0));
+        const depositNote = Note.deserialize(bytes);
+        const emitResult = await executeTx({
+          accountId: walletId,
+          request: () =>
+            new TransactionRequestBuilder()
+              .withOwnOutputNotes(new NoteArray([depositNote]))
+              .build(),
+        });
+        setCreditTx(emitResult?.transactionId?.toString?.() ?? built.noteId ?? null);
+        setStage("done");
+        return;
+      }
 
       // Step 4: credit slot-10 on v8-noauth via a browser-signed tx
       // script. v8 is NoAuth, so we can submit against it without any

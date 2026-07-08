@@ -37,6 +37,7 @@ function TrustlessPageInner() {
   // pages.
   const params = useSearchParams();
   const rawSymbol = params.get("basket");
+  const network = params.get("network") === "1";
   const faucet =
     rawSymbol && rawSymbol in BASKET_TOKEN_FAUCETS
       ? BASKET_TOKEN_FAUCETS[rawSymbol as BasketSymbol]
@@ -108,7 +109,7 @@ function TrustlessPageInner() {
         </Link>
       </p>
 
-      <TrustlessDepositPanel basket={basket} compact={!!basket} />
+      <TrustlessDepositPanel basket={basket} compact={!!basket} network={network} />
     </main>
   );
 }
