@@ -41,6 +41,8 @@ type Row = {
   label: string;
   symbol: BasketSymbol | null;
   position: bigint;
+  /** Credited by the NTX builder on the network controller. */
+  network?: boolean;
 };
 
 export function SelfCustodyPositionsSection() {
@@ -103,7 +105,42 @@ export function SelfCustodyPositionsSection() {
           } satisfies Row;
         }),
       );
-      setRows(results);
+      // Network-rail positions (credited by the NTX builder on the
+      // network controller) — separate read path; a failure here never
+      // hides the NoAuth rows.
+      const networkResults: Array<Row | null> = await Promise.all(
+        targets
+          .filter((t) => t.symbol !== null)
+          .map(async (t): Promise<Row | null> => {
+            try {
+              const r = await fetch("/api/network-position", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  suffix: suffix.toString(),
+                  prefix: prefix.toString(),
+                  basketSuffix: t.basketSuffix,
+                  basketPrefix: t.basketPrefix,
+                }),
+              });
+              if (!r.ok) return null;
+              const j = (await r.json()) as { position?: string };
+              return {
+                key: `${t.key}-network`,
+                label: `${t.label} · network rail`,
+                symbol: t.symbol,
+                position: j.position ? BigInt(j.position) : 0n,
+                network: true,
+              } satisfies Row;
+            } catch {
+              return null;
+            }
+          }),
+      );
+      setRows([
+        ...results,
+        ...networkResults.filter((r): r is Row => r !== null),
+      ]);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -140,8 +177,9 @@ export function SelfCustodyPositionsSection() {
       </h2>
       <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 14 }}>
         Written by your own browser against the <code>NoAuth</code>{" "}
-        controller — no Darwin server holds these. Withdraw bridges back
-        to Sepolia USDC via Epoch.
+        controller — or, for network-rail rows, credited by the Miden
+        network itself (NTX builder). No Darwin server holds these.
+        Withdraw bridges back to Sepolia USDC via Epoch.
       </p>
 
       {error && (
@@ -185,22 +223,30 @@ export function SelfCustodyPositionsSection() {
               <span>{formatDusdc(r.position)} dUSDC</span>
               <Link
                 href={
-                  r.symbol ? `/trustless?basket=${r.symbol}` : "/trustless"
+                  r.symbol
+                    ? `/trustless?basket=${r.symbol}${r.network ? "&network=1" : ""}`
+                    : "/trustless"
                 }
                 style={{ textDecoration: "underline", color: "var(--ink-2)", fontSize: 12 }}
               >
                 deposit
               </Link>
-              <Link
-                href={
-                  r.symbol
-                    ? `/trustless/redeem?basket=${r.symbol}`
-                    : "/trustless/redeem"
-                }
-                style={{ textDecoration: "underline", color: "var(--ink)", fontSize: 12 }}
-              >
-                withdraw →
-              </Link>
+              {r.network ? (
+                <span style={{ color: "var(--ink-3)", fontSize: 12 }}>
+                  NTX-credited
+                </span>
+              ) : (
+                <Link
+                  href={
+                    r.symbol
+                      ? `/trustless/redeem?basket=${r.symbol}`
+                      : "/trustless/redeem"
+                  }
+                  style={{ textDecoration: "underline", color: "var(--ink)", fontSize: 12 }}
+                >
+                  withdraw →
+                </Link>
+              )}
             </div>
           ))}
           <div
