@@ -287,7 +287,6 @@ export function TrustlessDepositPanel({
   }, [client, createWallet, compileTxScript, executeTx, pauseSync, resumeSync]);
 
   const [stage, setStage] = useState<Stage>("idle");
-  const [seedHex, setSeedHex] = useState<string | null>(null);
   const [walletId, setWalletId] = useState<string | null>(null);
   const [humanAmount, setHumanAmount] = useState<string>(HUMAN_AMOUNT_DEFAULT);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -311,7 +310,6 @@ export function TrustlessDepositPanel({
       setStage("signing");
       const sig = await signMessageAsync({ message: DERIVE_MESSAGE(evmAddress) });
       const seed = keccak256(toBytes(sig));
-      setSeedHex(seed);
       const seedBytes = new Uint8Array(
         seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
       );
@@ -733,10 +731,12 @@ export function TrustlessDepositPanel({
           }}
         >
           <div>
-            <strong>Derived seed</strong>: <code>{seedHex}</code>
-          </div>
-          <div>
             <strong>Derived Miden wallet</strong>: <code>{walletId}</code>
+          </div>
+          <div style={{ marginTop: 4, color: "var(--ink-3)" }}>
+            The signing seed derived from your signature stays in this
+            browser session only — it is never displayed, stored on a
+            server, or sent anywhere.
           </div>
           <div style={{ marginTop: 4, color: "var(--ink-3)" }}>
             Fund it with a bit of MIDEN once (bootstrap gas) via{" "}
@@ -941,7 +941,6 @@ export function TrustlessDepositPanel({
           onClick={() => {
             reset();
             setStage("idle");
-            setSeedHex(null);
             setWalletId(null);
             setSepoliaTx(null);
             setMidenNoteId(null);
