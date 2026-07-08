@@ -895,9 +895,23 @@ export function TrustlessDepositPanel({
           />
           {stage === "done" && (
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--rule)", color: "var(--ink-3)" }}>
-              ✅ Position credited on <code>{TRUSTLESS_CONTROLLER_HEX.slice(0, 12)}…</code> by
-              a tx script the browser compiled + submitted with no signing key.
-              v8-noauth accepts any tx bundle. Zero server touches from step 1 to step 4.
+              {network ? (
+                <>
+                  ✅ Deposit note emitted from your wallet —{" "}
+                  <strong>the Miden network itself</strong> consumes it and
+                  credits both the vault and your position inside the
+                  controller&apos;s own code (network transaction, ~10-30s). No
+                  NoAuth, no operator, nothing to trust but the MASM.
+                </>
+              ) : (
+                <>
+                  ✅ Position credited on{" "}
+                  <code>{TRUSTLESS_CONTROLLER_HEX.slice(0, 12)}…</code> by a tx
+                  script the browser compiled + submitted with no signing key.
+                  v8-noauth accepts any tx bundle. Zero server touches from
+                  step 1 to step 4.
+                </>
+              )}
             </div>
           )}
         </div>
