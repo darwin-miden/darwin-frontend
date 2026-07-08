@@ -362,7 +362,16 @@ export function TrustlessDepositPanel({
       setWalletId(resolvedWalletId);
       setStage("ready");
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : String(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      // Epoch's suggested-nonce indexer lags a few minutes behind
+      // recent Compact deposits from the same address; a suggestion can
+      // point at an already-consumed nonce. A retry fetches a fresh one
+      // and the escrowed deposit balance stays yours.
+      setErrorMsg(
+        /nonce has already been used/i.test(raw)
+          ? "Nonce collision (another recent deposit from this address). Just click deposit again — a fresh nonce is fetched each attempt and your escrowed funds remain yours."
+          : raw,
+      );
       setStage("error");
     }
   }
@@ -633,7 +642,16 @@ export function TrustlessDepositPanel({
 
       setStage("done");
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : String(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      // Epoch's suggested-nonce indexer lags a few minutes behind
+      // recent Compact deposits from the same address; a suggestion can
+      // point at an already-consumed nonce. A retry fetches a fresh one
+      // and the escrowed deposit balance stays yours.
+      setErrorMsg(
+        /nonce has already been used/i.test(raw)
+          ? "Nonce collision (another recent deposit from this address). Just click deposit again — a fresh nonce is fetched each attempt and your escrowed funds remain yours."
+          : raw,
+      );
       setStage("error");
     } finally {
       resumeSync();
