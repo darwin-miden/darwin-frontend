@@ -28,7 +28,7 @@ const READER_BIN =
 
 const NETWORK_CONTROLLER =
   process.env.DARWIN_NETWORK_CONTROLLER_HEX ||
-  "0xded5aaaedbd1d55163ac0480838229";
+  "0xf421c9b79dbde7312da5261a58107f";
 
 interface Body {
   suffix?: string;

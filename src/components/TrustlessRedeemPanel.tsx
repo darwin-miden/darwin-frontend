@@ -40,6 +40,7 @@ import {
   http,
   keccak256,
   parseTransaction,
+  parseUnits,
   toBytes,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -282,9 +283,18 @@ const REDEEM_AMOUNT_DEFAULT = "1";
 
 export function TrustlessRedeemPanel({
   basket,
+  network = false,
 }: {
   /** Basket to debit — keys slot-10 per (user, basket). Omit = legacy flat slot. */
   basket?: { symbol: string; faucetHex: string };
+  /**
+   * Network rail: the redeem is a request note the NTX builder executes
+   * against the network controller — it debits the position AND pays the
+   * dUSDC from the controller vault via a private payback P2ID that only
+   * this browser can claim. No Epoch leg: funds land in the derived
+   * Miden wallet.
+   */
+  network?: boolean;
 } = {}) {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
@@ -1130,6 +1140,104 @@ export function TrustlessRedeemPanel({
     [createWallet, executeTx, runExclusive, syncState],
   );
 
+  // Dev/test hook for the NETWORK redeem's browser leg: derive a salted
+  // wallet, emit the redeem request, import the private payback and
+  // consume it. Mirrors onRedeem's ?network=1 branch without MetaMask.
+  const runNetworkRedeem = useCallback(
+    async (devKeyHex: string, salt: string, amountBase: string, basketSym?: string) => {
+      const account = privateKeyToAccount(devKeyHex as `0x${string}`);
+      const evm = account.address as `0x${string}`;
+      const sig = await account.signMessage({
+        message: DERIVE_MESSAGE(evm) + `\n\nRoundtrip salt: ${salt}`,
+      });
+      const seed = keccak256(toBytes(sig));
+      const seedBytes = new Uint8Array(
+        seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
+      );
+      let wid: string | null = null;
+      try {
+        const acc = await createWallet({
+          initSeed: seedBytes,
+          storageMode: "private",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
+        });
+        wid = acc.id().toString();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const m = msg.match(/id (0x[0-9a-fA-F]+)/);
+        if (m && /already being tracked/i.test(msg)) wid = m[1];
+        else throw e;
+      }
+      if (!wid) throw new Error("no wallet id");
+      await runExclusive(() => syncState());
+
+      const r = await fetch("/api/network-redeem-note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sender: wid,
+          recipient: wid,
+          userEvm: evm,
+          basket: basketSym ?? "DCC",
+          amount: amountBase,
+        }),
+      });
+      const built = (await r.json()) as {
+        noteId?: string;
+        noteB64?: string;
+        paybackId?: string;
+        paybackFileB64?: string;
+        error?: string;
+      };
+      if (!r.ok || !built.noteB64 || !built.paybackFileB64) {
+        throw new Error(built.error ?? `network-redeem-note ${r.status}`);
+      }
+      const { Note, NoteArray, NoteFile } = await import("@miden-sdk/miden-sdk");
+      const reqBytes = Uint8Array.from(atob(built.noteB64), (c) => c.charCodeAt(0));
+      const requestNote = Note.deserialize(reqBytes);
+      const emitRes = await executeTx({
+        accountId: wid,
+        request: () =>
+          new TransactionRequestBuilder()
+            .withOwnOutputNotes(new NoteArray([requestNote]))
+            .build(),
+      });
+      const emitTx = emitRes?.transactionId?.toString?.() ?? null;
+      console.log("[network-redeem-test] request emitted", built.noteId, emitTx);
+
+      const fileBytes = Uint8Array.from(atob(built.paybackFileB64), (c) => c.charCodeAt(0));
+      const noteFile = NoteFile.deserialize(fileBytes);
+      const clientAny = client as unknown as {
+        importNoteFile?: (f: unknown) => Promise<string>;
+      };
+      await clientAny.importNoteFile?.(noteFile);
+      for (let i = 0; i < 30; i++) {
+        await new Promise((res) => setTimeout(res, 5_000));
+        try {
+          await runExclusive(() => syncState());
+        } catch (_) {}
+        try {
+          await consume({ accountId: wid, notes: [built.paybackId!] });
+          const out = {
+            walletId: wid,
+            requestNoteId: built.noteId,
+            emitTx,
+            paybackId: built.paybackId,
+            consumedAfterSec: (i + 1) * 5,
+          };
+          console.log("[network-redeem-test] DONE", JSON.stringify(out));
+          return out;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.log(`[network-redeem-test] not ready (${i}):`, msg.slice(0, 90));
+        }
+      }
+      throw new Error("payback not consumable after 150s");
+    },
+    [client, consume, createWallet, executeTx, runExclusive, syncState],
+  );
+
   // Expose the same flow via a window function for direct JS testing.
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1153,6 +1261,9 @@ export function TrustlessRedeemPanel({
     w.__darwinTrustlessRedeem = runAutonomousFlow;
     w.__darwinTrustlessRoundtrip = runAutonomousRoundtrip;
     w.__darwinNetworkEmit = runNetworkEmit;
+    (w as unknown as {
+      __darwinNetworkRedeem?: typeof runNetworkRedeem;
+    }).__darwinNetworkRedeem = runNetworkRedeem;
     return () => {
       if (w.__darwinTrustlessRedeem === runAutonomousFlow) {
         delete w.__darwinTrustlessRedeem;
@@ -1161,7 +1272,7 @@ export function TrustlessRedeemPanel({
         delete w.__darwinTrustlessRoundtrip;
       }
     };
-  }, [runAutonomousFlow, runAutonomousRoundtrip, runNetworkEmit]);
+  }, [runAutonomousFlow, runAutonomousRoundtrip, runNetworkEmit, runNetworkRedeem]);
 
 
   // Silence the internal @miden-sdk error banner when it's just "already
@@ -1278,6 +1389,82 @@ export function TrustlessRedeemPanel({
     pauseSync();
     try {
       setErrorMsg(null);
+
+      if (network) {
+        // ── Network rail: request note → NTX builder debits the position
+        // and pays a private payback P2ID from the controller vault.
+        const amountBase = parseUnits(humanAmount, 6);
+        setStage("quoting");
+        const r = await fetch("/api/network-redeem-note", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sender: walletId,
+            recipient: walletId,
+            userEvm: evmAddress,
+            basket: basket?.symbol ?? "DCC",
+            amount: amountBase.toString(),
+          }),
+        });
+        const built = (await r.json()) as {
+          noteId?: string;
+          noteB64?: string;
+          paybackId?: string;
+          paybackFileB64?: string;
+          error?: string;
+        };
+        if (!r.ok || !built.noteB64 || !built.paybackFileB64) {
+          throw new Error(built.error ?? `network-redeem-note ${r.status}`);
+        }
+
+        setStage("sending-note");
+        const { Note, NoteArray, NoteFile } = await import("@miden-sdk/miden-sdk");
+        const reqBytes = Uint8Array.from(atob(built.noteB64), (c) => c.charCodeAt(0));
+        const requestNote = Note.deserialize(reqBytes);
+        const emitRes = await executeTx({
+          accountId: walletId,
+          request: () =>
+            new TransactionRequestBuilder()
+              .withOwnOutputNotes(new NoteArray([requestNote]))
+              .build(),
+        });
+        setNoteId(built.noteId ?? null);
+        setMidenTxId(emitRes?.transactionId?.toString?.() ?? null);
+        console.log("[network-redeem] request emitted", built.noteId);
+
+        // Import the private payback's details — only this browser knows
+        // them — then wait for the NTB to create it and consume.
+        setStage("awaiting-fill");
+        const fileBytes = Uint8Array.from(atob(built.paybackFileB64), (c) => c.charCodeAt(0));
+        const noteFile = NoteFile.deserialize(fileBytes);
+        const clientAny = client as unknown as {
+          importNoteFile?: (f: unknown) => Promise<string>;
+        };
+        await clientAny.importNoteFile?.(noteFile);
+        let consumed = false;
+        for (let i = 0; i < 30 && !consumed; i++) {
+          await new Promise((res) => setTimeout(res, 5_000));
+          try {
+            await runExclusive(() => syncState());
+          } catch (_) {}
+          try {
+            await consume({ accountId: walletId, notes: [built.paybackId!] });
+            consumed = true;
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.log(`[network-redeem] payback not ready (${i}):`, msg.slice(0, 90));
+          }
+        }
+        if (!consumed) {
+          throw new Error(
+            "payback note not consumable after 150s — check network-note-status",
+          );
+        }
+        setSepoliaTxHint(built.paybackId ?? null);
+        console.log("[network-redeem] payback consumed — dUSDC back in wallet");
+        setStage("done");
+        return;
+      }
 
       // Force-sync the derived wallet and drain any consumable notes into
       // the vault before we spend dUSDC. Every WASM call goes through

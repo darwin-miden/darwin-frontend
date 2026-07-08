@@ -231,22 +231,16 @@ export function SelfCustodyPositionsSection() {
               >
                 deposit
               </Link>
-              {r.network ? (
-                <span style={{ color: "var(--ink-3)", fontSize: 12 }}>
-                  NTX-credited
-                </span>
-              ) : (
-                <Link
-                  href={
-                    r.symbol
-                      ? `/trustless/redeem?basket=${r.symbol}`
-                      : "/trustless/redeem"
-                  }
-                  style={{ textDecoration: "underline", color: "var(--ink)", fontSize: 12 }}
-                >
-                  withdraw →
-                </Link>
-              )}
+              <Link
+                href={
+                  r.symbol
+                    ? `/trustless/redeem?basket=${r.symbol}${r.network ? "&network=1" : ""}`
+                    : "/trustless/redeem"
+                }
+                style={{ textDecoration: "underline", color: "var(--ink)", fontSize: 12 }}
+              >
+                withdraw →
+              </Link>
             </div>
           ))}
           <div

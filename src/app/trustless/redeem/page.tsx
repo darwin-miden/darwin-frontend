@@ -32,6 +32,7 @@ const TrustlessRedeemPanel = dynamic(
 function TrustlessRedeemPageInner() {
   const params = useSearchParams();
   const rawSymbol = params.get("basket");
+  const network = params.get("network") === "1";
   const faucet =
     rawSymbol && rawSymbol in BASKET_TOKEN_FAUCETS
       ? BASKET_TOKEN_FAUCETS[rawSymbol as BasketSymbol]
@@ -89,7 +90,7 @@ function TrustlessRedeemPageInner() {
         to your Sepolia address. No user tx on Sepolia, no Darwin backend.
       </p>
 
-      <TrustlessRedeemPanel basket={basket} />
+      <TrustlessRedeemPanel basket={basket} network={network} />
     </main>
   );
 }

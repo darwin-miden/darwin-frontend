@@ -2,31 +2,26 @@ import { spawn } from "node:child_process";
 import { NextResponse } from "next/server";
 
 /**
- * POST /api/network-note
+ * POST /api/network-redeem-note
  *
  * Body: {
- *   sender: string,    // Miden account hex of the note's emitter (the
- *                      // user's derived wallet)
- *   userEvm: string,   // EVM address whose felts key the slot-10 position
- *   basket: string,    // DCC | DAG | DCO
- *   amount: string,    // dUSDC base units (6-dec) to deposit
+ *   sender: string,     // Miden account hex emitting the request note
+ *   recipient: string,  // Miden account hex receiving the payback dUSDC
+ *   userEvm: string,    // EVM address whose position gets debited
+ *   basket: string,     // DCC | DAG | DCO
+ *   amount: string,     // dUSDC base units to withdraw
  * }
  *
- * Returns: { noteId, noteB64, scriptRoot }
+ * Returns: { noteId, noteB64, paybackId, paybackFileB64, paybackTag }
  *
- * Builds (but does NOT submit) an atomic_deposit_note targeting the
- * NETWORK controller, carrying the NetworkAccountTarget attachment the
- * NTX builder requires for routing. The browser deserializes the bytes
- * with the web SDK's Note.deserialize and emits the note itself from
- * the user's derived wallet — proving and submission stay fully
- * client-side; this endpoint is a pure function (no keys, no chain
- * access).
- *
- * Why it exists: the 0.15 web SDK only lets the P2ID helpers carry a
- * NoteAttachment; a custom note script built in the browser can't hold
- * the NetworkAccountTarget attachment, and a tag-only note is invisible
- * to the NTX builder (verified live). Once the SDK exposes attachments
- * on the plain Note constructor this endpoint can be retired.
+ * Builds (never submits) a network REDEEM request note: the NTX builder
+ * executes it against the network controller — debits the (user, basket)
+ * slot-10 position and pays `amount` dUSDC from the controller vault to
+ * `recipient` via a PRIVATE payback P2ID. The browser emits the request
+ * from the user's wallet, then imports paybackFileB64 (a serialized
+ * NoteFile::NoteDetails — only the redeemer knows the private note's
+ * details) and consumes it on commitment. Pure function: no keys, no
+ * chain access.
  */
 
 export const runtime = "nodejs";
@@ -35,8 +30,8 @@ export const dynamic = "force-dynamic";
 const MAC_API_BASE = process.env.DARWIN_MAC_API_BASE;
 
 const BUILDER_BIN =
-  process.env.DARWIN_NETWORK_NOTE_BIN ||
-  "/Users/eden/data/darwin/repos/darwin-relay/target/release/send_network_deposit";
+  process.env.DARWIN_NETWORK_REDEEM_BIN ||
+  "/Users/eden/data/darwin/repos/darwin-relay/target/release/send_network_redeem";
 
 const NETWORK_CONTROLLER =
   process.env.DARWIN_NETWORK_CONTROLLER_HEX ||
@@ -46,6 +41,7 @@ const VALID_BASKETS = new Set(["DCC", "DAG", "DCO"]);
 
 interface Body {
   sender?: string;
+  recipient?: string;
   userEvm?: string;
   basket?: string;
   amount?: string;
@@ -72,7 +68,7 @@ export async function POST(req: Request) {
   }
 
   if (MAC_API_BASE) {
-    const r = await fetch(`${MAC_API_BASE}/api/network-note`, {
+    const r = await fetch(`${MAC_API_BASE}/api/network-redeem-note`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -87,15 +83,15 @@ export async function POST(req: Request) {
     });
   }
 
-  const { sender, userEvm, basket, amount } = body;
-  if (!sender || !userEvm || !basket || !amount) {
+  const { sender, recipient, userEvm, basket, amount } = body;
+  if (!sender || !recipient || !userEvm || !basket || !amount) {
     return NextResponse.json(
-      { error: "missing fields: sender, userEvm, basket, amount" },
+      { error: "missing fields: sender, recipient, userEvm, basket, amount" },
       { status: 400 },
     );
   }
-  if (!/^0x[0-9a-fA-F]{30}$/.test(sender)) {
-    return NextResponse.json({ error: "sender must be a Miden account hex" }, { status: 400 });
+  if (!/^0x[0-9a-fA-F]{30}$/.test(sender) || !/^0x[0-9a-fA-F]{30}$/.test(recipient)) {
+    return NextResponse.json({ error: "sender/recipient must be Miden account hex" }, { status: 400 });
   }
   if (!/^0x[0-9a-fA-F]{40}$/.test(userEvm)) {
     return NextResponse.json({ error: "userEvm must be an EVM address" }, { status: 400 });
@@ -119,6 +115,8 @@ export async function POST(req: Request) {
     NETWORK_CONTROLLER,
     "--sender",
     sender,
+    "--recipient",
+    recipient,
     "--user-evm",
     userEvm,
     "--basket",
@@ -132,10 +130,9 @@ export async function POST(req: Request) {
       { status: 500 },
     );
   }
-  // The JSON payload is the last stdout line (the root echo precedes it).
   const lastLine = stdout.trim().split("\n").pop() ?? "";
   try {
-    const parsed = JSON.parse(lastLine) as { noteId: string; noteB64: string; scriptRoot: string };
+    const parsed = JSON.parse(lastLine);
     return NextResponse.json({ ...parsed, controllerId: NETWORK_CONTROLLER });
   } catch {
     return NextResponse.json(
