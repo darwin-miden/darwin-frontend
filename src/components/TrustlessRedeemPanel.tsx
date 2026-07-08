@@ -776,6 +776,54 @@ export function TrustlessRedeemPanel({
         setVaultSyncMsg(null);
         log("vault funded — crediting slot-10 position");
 
+        // ── Network mode (salt prefixed "net-"): the fresh wallet emits
+        // an atomic deposit note at the NETWORK controller and the NTX
+        // builder executes the credit — the browser never touches the
+        // controller. Ends here (no redeem leg): the assertion is the
+        // NTB consuming the note and slot-10 moving on the network
+        // controller.
+        if (runSalt.startsWith("net-")) {
+          log("network mode — emitting deposit note at the network controller");
+          const emitBase = (BigInt(dusdcMidenBaseUnits(DEPOSIT_HUMAN)) * 95n) / 100n;
+          const rn = await fetch("/api/network-note", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sender: freshWalletId,
+              userEvm: evm,
+              basket: basket?.symbol ?? "DCC",
+              amount: emitBase.toString(),
+            }),
+          });
+          const built = (await rn.json()) as {
+            noteId?: string;
+            noteB64?: string;
+            error?: string;
+          };
+          if (!rn.ok || !built.noteB64) {
+            throw new Error(built.error ?? `network-note ${rn.status}`);
+          }
+          const { Note, NoteArray } = await import("@miden-sdk/miden-sdk");
+          const nbytes = Uint8Array.from(atob(built.noteB64), (c) => c.charCodeAt(0));
+          const depositNote = Note.deserialize(nbytes);
+          const emitRes = await executeTx({
+            accountId: freshWalletId!,
+            request: () =>
+              new TransactionRequestBuilder()
+                .withOwnOutputNotes(new NoteArray([depositNote]))
+                .build(),
+          });
+          trace.networkNoteId = built.noteId;
+          trace.networkEmitTx = emitRes?.transactionId?.toString?.() ?? null;
+          log(
+            "NETWORK NOTE EMITTED",
+            `${built.noteId} emitTx=${trace.networkEmitTx}`,
+          );
+          setStage("done");
+          console.log("[roundtrip] NETWORK DONE", JSON.stringify(trace));
+          return trace;
+        }
+
         // ── Credit the trustless-controller position with the deposit —
         // full Darwin accounting: read-modify-write on slot-10.
         // Per-basket keying when the panel has a basket prop — the
@@ -1015,6 +1063,73 @@ export function TrustlessRedeemPanel({
     ],
   );
 
+  // Dev/test hook for the NETWORK rail's browser leg: derive a salted
+  // wallet (one that already holds dUSDC from a prior roundtrip), fetch
+  // the pre-assembled network deposit note, deserialize it, and emit it
+  // from that wallet. The NTX builder does the rest — this exercises
+  // exactly the deserialize+emit path the deposit panel's ?network=1
+  // mode runs, without needing an Epoch leg.
+  const runNetworkEmit = useCallback(
+    async (devKeyHex: string, salt: string, amountBase: string, basketSym?: string) => {
+      const account = privateKeyToAccount(devKeyHex as `0x${string}`);
+      const evm = account.address as `0x${string}`;
+      const sig = await account.signMessage({
+        message: DERIVE_MESSAGE(evm) + `\n\nRoundtrip salt: ${salt}`,
+      });
+      const seed = keccak256(toBytes(sig));
+      const seedBytes = new Uint8Array(
+        seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
+      );
+      let wid: string | null = null;
+      try {
+        const acc = await createWallet({
+          initSeed: seedBytes,
+          storageMode: "private",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
+        });
+        wid = acc.id().toString();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const m = msg.match(/id (0x[0-9a-fA-F]+)/);
+        if (m && /already being tracked/i.test(msg)) wid = m[1];
+        else throw e;
+      }
+      if (!wid) throw new Error("no wallet id");
+      await runExclusive(() => syncState());
+      const r = await fetch("/api/network-note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sender: wid,
+          userEvm: evm,
+          basket: basketSym ?? "DCC",
+          amount: amountBase,
+        }),
+      });
+      const built = (await r.json()) as { noteId?: string; noteB64?: string; error?: string };
+      if (!r.ok || !built.noteB64) throw new Error(built.error ?? `network-note ${r.status}`);
+      const { Note, NoteArray } = await import("@miden-sdk/miden-sdk");
+      const bytes = Uint8Array.from(atob(built.noteB64), (c) => c.charCodeAt(0));
+      const depositNote = Note.deserialize(bytes);
+      const emitResult = await executeTx({
+        accountId: wid,
+        request: () =>
+          new TransactionRequestBuilder()
+            .withOwnOutputNotes(new NoteArray([depositNote]))
+            .build(),
+      });
+      const out = {
+        walletId: wid,
+        noteId: built.noteId,
+        emitTx: emitResult?.transactionId?.toString?.() ?? null,
+      };
+      console.log("[network-emit] DONE", JSON.stringify(out));
+      return out;
+    },
+    [createWallet, executeTx, runExclusive, syncState],
+  );
+
   // Expose the same flow via a window function for direct JS testing.
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1028,9 +1143,16 @@ export function TrustlessRedeemPanel({
         redeemAmount: string,
         salt?: string,
       ) => Promise<unknown>;
+      __darwinNetworkEmit?: (
+        devKeyHex: string,
+        salt: string,
+        amountBase: string,
+        basketSym?: string,
+      ) => Promise<unknown>;
     };
     w.__darwinTrustlessRedeem = runAutonomousFlow;
     w.__darwinTrustlessRoundtrip = runAutonomousRoundtrip;
+    w.__darwinNetworkEmit = runNetworkEmit;
     return () => {
       if (w.__darwinTrustlessRedeem === runAutonomousFlow) {
         delete w.__darwinTrustlessRedeem;
@@ -1039,7 +1161,7 @@ export function TrustlessRedeemPanel({
         delete w.__darwinTrustlessRoundtrip;
       }
     };
-  }, [runAutonomousFlow, runAutonomousRoundtrip]);
+  }, [runAutonomousFlow, runAutonomousRoundtrip, runNetworkEmit]);
 
 
   // Silence the internal @miden-sdk error banner when it's just "already
