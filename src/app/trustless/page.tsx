@@ -37,7 +37,9 @@ function TrustlessPageInner() {
   // pages.
   const params = useSearchParams();
   const rawSymbol = params.get("basket");
-  const network = params.get("network") === "1";
+  // Network rail is the default; ?network=0 opts back into the legacy
+  // NoAuth flow (needed to manage positions written under that rail).
+  const network = params.get("network") !== "0";
   const faucet =
     rawSymbol && rawSymbol in BASKET_TOKEN_FAUCETS
       ? BASKET_TOKEN_FAUCETS[rawSymbol as BasketSymbol]
@@ -89,12 +91,11 @@ function TrustlessPageInner() {
       >
         {basket ? `Self-custody deposit · ${basket.symbol}` : "Trustless deposit"}
       </h1>
-      <p style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
-        Fully browser-side flow — Miden signing key derived from a
-        MetaMask signature, Sepolia → Miden bridge via Epoch, position
-        credit written against a <code>NoAuth</code> Darwin controller.
-        Zero Darwin backend involved after the initial page load.
-      </p>
+      <p style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 32 }}>
+            {network
+              ? "Fully browser-side flow — Miden signing key derived from a MetaMask signature, Sepolia → Miden bridge via Epoch, then your browser emits a deposit note that the Miden network itself executes against the Darwin controller (vault + position). Zero Darwin backend after the initial page load."
+              : "Fully browser-side flow — Miden signing key derived from a MetaMask signature, Sepolia → Miden bridge via Epoch, position credit written against a NoAuth Darwin controller. Zero Darwin backend involved after the initial page load."}
+          </p>
       <p style={{ fontSize: 13, marginBottom: 32 }}>
         Need to redeem?{" "}
         <Link

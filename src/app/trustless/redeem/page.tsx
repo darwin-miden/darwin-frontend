@@ -32,7 +32,9 @@ const TrustlessRedeemPanel = dynamic(
 function TrustlessRedeemPageInner() {
   const params = useSearchParams();
   const rawSymbol = params.get("basket");
-  const network = params.get("network") === "1";
+  // Network rail is the default; ?network=0 opts back into the legacy
+  // NoAuth flow (needed to manage positions written under that rail).
+  const network = params.get("network") !== "0";
   const faucet =
     rawSymbol && rawSymbol in BASKET_TOKEN_FAUCETS
       ? BASKET_TOKEN_FAUCETS[rawSymbol as BasketSymbol]
@@ -85,9 +87,9 @@ function TrustlessRedeemPageInner() {
         {basket ? `Self-custody withdraw · ${basket.symbol}` : "Trustless redeem"}
       </h1>
       <p style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 32 }}>
-        Miden → Sepolia via Epoch. Your derived wallet spends dUSDC into
-        a P2IDE note; Epoch&apos;s solver consumes it and delivers USDC
-        to your Sepolia address. No user tx on Sepolia, no Darwin backend.
+        {network
+          ? "Network withdraw. Your wallet emits a request note; the Miden network itself debits your position and pays the dUSDC out of the controller vault via a private note only your browser can claim (~10s). No Epoch, no Sepolia tx — exit to Sepolia afterwards with the classic redeem if needed."
+          : "Miden → Sepolia via Epoch. Your derived wallet spends dUSDC into a P2IDE note; Epoch's solver consumes it and delivers USDC to your Sepolia address. No user tx on Sepolia, no Darwin backend."}
       </p>
 
       <TrustlessRedeemPanel basket={basket} network={network} />
