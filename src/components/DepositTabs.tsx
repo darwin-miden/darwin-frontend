@@ -86,41 +86,73 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
 }
 
 /**
- * The self-custody rail runs on its own route rather than inline: the
- * trustless panel needs the bare Miden provider (internal keystore, no
- * MidenFi signer wrapper) and exclusive WASM-client access — mounting
- * it next to MidenDepositPanel would re-create the RefCell contention
- * the /trustless route exists to avoid. The tab sells the rail and
- * hands off with the basket preselected.
+ * The self-custody flow runs INLINE via a same-origin iframe: the
+ * trustless panels need the bare Miden provider (internal keystore, no
+ * MidenFi signer wrapper), which Providers.tsx routes by pathname — an
+ * iframe on /trustless?embed=1 gives them their own provider and WASM
+ * context without navigating away, and the wagmi/MetaMask connection is
+ * shared through same-origin storage. Deposit/withdraw toggle swaps the
+ * iframe src.
  */
 function SelfCustodyPane({ symbol }: { symbol: string }) {
+  const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
+  const src =
+    mode === "deposit"
+      ? `/trustless?basket=${encodeURIComponent(symbol)}&embed=1`
+      : `/trustless/redeem?basket=${encodeURIComponent(symbol)}&embed=1`;
   return (
     <div
       style={{
-        padding: "1.2rem 1.4rem",
         background: "var(--paper-2)",
         borderLeft: "3px solid var(--orange)",
       }}
     >
-      <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6, marginBottom: 6 }}>
-        Deposit into <strong>{symbol}</strong> without trusting any Darwin
-        server: your browser derives a Miden key from one MetaMask
-        signature, bridges Sepolia USDC via Epoch, then emits a deposit
-        note that <strong>the Miden network itself executes</strong>
-        against the controller — vault and position, proofs included.
-      </p>
-      <ul style={{ fontSize: 12.5, color: "var(--ink-3)", lineHeight: 1.7, margin: "0 0 14px 18px", padding: 0 }}>
-        <li>One signature — same wallet on any device, nothing to back up</li>
-        <li>No browser extension, no Darwin backend in the loop</li>
-        <li>Redeem back to Sepolia USDC the same way, anytime</li>
-      </ul>
-      <a
-        href={`/trustless?basket=${encodeURIComponent(symbol)}`}
-        className="nav-cta"
-        style={{ display: "inline-block", textDecoration: "none" }}
+      <div
+        style={{
+          display: "flex",
+          gap: 16,
+          alignItems: "baseline",
+          padding: "10px 16px 0",
+        }}
       >
-        Open self-custody deposit →
-      </a>
+        {(["deposit", "withdraw"] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            style={{
+              background: "transparent",
+              border: 0,
+              padding: "2px 0",
+              cursor: "pointer",
+              fontSize: 13,
+              fontFamily: "var(--font-mono-stack)",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              color: mode === m ? "var(--ink)" : "var(--ink-3)",
+              borderBottom:
+                mode === m
+                  ? "2px solid var(--orange)"
+                  : "2px solid transparent",
+            }}
+          >
+            {m}
+          </button>
+        ))}
+        <span style={{ fontSize: 11.5, color: "var(--ink-3)", marginLeft: "auto" }}>
+          network-executed · no server, no extension
+        </span>
+      </div>
+      <iframe
+        key={src}
+        src={src}
+        title={`Self-custody ${mode} · ${symbol}`}
+        style={{
+          width: "100%",
+          height: 760,
+          border: 0,
+          display: "block",
+        }}
+      />
     </div>
   );
 }

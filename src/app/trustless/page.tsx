@@ -40,6 +40,12 @@ function TrustlessPageInner() {
   // Network rail is the default; ?network=0 opts back into the legacy
   // NoAuth flow (needed to manage positions written under that rail).
   const network = params.get("network") !== "0";
+  // ?embed=1: rendered inside the basket page's Self-custody tab via a
+  // same-origin iframe (the flow needs the bare Miden provider, which is
+  // routed by pathname — an iframe gives it its own provider + WASM
+  // context without navigating away). Chrome is stripped; the wagmi
+  // connection is shared through same-origin storage.
+  const embed = params.get("embed") === "1";
   const faucet =
     rawSymbol && rawSymbol in BASKET_TOKEN_FAUCETS
       ? BASKET_TOKEN_FAUCETS[rawSymbol as BasketSymbol]
@@ -47,6 +53,17 @@ function TrustlessPageInner() {
   const basket = faucet
     ? { symbol: faucet.symbol, faucetHex: faucet.id }
     : undefined;
+  if (embed) {
+    return (
+      <main style={{ padding: "8px 4px", fontFamily: "var(--font-body-stack)" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+          <ConnectKitButton />
+        </div>
+        <TrustlessDepositPanel basket={basket} compact network={network} />
+      </main>
+    );
+  }
+
   return (
     <main
       style={{

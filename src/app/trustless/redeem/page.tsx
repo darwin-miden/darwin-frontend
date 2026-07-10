@@ -35,6 +35,9 @@ function TrustlessRedeemPageInner() {
   // Network rail is the default; ?network=0 opts back into the legacy
   // NoAuth flow (needed to manage positions written under that rail).
   const network = params.get("network") !== "0";
+  // ?embed=1: mounted inside the basket page's Self-custody tab via a
+  // same-origin iframe — see /trustless/page.tsx for the rationale.
+  const embed = params.get("embed") === "1";
   const faucet =
     rawSymbol && rawSymbol in BASKET_TOKEN_FAUCETS
       ? BASKET_TOKEN_FAUCETS[rawSymbol as BasketSymbol]
@@ -42,6 +45,17 @@ function TrustlessRedeemPageInner() {
   const basket = faucet
     ? { symbol: faucet.symbol, faucetHex: faucet.id }
     : undefined;
+  if (embed) {
+    return (
+      <main style={{ padding: "8px 4px", fontFamily: "var(--font-body-stack)" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+          <ConnectKitButton />
+        </div>
+        <TrustlessRedeemPanel basket={basket} network={network} />
+      </main>
+    );
+  }
+
   return (
     <main
       style={{
