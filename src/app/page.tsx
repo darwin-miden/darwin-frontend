@@ -182,7 +182,7 @@ export default function Page() {
             <Step
               num="3"
               title="Deposit"
-              body="ETH wallet: bridge Sepolia ETH to Miden via NEAR Intents 1Click (~40 s) — a Darwin relay wallet on Miden picks it up and mints your basket-token. Miden wallet: sign an atomic deposit note straight to the controller, browser proves the STARK in <1 s."
+              body="Self-custody: one MetaMask signature derives a Miden wallet in your browser, Epoch bridges Sepolia USDC, then the Miden network itself executes your deposit against the controller — no server, no extension. Miden wallet: sign an atomic deposit note straight to the controller, browser proves the STARK in <1 s."
               last
             />
           </div>
