@@ -61,10 +61,11 @@ export default function Page() {
                 }}
               >
                 Hold a STARK-proven basket position privately on Miden.
-                ETH wallet holders bridge in via NEAR Intents 1Click — assets
-                land on Miden in ~40 s, then mint the basket-token natively.
-                Miden wallet holders prove + submit directly in their
-                browser via the Miden Web SDK.
+                    One MetaMask signature derives a Miden wallet in your
+                    browser; Epoch bridges Sepolia USDC and the Miden network
+                    itself executes your deposit — self-custody end to end.
+                    Miden wallet holders prove + submit directly in their
+                    browser via the Miden Web SDK.
               </p>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                 <Link

@@ -68,9 +68,10 @@ export default function BasketsPage() {
             margin: "8px 0 0",
           }}
         >
-          Three pre-built crypto baskets, live on Sepolia. You deposit USDC,
-          the Darwin relay mints the basket ERC20 to your wallet in about
-          a minute. No Miden account, no proof generation, no friction.
+          Three pre-built crypto baskets, live on Miden. You deposit
+              USDC from Sepolia, your browser bridges and proves everything,
+              and the Miden network itself credits your position —
+              self-custody from the first click.
         </p>
 
         <div
