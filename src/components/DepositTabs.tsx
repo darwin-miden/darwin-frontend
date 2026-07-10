@@ -1,21 +1,22 @@
 "use client";
 
 /**
- * Two deposit paths, converging on the same private basket position
- * on Miden:
+ * Two deposit paths, converging on the same basket position on Miden:
  *
- *   1. **ETH user** -> Epoch protocol's hosted intent bridge (Sepolia
- *      USDC -> Miden P2ID note). The custodial relay wallet on Miden
- *      receives the bridged dUSDC and submits the atomic_deposit_note
- *      to the controller on the user's behalf. No local bridge mock,
- *      no laptop dependency — Epoch hosts the allocator + solver.
+ *   1. **Self-custody (default)** -> the user's browser derives a Miden
+ *      wallet from one MetaMask signature, bridges Sepolia USDC via
+ *      Epoch, then emits a deposit note the Miden network itself
+ *      executes against the controller. Runs on its own route.
  *
  *   2. **Miden-native user** -> direct atomic_deposit_note via the
- *      Miden Web SDK in this tab. No bridge, no relay -- the user's
- *      own Miden wallet sends straight to the controller.
+ *      Miden Web SDK in this tab. No bridge — the user's own Miden
+ *      wallet sends straight to the controller.
  *
- * The earlier 1Click-mock + Sepolia ESCROW + wDCC ERC20 paths are
- * retired (commit history has them if a rollback is ever needed).
+ * The earlier custodial relay rail (ETH wallet -> Epoch -> relay wallet
+ * -> controller) is retired along with the 1Click-mock, Sepolia ESCROW
+ * and wDCC ERC20 paths — commit history has them if a rollback is ever
+ * needed. The network rail made the relay's job (executing deposits on
+ * the user's behalf) a protocol feature.
  */
 
 import dynamic from "next/dynamic";
@@ -47,15 +48,10 @@ const MidenDepositPanel = dynamic(
   },
 );
 
-const EpochDepositPanel = dynamic(
-  () => import("./EpochDepositPanel").then((m) => m.EpochDepositPanel),
-  { ssr: false },
-);
-
-type Tab = "epoch" | "miden" | "selfcustody";
+type Tab = "miden" | "selfcustody";
 
 export function DepositTabs({ basket }: { basket: BasketDef }) {
-  const [tab, setTab] = useState<Tab>("epoch");
+  const [tab, setTab] = useState<Tab>("selfcustody");
   const manifest = basketBySymbol(basket.symbol as BasketSymbol);
 
   return (
@@ -70,10 +66,10 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
         }}
       >
         <TabButton
-          active={tab === "epoch"}
-          onClick={() => setTab("epoch")}
-          label="ETH wallet"
-          subtitle="Sepolia USDC → Miden via Epoch"
+          active={tab === "selfcustody"}
+          onClick={() => setTab("selfcustody")}
+          label="Self-custody"
+          subtitle="Network-executed — no server, no extension"
         />
         <TabButton
           active={tab === "miden"}
@@ -81,15 +77,8 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
           label="Miden wallet"
           subtitle="Atomic deposit note, browser-proven"
         />
-        <TabButton
-          active={tab === "selfcustody"}
-          onClick={() => setTab("selfcustody")}
-          label="Self-custody"
-          subtitle="No server, no extension — browser only"
-        />
       </div>
 
-      {tab === "epoch" && <EpochDepositPanel basket={basket} />}
       {tab === "miden" && <MidenDepositPanel basket={manifest} />}
       {tab === "selfcustody" && <SelfCustodyPane symbol={basket.symbol} />}
     </div>
@@ -116,8 +105,9 @@ function SelfCustodyPane({ symbol }: { symbol: string }) {
       <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6, marginBottom: 6 }}>
         Deposit into <strong>{symbol}</strong> without trusting any Darwin
         server: your browser derives a Miden key from one MetaMask
-        signature, bridges Sepolia USDC via Epoch, consumes the note and
-        writes your {symbol} position itself — proofs included.
+        signature, bridges Sepolia USDC via Epoch, then emits a deposit
+        note that <strong>the Miden network itself executes</strong>
+        against the controller — vault and position, proofs included.
       </p>
       <ul style={{ fontSize: 12.5, color: "var(--ink-3)", lineHeight: 1.7, margin: "0 0 14px 18px", padding: 0 }}>
         <li>One signature — same wallet on any device, nothing to back up</li>
