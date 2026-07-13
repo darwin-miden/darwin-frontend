@@ -20,7 +20,7 @@
  */
 
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { BasketDef } from "../lib/contracts";
 import {
@@ -49,13 +49,6 @@ const MidenDepositPanel = dynamic(
   },
 );
 
-const MidenBareContextProvider = dynamic(
-  () =>
-    import("./MidenBareContextProvider").then(
-      (m) => m.MidenBareContextProvider,
-    ),
-  { ssr: false },
-);
 const TrustlessDepositPanel = dynamic(
   () =>
     import("./TrustlessDepositPanel").then((m) => m.TrustlessDepositPanel),
@@ -69,7 +62,22 @@ const TrustlessRedeemPanel = dynamic(
 type Tab = "miden" | "selfcustody";
 
 export function DepositTabs({ basket }: { basket: BasketDef }) {
-  const [tab, setTab] = useState<Tab>("selfcustody");
+  // The tab mirrors itself into the URL hash so Providers.tsx can swap
+  // the app-level Miden provider (bare for self-custody, MidenFi signer
+  // for the Miden-wallet tab) — exactly one WASM client at a time.
+  const [tab, setTabState] = useState<Tab>("selfcustody");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.location.hash === "#miden") {
+      setTabState("miden");
+    } else if (window.location.hash !== "#selfcustody") {
+      window.location.hash = "selfcustody";
+    }
+  }, []);
+  const setTab = (t: Tab) => {
+    setTabState(t);
+    window.location.hash = t === "selfcustody" ? "selfcustody" : "miden";
+  };
   const manifest = basketBySymbol(basket.symbol as BasketSymbol);
 
   return (
@@ -104,14 +112,12 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
 }
 
 /**
- * The self-custody flow mounts NATIVELY in the tab. The trustless
- * panels need the bare Miden provider (internal WASM keystore — the
- * MidenFi signer wrapper rejects derived keys), so the pane nests a
- * MidenBareContextProvider inside the app-level provider tree: React
- * context shadowing gives this subtree its own Miden client while the
- * wagmi/MetaMask connection from the top nav carries over untouched.
- * Only one tab's panel is mounted at a time, so the two Miden clients
- * never prove concurrently.
+ * The self-custody flow mounts NATIVELY in the tab under the app-level
+ * provider — which Providers.tsx has already swapped to the BARE Miden
+ * provider via the #selfcustody URL hash. One WASM client at a time:
+ * nesting a second provider over the same IndexedDB corrupts sync (a
+ * delivered note never became locally consumable — verified live).
+ * The wagmi/MetaMask connection from the top nav carries over natively.
  */
 function SelfCustodyPane({ symbol }: { symbol: string }) {
   const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
@@ -162,13 +168,11 @@ function SelfCustodyPane({ symbol }: { symbol: string }) {
           network-executed · no server, no extension
         </span>
       </div>
-      <MidenBareContextProvider>
-        {mode === "deposit" ? (
-          <TrustlessDepositPanel basket={basket} compact network />
-        ) : (
-          <TrustlessRedeemPanel basket={basket} network />
-        )}
-      </MidenBareContextProvider>
+      {mode === "deposit" ? (
+        <TrustlessDepositPanel basket={basket} compact network />
+      ) : (
+        <TrustlessRedeemPanel basket={basket} network />
+      )}
     </div>
   );
 }

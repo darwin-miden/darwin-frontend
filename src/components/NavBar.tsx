@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ConnectKitButton } from "connectkit";
@@ -36,6 +38,26 @@ export type NavKey =
   | "portfolio";
 
 export function NavBar({ active }: { active?: NavKey }) {
+  // The Self-custody tab (and /trustless) swap the app to the BARE
+  // Miden provider — MidenFiSignerProvider is absent there and
+  // useMidenFiWallet would throw, so the connect button hides.
+  const [bareMode, setBareMode] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      (window.location.hash === "#selfcustody" ||
+        window.location.pathname.startsWith("/trustless")),
+  );
+  useEffect(() => {
+    const check = () =>
+      setBareMode(
+        window.location.hash === "#selfcustody" ||
+          window.location.pathname.startsWith("/trustless"),
+      );
+    check();
+    window.addEventListener("hashchange", check);
+    return () => window.removeEventListener("hashchange", check);
+  }, []);
+
   const link = (key: NavKey, href: string, label: string) => (
     <Link
       href={href}
@@ -63,7 +85,7 @@ export function NavBar({ active }: { active?: NavKey }) {
           {link("faucet", "/faucet", "Faucet")}
         </nav>
         <div style={{ display: "flex", gap: 8 }}>
-          <MidenConnectButton />
+          {!bareMode && <MidenConnectButton />}
           <ConnectKitButton.Custom>
             {({ isConnected, isConnecting, show, address, ensName }) => (
               <button

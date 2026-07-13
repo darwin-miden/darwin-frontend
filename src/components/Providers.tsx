@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConnectKitProvider } from "connectkit";
 import { usePathname } from "next/navigation";
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { WagmiProvider } from "wagmi";
 
 import { wagmiConfig } from "../lib/wagmi";
@@ -26,7 +26,27 @@ export function Providers({ children }: { children: ReactNode }) {
   // opened. Verified live via a Playwright run that hit
   // "MidenClientDB_mdev" on /trustless/redeem despite the parent route
   // being locked to testnet.
-  const isTrustless = pathname?.startsWith("/trustless") ?? false;
+  // The basket pages' Self-custody tab needs the same bare provider as
+  // /trustless (internal WASM keystore) — but tab state isn't part of
+  // the pathname. The tab reflects itself into the URL hash, and the
+  // provider follows: #selfcustody → bare. Only one Miden client ever
+  // runs at a time this way; nesting a second provider over the same
+  // IndexedDB corrupts sync (a delivered note never became consumable
+  // — verified live).
+  const [hashBare, setHashBare] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.location.hash === "#selfcustody",
+  );
+  useEffect(() => {
+    const check = () =>
+      setHashBare(window.location.hash === "#selfcustody");
+    check();
+    window.addEventListener("hashchange", check);
+    return () => window.removeEventListener("hashchange", check);
+  }, []);
+  const isTrustless =
+    (pathname?.startsWith("/trustless") ?? false) || hashBare;
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
