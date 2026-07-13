@@ -1461,6 +1461,7 @@ export function TrustlessRedeemPanel({
           );
         }
         setSepoliaTxHint(built.paybackId ?? null);
+        setDebitTx("executed by the network — same tx as the payout");
         console.log("[network-redeem] payback consumed — dUSDC back in wallet");
         setStage("done");
         return;
@@ -1720,13 +1721,15 @@ export function TrustlessRedeemPanel({
           marginBottom: 16,
         }}
       >
-        Redeem · demo (no server, no extension)
+        {network
+          ? "Withdraw · network-executed"
+          : "Redeem · demo (no server, no extension)"}
       </h2>
 
       <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
-        Same MetaMask signature as the deposit → same derived Miden
-        wallet. Burn its dUSDC into a P2IDE note; Epoch&apos;s solver
-        pays USDC to your Sepolia address.
+        {network
+          ? "Same MetaMask signature as the deposit → same derived wallet. Your browser emits a request note; the Miden network debits your position and pays the dUSDC from the controller vault back to your wallet (~10s). Exit to Sepolia anytime with the classic redeem."
+          : "Same MetaMask signature as the deposit → same derived Miden wallet. Burn its dUSDC into a P2IDE note; Epoch's solver pays USDC to your Sepolia address."}
       </p>
 
       {!ethConnected && (
@@ -1966,7 +1969,7 @@ export function TrustlessRedeemPanel({
             }
           />
           <StageRow
-            label="p2ide note"
+            label={network ? "request note" : "p2ide note"}
             testId="row-p2ide"
             state={
               stage === "sending-note" && !noteId
@@ -1977,7 +1980,9 @@ export function TrustlessRedeemPanel({
             }
             detail={
               stage === "sending-note" && !noteId
-                ? "Spending dUSDC → P2IDE note (WASM prove + submit)…"
+                ? network
+                  ? "Emitting the redeem request note (WASM prove + submit)…"
+                  : "Spending dUSDC → P2IDE note (WASM prove + submit)…"
                 : noteId
                   ? noteId
                   : "waiting"
@@ -1998,7 +2003,7 @@ export function TrustlessRedeemPanel({
             }
           />
           <StageRow
-            label="epoch fill"
+            label={network ? "network payout" : "epoch fill"}
             testId="row-epoch-fill"
             state={
               stage === "awaiting-fill"
@@ -2009,19 +2014,23 @@ export function TrustlessRedeemPanel({
             }
             detail={
               stage === "awaiting-fill"
-                ? "Epoch solver is consuming the note and paying you on Sepolia (~1-2 min)…"
+                ? network
+                  ? "The NTX builder is debiting your position and paying the private payback note (~10s)…"
+                  : "Epoch solver is consuming the note and paying you on Sepolia (~1-2 min)…"
                 : sepoliaTxHint
                   ? sepoliaTxHint
                   : "waiting"
             }
             link={
               sepoliaTxHint && sepoliaTxHint.startsWith("0x")
-                ? `https://sepolia.etherscan.io/tx/${sepoliaTxHint}`
+                ? network
+                  ? `https://testnet.midenscan.com/note/${sepoliaTxHint}`
+                  : `https://sepolia.etherscan.io/tx/${sepoliaTxHint}`
                 : null
             }
           />
           <StageRow
-            label="debit slot-10"
+            label={network ? "network debit" : "debit slot-10"}
             testId="row-debit"
             state={
               stage === "debiting"
@@ -2052,8 +2061,19 @@ export function TrustlessRedeemPanel({
                 color: "var(--ink-3)",
               }}
             >
-              ✅ USDC delivered to your Sepolia address. Zero backend, single
-              provider (Epoch) for both bridge directions.
+              {network ? (
+                <>
+                  ✅ dUSDC back in your derived wallet — the Miden network
+                  debited your position and paid out of the controller vault
+                  via a private note only your browser could claim. Exit to
+                  Sepolia anytime with the classic redeem.
+                </>
+              ) : (
+                <>
+                  ✅ USDC delivered to your Sepolia address. Zero backend,
+                  single provider (Epoch) for both bridge directions.
+                </>
+              )}
               {intentNonce && (
                 <>
                   {" "}
