@@ -27,6 +27,7 @@ import {
   basketBySymbol,
   type BasketSymbol,
 } from "../lib/baskets";
+import { BASKET_TOKEN_FAUCETS } from "../lib/midenConstants";
 
 const MidenDepositPanel = dynamic(
   () => import("./MidenDepositPanel").then((m) => m.MidenDepositPanel),
@@ -46,6 +47,23 @@ const MidenDepositPanel = dynamic(
       </div>
     ),
   },
+);
+
+const MidenBareContextProvider = dynamic(
+  () =>
+    import("./MidenBareContextProvider").then(
+      (m) => m.MidenBareContextProvider,
+    ),
+  { ssr: false },
+);
+const TrustlessDepositPanel = dynamic(
+  () =>
+    import("./TrustlessDepositPanel").then((m) => m.TrustlessDepositPanel),
+  { ssr: false },
+);
+const TrustlessRedeemPanel = dynamic(
+  () => import("./TrustlessRedeemPanel").then((m) => m.TrustlessRedeemPanel),
+  { ssr: false },
 );
 
 type Tab = "miden" | "selfcustody";
@@ -86,25 +104,27 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
 }
 
 /**
- * The self-custody flow runs INLINE via a same-origin iframe: the
- * trustless panels need the bare Miden provider (internal keystore, no
- * MidenFi signer wrapper), which Providers.tsx routes by pathname — an
- * iframe on /trustless?embed=1 gives them their own provider and WASM
- * context without navigating away, and the wagmi/MetaMask connection is
- * shared through same-origin storage. Deposit/withdraw toggle swaps the
- * iframe src.
+ * The self-custody flow mounts NATIVELY in the tab. The trustless
+ * panels need the bare Miden provider (internal WASM keystore — the
+ * MidenFi signer wrapper rejects derived keys), so the pane nests a
+ * MidenBareContextProvider inside the app-level provider tree: React
+ * context shadowing gives this subtree its own Miden client while the
+ * wagmi/MetaMask connection from the top nav carries over untouched.
+ * Only one tab's panel is mounted at a time, so the two Miden clients
+ * never prove concurrently.
  */
 function SelfCustodyPane({ symbol }: { symbol: string }) {
   const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
-  const src =
-    mode === "deposit"
-      ? `/trustless?basket=${encodeURIComponent(symbol)}&embed=1`
-      : `/trustless/redeem?basket=${encodeURIComponent(symbol)}&embed=1`;
+  const faucet = BASKET_TOKEN_FAUCETS[symbol as BasketSymbol];
+  const basket = faucet
+    ? { symbol: faucet.symbol, faucetHex: faucet.id }
+    : undefined;
   return (
     <div
       style={{
         background: "var(--paper-2)",
         borderLeft: "3px solid var(--orange)",
+        padding: "12px 16px 16px",
       }}
     >
       <div
@@ -112,7 +132,7 @@ function SelfCustodyPane({ symbol }: { symbol: string }) {
           display: "flex",
           gap: 16,
           alignItems: "baseline",
-          padding: "10px 16px 0",
+          marginBottom: 10,
         }}
       >
         {(["deposit", "withdraw"] as const).map((m) => (
@@ -142,17 +162,13 @@ function SelfCustodyPane({ symbol }: { symbol: string }) {
           network-executed · no server, no extension
         </span>
       </div>
-      <iframe
-        key={src}
-        src={src}
-        title={`Self-custody ${mode} · ${symbol}`}
-        style={{
-          width: "100%",
-          height: 760,
-          border: 0,
-          display: "block",
-        }}
-      />
+      <MidenBareContextProvider>
+        {mode === "deposit" ? (
+          <TrustlessDepositPanel basket={basket} compact network />
+        ) : (
+          <TrustlessRedeemPanel basket={basket} network />
+        )}
+      </MidenBareContextProvider>
     </div>
   );
 }
