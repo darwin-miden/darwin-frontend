@@ -85,7 +85,24 @@ export function NavBar({ active }: { active?: NavKey }) {
           {link("faucet", "/faucet", "Faucet")}
         </nav>
         <div style={{ display: "flex", gap: 8 }}>
-          {!bareMode && <MidenConnectButton />}
+          {bareMode ? (
+            // Bare-provider mode (Self-custody tab): the real button's
+            // useMidenFiWallet hook would throw without its provider.
+            // Keep the nav visually stable with an identical button that
+            // flips to the Miden-wallet tab, where connecting applies.
+            <button
+              className="nav-cta"
+              type="button"
+              style={{ minWidth: 140, textAlign: "center" }}
+              onClick={() => {
+                window.location.hash = "miden";
+              }}
+            >
+              Connect Miden
+            </button>
+          ) : (
+            <MidenConnectButton />
+          )}
           <ConnectKitButton.Custom>
             {({ isConnected, isConnecting, show, address, ensName }) => (
               <button
