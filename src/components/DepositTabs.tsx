@@ -62,20 +62,32 @@ const TrustlessRedeemPanel = dynamic(
 type Tab = "miden" | "selfcustody";
 
 export function DepositTabs({ basket }: { basket: BasketDef }) {
-  // The tab mirrors itself into the URL hash so Providers.tsx can swap
-  // the app-level Miden provider (bare for self-custody, MidenFi signer
-  // for the Miden-wallet tab) — exactly one WASM client at a time.
-  const [tab, setTabState] = useState<Tab>("selfcustody");
+  // The tab is DERIVED from the URL hash — never set directly. Clicking
+  // a tab only writes the hash; the hashchange event then updates this
+  // state AND Providers.tsx's provider choice in the same batched React
+  // commit, so a panel can never render under the wrong Miden provider.
+  // (Setting local state first crashed live: the Miden-wallet panel
+  // mounted while the provider was still bare and useMidenFiWallet
+  // threw, taking the whole page down.)
+  const [tab, setTabState] = useState<Tab>(() =>
+    typeof window !== "undefined" && window.location.hash === "#miden"
+      ? "miden"
+      : "selfcustody",
+  );
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (window.location.hash === "#miden") {
-      setTabState("miden");
-    } else if (window.location.hash !== "#selfcustody") {
+    const apply = () =>
+      setTabState(window.location.hash === "#miden" ? "miden" : "selfcustody");
+    if (
+      window.location.hash !== "#miden" &&
+      window.location.hash !== "#selfcustody"
+    ) {
       window.location.hash = "selfcustody";
     }
+    window.addEventListener("hashchange", apply);
+    return () => window.removeEventListener("hashchange", apply);
   }, []);
   const setTab = (t: Tab) => {
-    setTabState(t);
     window.location.hash = t === "selfcustody" ? "selfcustody" : "miden";
   };
   const manifest = basketBySymbol(basket.symbol as BasketSymbol);
