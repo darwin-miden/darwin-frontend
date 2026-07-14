@@ -556,19 +556,21 @@ export function TrustlessDepositPanel({
       // attachments on custom notes; the endpoint is a pure function
       // (no keys) and the browser still proves + submits everything.
       if (network) {
+        // v10 CONFIDENTIAL deposit: emit a deposit note at the basket
+        // faucet-network account. The NTX builder drains the dUSDC
+        // collateral into the faucet vault and MINTS basket tokens into
+        // a PRIVATE note only this wallet can claim. The position is the
+        // wallet's private token balance — no public per-user ledger.
+        // Priced at the live NAV: mint_amount = deposit / NAV.
         setStage("crediting");
-        // Emit what the solver guaranteed to deliver (minTokenOut =
-        // 95% of the target) — the vault is certain to hold it, and
-        // the position credits exactly what the note moves. Any
-        // delivery surplus stays in the user's own wallet.
         const amountBaseNet =
           (parseUnits(humanAmount, EPOCH_USDC_SEPOLIA.midenDecimals) * 95n) / 100n;
-        const r = await fetch("/api/network-note", {
+        const r = await fetch("/api/confidential-note", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             sender: walletId,
-            userEvm: evmAddress,
+            recipient: walletId,
             basket: basket?.symbol ?? "DCC",
             amount: amountBaseNet.toString(),
           }),
@@ -576,12 +578,15 @@ export function TrustlessDepositPanel({
         const built = (await r.json()) as {
           noteId?: string;
           noteB64?: string;
+          paybackId?: string;
+          paybackFileB64?: string;
+          mintAmount?: string;
           error?: string;
         };
-        if (!r.ok || !built.noteB64) {
-          throw new Error(built.error ?? `network-note API ${r.status}`);
+        if (!r.ok || !built.noteB64 || !built.paybackFileB64) {
+          throw new Error(built.error ?? `confidential-note API ${r.status}`);
         }
-        const { Note, NoteArray } = await import("@miden-sdk/miden-sdk");
+        const { Note, NoteArray, NoteFile } = await import("@miden-sdk/miden-sdk");
         const bytes = Uint8Array.from(atob(built.noteB64), (c) => c.charCodeAt(0));
         const depositNote = Note.deserialize(bytes);
         const emitResult = await executeTx({
@@ -592,6 +597,26 @@ export function TrustlessDepositPanel({
               .build(),
         });
         setCreditTx(emitResult?.transactionId?.toString?.() ?? built.noteId ?? null);
+        // Import + consume the private minted-token note — the basket
+        // tokens land in this wallet's private vault.
+        const fileBytes = Uint8Array.from(atob(built.paybackFileB64), (c) => c.charCodeAt(0));
+        const noteFile = NoteFile.deserialize(fileBytes);
+        const clientAny = client as unknown as {
+          importNoteFile?: (f: unknown) => Promise<string>;
+        };
+        await clientAny.importNoteFile?.(noteFile);
+        for (let i = 0; i < 30; i++) {
+          await new Promise((res) => setTimeout(res, 5_000));
+          try {
+            await runExclusive(() => syncState());
+          } catch (_) {}
+          try {
+            await consume({ accountId: walletId, notes: [built.paybackId!] });
+            break;
+          } catch (_) {
+            /* not minted yet — keep polling */
+          }
+        }
         setStage("done");
         return;
       }
@@ -925,11 +950,11 @@ export function TrustlessDepositPanel({
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--rule)", color: "var(--ink-3)" }}>
               {network ? (
                 <>
-                  ✅ Deposit note emitted from your wallet —{" "}
-                  <strong>the Miden network itself</strong> consumes it and
-                  credits both the vault and your position inside the
-                  controller&apos;s own code (network transaction, ~10-30s). No
-                  NoAuth, no operator, nothing to trust but the MASM.
+                  ✅ Confidential deposit complete —{" "}
+                  <strong>the Miden network minted basket tokens</strong> into
+                  your private account (collateral into the faucet vault, tokens
+                  to you, one network transaction). Your holding is private:
+                  no public per-user ledger, no operator, only the MASM.
                 </>
               ) : (
                 <>

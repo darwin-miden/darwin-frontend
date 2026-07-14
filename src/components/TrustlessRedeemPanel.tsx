@@ -880,6 +880,74 @@ export function TrustlessRedeemPanel({
         // controller. Ends here (no redeem leg): the assertion is the
         // NTB consuming the note and slot-10 moving on the network
         // controller.
+        // conf- salt: v10 CONFIDENTIAL deposit — emit at the basket
+        // faucet-network; the NTX builder drains the collateral and mints
+        // basket tokens into a PRIVATE note this wallet consumes.
+        if (runSalt.startsWith("conf-")) {
+          log("confidential mode — emitting deposit note at the basket faucet");
+          const emitBase = (BigInt(dusdcMidenBaseUnits(DEPOSIT_HUMAN)) * 95n) / 100n;
+          const rn = await fetch("/api/confidential-note", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sender: freshWalletId,
+              recipient: freshWalletId,
+              basket: basket?.symbol ?? "DCC",
+              amount: emitBase.toString(),
+            }),
+          });
+          const built = (await rn.json()) as {
+            noteId?: string;
+            noteB64?: string;
+            paybackId?: string;
+            paybackFileB64?: string;
+            mintAmount?: string;
+            error?: string;
+          };
+          if (!rn.ok || !built.noteB64 || !built.paybackFileB64) {
+            throw new Error(built.error ?? `confidential-note ${rn.status}`);
+          }
+          const { Note, NoteArray, NoteFile } = await import("@miden-sdk/miden-sdk");
+          const nbytes = Uint8Array.from(atob(built.noteB64), (c) => c.charCodeAt(0));
+          const depositNote = Note.deserialize(nbytes);
+          const emitRes = await executeTx({
+            accountId: freshWalletId!,
+            request: () =>
+              new TransactionRequestBuilder()
+                .withOwnOutputNotes(new NoteArray([depositNote]))
+                .build(),
+          });
+          trace.confNoteId = built.noteId;
+          trace.confEmitTx = emitRes?.transactionId?.toString?.() ?? null;
+          trace.confMintAmount = built.mintAmount;
+          log("CONFIDENTIAL NOTE EMITTED", `${built.noteId} mint=${built.mintAmount}`);
+          // Import + consume the minted private token note.
+          const fileBytes = Uint8Array.from(atob(built.paybackFileB64), (c) => c.charCodeAt(0));
+          const noteFile = NoteFile.deserialize(fileBytes);
+          const cAny = client as unknown as {
+            importNoteFile?: (f: unknown) => Promise<string>;
+          };
+          await cAny.importNoteFile?.(noteFile);
+          let minted = false;
+          for (let i = 0; i < 30 && !minted; i++) {
+            await new Promise((res) => setTimeout(res, 5_000));
+            try {
+              await runExclusive(() => syncState());
+            } catch (_) {}
+            try {
+              await consume({ accountId: freshWalletId!, notes: [built.paybackId!] });
+              minted = true;
+            } catch (_) {
+              /* not minted yet */
+            }
+          }
+          trace.confMinted = minted;
+          log(minted ? "TOKENS MINTED + CONSUMED (private)" : "mint not consumable in 150s");
+          setStage("done");
+          console.log("[roundtrip] CONFIDENTIAL DONE", JSON.stringify(trace));
+          return trace;
+        }
+
         if (runSalt.startsWith("net-")) {
           log("network mode — emitting deposit note at the network controller");
           const emitBase = (BigInt(dusdcMidenBaseUnits(DEPOSIT_HUMAN)) * 95n) / 100n;
