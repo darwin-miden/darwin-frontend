@@ -403,6 +403,10 @@ export function TrustlessRedeemPanel({
   const [intentNonce, setIntentNonce] = useState<string | null>(null);
   const [vaultSyncMsg, setVaultSyncMsg] = useState<string | null>(null);
   const [debitTx, setDebitTx] = useState<string | null>(null);
+  // Network mode chains two legs: "withdraw" (request note -> NTB debits
+  // the position and pays the wallet) then "exit" (P2IDE -> Epoch fills
+  // USDC on Sepolia). Drives the stage rows.
+  const [netPhase, setNetPhase] = useState<"withdraw" | "exit">("withdraw");
   // Dev-only test buttons: hidden in normal use, shown with ?dev=1 or a
   // pre-injected window.__devKey (Playwright).
   const [devMode, setDevMode] = useState(false);
@@ -1474,6 +1478,7 @@ export function TrustlessRedeemPanel({
     pauseSync();
     try {
       setErrorMsg(null);
+      setNetPhase("withdraw");
 
       if (network) {
         // ── Network rail: request note → NTX builder debits the position
@@ -1581,11 +1586,17 @@ export function TrustlessRedeemPanel({
             "payback note not consumable after 150s — check network-note-status",
           );
         }
-        setSepoliaTxHint(built.paybackId ?? null);
         setDebitTx("executed by the network — same tx as the payout");
-        console.log("[network-redeem] payback consumed — dUSDC back in wallet");
-        setStage("done");
-        return;
+        console.log(
+          "[network-redeem] payback consumed — chaining the Sepolia exit",
+        );
+        // Chain the Sepolia exit: the wallet now holds the dUSDC — fall
+        // through into the classic Epoch leg (P2IDE -> USDC on Sepolia).
+        setNetPhase("exit");
+        setNoteId(null);
+        setMidenTxId(null);
+        setSepoliaTxHint(null);
+        setIntentNonce(null);
       }
 
       // Force-sync the derived wallet and drain any consumable notes into
@@ -1740,6 +1751,11 @@ export function TrustlessRedeemPanel({
       setStage("debiting");
       console.log("[redeem] debiting slot-10 position…");
       try {
+        if (network) {
+          // The NTB already debited the network position during the
+          // withdraw leg — the classic NoAuth debit doesn't apply.
+          throw new Error("__network_skip__");
+        }
         const spentBase = BigInt(String(quote.quoteResult.tokenIn ?? "0"));
         const bFelts = basket
           ? await basketFelts(basket.faucetHex)
@@ -1808,10 +1824,14 @@ export function TrustlessRedeemPanel({
           );
         }
       } catch (e) {
-        // A debit failure shouldn't mask a successful redeem — the USDC
-        // is already on Sepolia. Record and continue to done.
-        console.warn("[redeem] debit failed:", e);
-        setDebitTx("failed (redeem itself succeeded)");
+        if (e instanceof Error && e.message === "__network_skip__") {
+          // network mode: debit already done on the network controller.
+        } else {
+          // A debit failure shouldn't mask a successful redeem — the USDC
+          // is already on Sepolia. Record and continue to done.
+          console.warn("[redeem] debit failed:", e);
+          setDebitTx("failed (redeem itself succeeded)");
+        }
       }
 
       setStage("done");
@@ -1851,7 +1871,7 @@ export function TrustlessRedeemPanel({
 
       <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
         {network
-          ? "Your browser emits a request note; the Miden network debits your position and pays the dUSDC from the controller vault back to your wallet (~10s)."
+          ? "One action, two network hops: the Miden network debits your position and pays your wallet (~10s), then Epoch bridges the dUSDC to USDC on your Sepolia address (~2 min)."
           : "Burn your wallet's dUSDC into a P2IDE note; Epoch's solver pays USDC to your Sepolia address (~2 min)."}
       </p>
 
@@ -2002,7 +2022,7 @@ export function TrustlessRedeemPanel({
         stage !== "awaiting-fill" && (
           <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
             <label style={{ fontSize: 13 }}>
-              {network ? "dUSDC to withdraw:" : "USDC to receive on Sepolia:"}{" "}
+              {network ? "Withdraw (USDC to Sepolia):" : "USDC to receive on Sepolia:"}{" "}
               <input
                 type="text"
                 inputMode="decimal"
@@ -2024,7 +2044,7 @@ export function TrustlessRedeemPanel({
               className="nav-cta"
               style={{ minWidth: 260 }}
             >
-              {network ? "Withdraw — network-executed (~10s)" : "Redeem via Epoch (~2 min)"}
+              {network ? "Withdraw" : "Redeem via Epoch (~2 min)"}
             </button>
           </div>
         )}
@@ -2046,7 +2066,7 @@ export function TrustlessRedeemPanel({
           }}
         >
           <StageRow
-            label="sync vault"
+            label={network ? "position check" : "sync vault"}
             testId="row-sync-vault"
             state={
               stage === "sync-vault"
@@ -2069,6 +2089,30 @@ export function TrustlessRedeemPanel({
                   : "waiting"
             }
           />
+          {network && (
+            <StageRow
+              label="network withdraw"
+              testId="row-network-withdraw"
+              state={
+                netPhase === "exit"
+                  ? "done"
+                  : stage === "quoting" ||
+                      stage === "sending-note" ||
+                      stage === "awaiting-fill"
+                    ? "running"
+                    : "idle"
+              }
+              detail={
+                netPhase === "exit"
+                  ? "position debited + dUSDC paid to your wallet by the network"
+                  : stage === "quoting" ||
+                      stage === "sending-note" ||
+                      stage === "awaiting-fill"
+                    ? "request note → the network debits and pays out (~10s)…"
+                    : "waiting"
+              }
+            />
+          )}
           <StageRow
             label="quote"
             testId="row-quote"
@@ -2092,7 +2136,7 @@ export function TrustlessRedeemPanel({
             }
           />
           <StageRow
-            label={network ? "request note" : "p2ide note"}
+            label="p2ide note"
             testId="row-p2ide"
             state={
               stage === "sending-note" && !noteId
@@ -2103,9 +2147,7 @@ export function TrustlessRedeemPanel({
             }
             detail={
               stage === "sending-note" && !noteId
-                ? network
-                  ? "Emitting the redeem request note (WASM prove + submit)…"
-                  : "Spending dUSDC → P2IDE note (WASM prove + submit)…"
+                ? "Spending dUSDC → P2IDE note (WASM prove + submit)…"
                 : noteId
                   ? noteId
                   : "waiting"
@@ -2126,7 +2168,7 @@ export function TrustlessRedeemPanel({
             }
           />
           <StageRow
-            label={network ? "network payout" : "epoch fill"}
+            label="epoch fill"
             testId="row-epoch-fill"
             state={
               stage === "awaiting-fill"
@@ -2137,23 +2179,20 @@ export function TrustlessRedeemPanel({
             }
             detail={
               stage === "awaiting-fill"
-                ? network
-                  ? "The NTX builder is debiting your position and paying the private payback note (~10s)…"
-                  : "Epoch solver is consuming the note and paying you on Sepolia (~1-2 min)…"
+                ? "Epoch solver is consuming the note and paying you on Sepolia (~1-2 min)…"
                 : sepoliaTxHint
                   ? sepoliaTxHint
                   : "waiting"
             }
             link={
               sepoliaTxHint && sepoliaTxHint.startsWith("0x")
-                ? network
-                  ? `https://testnet.midenscan.com/note/${sepoliaTxHint}`
-                  : `https://sepolia.etherscan.io/tx/${sepoliaTxHint}`
+                ? `https://sepolia.etherscan.io/tx/${sepoliaTxHint}`
                 : null
             }
           />
+          {!network && (
           <StageRow
-            label={network ? "network debit" : "debit slot-10"}
+            label="debit slot-10"
             testId="row-debit"
             state={
               stage === "debiting"
@@ -2175,6 +2214,7 @@ export function TrustlessRedeemPanel({
                 : null
             }
           />
+          )}
           {stage === "done" && (
             <div
               style={{
@@ -2186,10 +2226,10 @@ export function TrustlessRedeemPanel({
             >
               {network ? (
                 <>
-                  ✅ dUSDC back in your derived wallet — the Miden network
-                  debited your position and paid out of the controller vault
-                  via a private note only your browser could claim. Exit to
-                  Sepolia anytime with the classic redeem.
+                  ✅ USDC delivered to your Sepolia address. The Miden
+                  network debited your position and paid your wallet from
+                  the controller vault; Epoch bridged the exit — fully
+                  self-custodial, end to end.
                 </>
               ) : (
                 <>

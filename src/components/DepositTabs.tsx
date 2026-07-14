@@ -133,11 +133,6 @@ export function DepositTabs({ basket }: { basket: BasketDef }) {
  */
 function SelfCustodyPane({ symbol }: { symbol: string }) {
   const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
-  // Withdraw destination: the network rail pays dUSDC back to the
-  // derived wallet (~10s); the Sepolia exit burns wallet dUSDC into a
-  // P2IDE note that Epoch's solver fills with USDC on Sepolia (~2min).
-  // Chaining both = position -> wallet -> Sepolia, all in this pane.
-  const [dest, setDest] = useState<"wallet" | "sepolia">("wallet");
   const faucet = BASKET_TOKEN_FAUCETS[symbol as BasketSymbol];
   const basket = faucet
     ? { symbol: faucet.symbol, faucetHex: faucet.id }
@@ -185,54 +180,10 @@ function SelfCustodyPane({ symbol }: { symbol: string }) {
           network-executed · no server, no extension
         </span>
       </div>
-      {mode === "withdraw" && (
-        <div
-          style={{
-            display: "flex",
-            gap: 14,
-            alignItems: "baseline",
-            margin: "2px 0 10px",
-            fontSize: 12,
-          }}
-        >
-          <span style={{ color: "var(--ink-3)" }}>destination:</span>
-          {(
-            [
-              ["wallet", "my Miden wallet · ~10s"],
-              ["sepolia", "Sepolia USDC · ~2 min"],
-            ] as const
-          ).map(([d, label]) => (
-            <button
-              key={d}
-              onClick={() => setDest(d)}
-              style={{
-                background: "transparent",
-                border: 0,
-                padding: 0,
-                cursor: "pointer",
-                fontSize: 12,
-                fontFamily: "var(--font-mono-stack)",
-                color: dest === d ? "var(--ink)" : "var(--ink-3)",
-                borderBottom:
-                  dest === d
-                    ? "2px solid var(--orange)"
-                    : "2px solid transparent",
-              }}
-            >
-              → {label}
-            </button>
-          ))}
-        </div>
-      )}
       {mode === "deposit" ? (
         <TrustlessDepositPanel basket={basket} compact network />
       ) : (
-        <TrustlessRedeemPanel
-          key={dest}
-          basket={basket}
-          compact
-          network={dest === "wallet"}
-        />
+        <TrustlessRedeemPanel basket={basket} compact network />
       )}
     </div>
   );
