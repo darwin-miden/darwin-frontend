@@ -89,6 +89,59 @@ function localSepoliaSigningClient(
     chain: sepolia,
     transport: custom({
       async request({ method, params }) {
+        if (
+          method === "eth_sendTransaction" ||
+          method === "wallet_sendTransaction"
+        ) {
+          // Some Epoch SDK versions submit UNSIGNED tx params and expect
+          // the wallet to sign (a public RPC answers "unknown account").
+          // Sign locally as a plain legacy tx — same rationale and gas
+          // policy as the raw-sync branch below — and return the hash,
+          // which is all eth_sendTransaction promises.
+          const tx = (params as [
+            {
+              to?: `0x${string}`;
+              data?: `0x${string}`;
+              value?: `0x${string}`;
+              gas?: `0x${string}`;
+            },
+          ])[0];
+          const nonce = await pub.getTransactionCount({
+            address: account.address,
+            blockTag: "pending",
+          });
+          const gasPrice = ((await pub.getGasPrice()) * 25n) / 10n;
+          let gas = tx.gas ? BigInt(tx.gas) : undefined;
+          if (!gas) {
+            try {
+              gas =
+                ((await pub.estimateGas({
+                  account: account.address,
+                  to: tx.to,
+                  data: tx.data,
+                  value: tx.value ? BigInt(tx.value) : 0n,
+                })) *
+                  13n) /
+                10n;
+            } catch {
+              gas = 500_000n;
+            }
+          }
+          const signed = await account.signTransaction({
+            type: "legacy",
+            chainId: sepolia.id,
+            nonce,
+            to: tx.to,
+            data: tx.data,
+            value: tx.value ? BigInt(tx.value) : 0n,
+            gas,
+            gasPrice,
+          });
+          return await pub.request({
+            method: "eth_sendRawTransaction",
+            params: [signed],
+          });
+        }
         if (method === "eth_sendRawTransactionSync") {
           // publicnode rejects the browser-built eip1559 raw with
           // "Invalid parameters" (the same viem prepare path works from
