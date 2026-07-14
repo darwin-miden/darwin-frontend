@@ -224,8 +224,8 @@ export function SelfCustodyPositionsSection() {
               <Link
                 href={
                   r.symbol
-                    ? `/trustless?basket=${r.symbol}${r.network ? "" : "&network=0"}`
-                    : "/trustless?network=0"
+                    ? `/baskets/${r.symbol.toLowerCase()}#selfcustody`
+                    : "/baskets"
                 }
                 style={{ textDecoration: "underline", color: "var(--ink-2)", fontSize: 12 }}
               >
@@ -234,8 +234,8 @@ export function SelfCustodyPositionsSection() {
               <Link
                 href={
                   r.symbol
-                    ? `/trustless/redeem?basket=${r.symbol}${r.network ? "" : "&network=0"}`
-                    : "/trustless/redeem?network=0"
+                    ? `/baskets/${r.symbol.toLowerCase()}#selfcustody`
+                    : "/baskets"
                 }
                 style={{ textDecoration: "underline", color: "var(--ink)", fontSize: 12 }}
               >

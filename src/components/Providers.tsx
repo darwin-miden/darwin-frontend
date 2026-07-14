@@ -45,8 +45,7 @@ export function Providers({ children }: { children: ReactNode }) {
     window.addEventListener("hashchange", check);
     return () => window.removeEventListener("hashchange", check);
   }, []);
-  const isTrustless =
-    (pathname?.startsWith("/trustless") ?? false) || hashBare;
+  const isTrustless = hashBare;
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>

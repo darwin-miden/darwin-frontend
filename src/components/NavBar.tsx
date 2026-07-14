@@ -44,15 +44,11 @@ export function NavBar({ active }: { active?: NavKey }) {
   const [bareMode, setBareMode] = useState(
     () =>
       typeof window !== "undefined" &&
-      (window.location.hash === "#selfcustody" ||
-        window.location.pathname.startsWith("/trustless")),
+      window.location.hash === "#selfcustody",
   );
   useEffect(() => {
     const check = () =>
-      setBareMode(
-        window.location.hash === "#selfcustody" ||
-          window.location.pathname.startsWith("/trustless"),
-      );
+      setBareMode(window.location.hash === "#selfcustody");
     check();
     window.addEventListener("hashchange", check);
     return () => window.removeEventListener("hashchange", check);

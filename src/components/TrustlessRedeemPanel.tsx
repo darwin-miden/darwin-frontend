@@ -334,6 +334,26 @@ function StageRow({
 
 const REDEEM_AMOUNT_DEFAULT = "1";
 
+
+// The derive step is deterministic per EVM address and the signing keys
+// persist in the WASM keystore (IndexedDB), so once ANY panel derived
+// the wallet in this browser, others can reuse the id without asking
+// for another MetaMask signature.
+function storedWalletId(evm: string | undefined): string | null {
+  if (!evm || typeof window === "undefined") return null;
+  try {
+    return sessionStorage.getItem(`darwin-derived-${evm.toLowerCase()}`);
+  } catch {
+    return null;
+  }
+}
+function storeWalletId(evm: string | undefined, id: string) {
+  if (!evm || typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(`darwin-derived-${evm.toLowerCase()}`, id);
+  } catch {}
+}
+
 export function TrustlessRedeemPanel({
   basket,
   network = false,
@@ -365,6 +385,13 @@ export function TrustlessRedeemPanel({
 
   const [stage, setStage] = useState<Stage>("idle");
   const [walletId, setWalletId] = useState<string | null>(null);
+  // Reuse a wallet already derived in this browser session (any panel).
+  useEffect(() => {
+    if (walletId || !evmAddress) return;
+    const stored = storedWalletId(evmAddress);
+    if (stored) setWalletId(stored);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evmAddress]);
   const [humanAmount, setHumanAmount] = useState<string>(REDEEM_AMOUNT_DEFAULT);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [noteId, setNoteId] = useState<string | null>(null);
@@ -449,6 +476,7 @@ export function TrustlessRedeemPanel({
         }
         if (!derivedWalletId) throw new Error("no wallet id");
         setWalletId(derivedWalletId);
+        storeWalletId(evmAddress, derivedWalletId);
         trace.walletId = derivedWalletId;
         log("walletId", derivedWalletId);
 
@@ -1377,6 +1405,7 @@ export function TrustlessRedeemPanel({
       }
       if (!resolvedWalletId) throw new Error("No wallet id resolved");
       setWalletId(resolvedWalletId);
+      storeWalletId(evmAddress, resolvedWalletId);
       setStage("ready");
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
