@@ -230,6 +230,7 @@ function SelfCustodyPane({ symbol }: { symbol: string }) {
         <TrustlessRedeemPanel
           key={dest}
           basket={basket}
+          compact
           network={dest === "wallet"}
         />
       )}

@@ -356,10 +356,13 @@ function storeWalletId(evm: string | undefined, id: string) {
 
 export function TrustlessRedeemPanel({
   basket,
+  compact = false,
   network = false,
 }: {
   /** Basket to debit — keys slot-10 per (user, basket). Omit = legacy flat slot. */
   basket?: { symbol: string; faucetHex: string };
+  /** Embedded in the basket tab: the pane already provides mode/destination context — hide the panel's own heading + intro. */
+  compact?: boolean;
   /**
    * Network rail: the redeem is a request note the NTX builder executes
    * against the network controller — it debits the position AND pays the
@@ -1477,6 +1480,42 @@ export function TrustlessRedeemPanel({
         // and pays a private payback P2ID from the controller vault.
         const amountBase = parseUnits(humanAmount, 6);
         setStage("quoting");
+        // Pre-flight: the vault can only pay what the position holds —
+        // an over-ask makes the NTB fail the note forever (verified
+        // live with a 31 dUSDC ask against a 3.4 position). Refuse it
+        // client-side with the actual balance instead.
+        try {
+          const { suffix, prefix } = evmToUserIdFelts(evmAddress);
+          const bf = basket
+            ? await basketFelts(basket.faucetHex)
+            : { basketSuffix: 0n, basketPrefix: 0n };
+          const pr = await fetch("/api/network-position", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              suffix: suffix.toString(),
+              prefix: prefix.toString(),
+              basketSuffix: bf.basketSuffix.toString(),
+              basketPrefix: bf.basketPrefix.toString(),
+            }),
+          });
+          const pj = (await pr.json()) as { position?: string };
+          if (pr.ok && pj.position !== undefined) {
+            const pos = BigInt(pj.position);
+            if (amountBase > pos) {
+              throw new Error(
+                `Your ${basket?.symbol ?? ""} network position holds ${(Number(pos) / 1e6).toFixed(2)} dUSDC — you asked to withdraw ${humanAmount}. Lower the amount.`,
+              );
+            }
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message.includes("network position holds")) {
+            throw e;
+          }
+          // A position-read hiccup shouldn't block the withdraw — the
+          // network itself is the final validator.
+          console.warn("[network-redeem] pre-flight read failed:", e);
+        }
         const r = await fetch("/api/network-redeem-note", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1792,26 +1831,28 @@ export function TrustlessRedeemPanel({
           100% { transform: rotate(360deg); }
         }
       `}</style>
-      <h2
-        style={{
-          fontSize: 14,
-          fontFamily: "var(--font-mono-stack)",
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          borderBottom: "1px solid var(--ink)",
-          paddingBottom: 8,
-          marginBottom: 16,
-        }}
-      >
-        {network
-          ? "Withdraw · network-executed"
-          : "Redeem · demo (no server, no extension)"}
-      </h2>
+      {!compact && (
+        <h2
+          style={{
+            fontSize: 14,
+            fontFamily: "var(--font-mono-stack)",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            borderBottom: "1px solid var(--ink)",
+            paddingBottom: 8,
+            marginBottom: 16,
+          }}
+        >
+          {network
+            ? "Withdraw · network-executed"
+            : "Redeem · demo (no server, no extension)"}
+        </h2>
+      )}
 
       <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
         {network
-          ? "Same MetaMask signature as the deposit → same derived wallet. Your browser emits a request note; the Miden network debits your position and pays the dUSDC from the controller vault back to your wallet (~10s). Exit to Sepolia anytime with the classic redeem."
-          : "Same MetaMask signature as the deposit → same derived Miden wallet. Burn its dUSDC into a P2IDE note; Epoch's solver pays USDC to your Sepolia address."}
+          ? "Your browser emits a request note; the Miden network debits your position and pays the dUSDC from the controller vault back to your wallet (~10s)."
+          : "Burn your wallet's dUSDC into a P2IDE note; Epoch's solver pays USDC to your Sepolia address (~2 min)."}
       </p>
 
       {!ethConnected && (
@@ -1961,7 +2002,7 @@ export function TrustlessRedeemPanel({
         stage !== "awaiting-fill" && (
           <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
             <label style={{ fontSize: 13 }}>
-              USDC to receive on Sepolia:{" "}
+              {network ? "dUSDC to withdraw:" : "USDC to receive on Sepolia:"}{" "}
               <input
                 type="text"
                 inputMode="decimal"
@@ -1983,7 +2024,7 @@ export function TrustlessRedeemPanel({
               className="nav-cta"
               style={{ minWidth: 260 }}
             >
-              Step 2 · Redeem via Epoch
+              {network ? "Withdraw — network-executed (~10s)" : "Redeem via Epoch (~2 min)"}
             </button>
           </div>
         )}
