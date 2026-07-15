@@ -46,7 +46,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { deriveMidenWallet } from "../lib/deriveWallet";
 import { sepolia } from "viem/chains";
-import { useAccount, useChainId, usePublicClient, useSignMessage, useSignTypedData, useSwitchChain } from "wagmi";
+import { useAccount, usePublicClient, useSignTypedData, useSwitchChain } from "wagmi";
 import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
 
 import {
@@ -222,9 +222,6 @@ function localSepoliaSigningClient(
   });
 }
 
-const DERIVE_MESSAGE = (evm: string) =>
-  `Darwin Protocol\n\nDerive Miden signing key.\n\nEVM address: ${evm}\n\nSigning this reveals nothing about your ETH funds and is safe to sign.`;
-
 // @miden-sdk/react's default `AuthScheme` symbol is wrong at runtime
 // (matches TrustlessDepositPanel's fix). Pass the raw wasm enum value.
 const AUTH_SCHEME_FALCON_ENUM_VALUE = 2;
@@ -374,9 +371,7 @@ export function TrustlessRedeemPanel({
   network?: boolean;
 } = {}) {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
-  const { signMessageAsync } = useSignMessage();
   const { signTypedDataAsync } = useSignTypedData();
-  const chainId = useChainId();
   const publicClient = usePublicClient();
   const { switchChainAsync } = useSwitchChain();
   const { createWallet, isCreating, error: createErr } = useCreateWallet();
@@ -412,15 +407,38 @@ export function TrustlessRedeemPanel({
   // USDC on Sepolia). Drives the stage rows.
   const [netPhase, setNetPhase] = useState<"withdraw" | "exit">("withdraw");
   // Dev-only test buttons: hidden in normal use, shown with ?dev=1 or a
-  // pre-injected window.__devKey (Playwright).
+  // pre-injected window.__devKey (Playwright). DEV BUILDS ONLY — these
+  // buttons include a raw "paste your private key" prompt, which must
+  // never be reachable on a production origin (phishing / self-XSS lure),
+  // so devMode is hard-gated on NODE_ENV, not just the URL param.
   const [devMode, setDevMode] = useState(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (process.env.NODE_ENV === "production") return;
     const w = window as unknown as { __devKey?: string };
     const qs = new URLSearchParams(window.location.search);
     setDevMode(Boolean(w.__devKey) || qs.has("dev"));
   }, []);
   const sdkRef = useRef<EpochIntentSDK | null>(null);
+
+  // Derive a Miden wallet from a LOCAL viem account through the EXACT
+  // production path (deriveMidenWallet: EIP-712 typed data + low-s
+  // canonicalisation), so the autonomous E2E exercises the real
+  // derivation rather than a divergent personal_sign fork. keyIndex
+  // isolates each run's wallet without changing the crypto path.
+  const deriveDevWallet = useCallback(
+    async (
+      account: ReturnType<typeof privateKeyToAccount>,
+      keyIndex: bigint = 0n,
+    ) =>
+      deriveMidenWallet(createWallet, {
+        evmAddress: account.address as `0x${string}`,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        signTypedData: (td) => account.signTypedData(td as any),
+        keyIndex,
+      }),
+    [createWallet],
+  );
 
   // Autonomous E2E flow — used by both the "Autonomous test" button and
   // the window.__darwinTrustlessRedeem debug hook. Bypasses wagmi entirely
@@ -454,38 +472,13 @@ export function TrustlessRedeemPanel({
         const evm = account.address as `0x${string}`;
         trace.evm = evm;
 
-        // Same message the UI's onDerive uses → same seed → same wallet.
+        // Exact production derivation (EIP-712 typed data + low-s
+        // canonicalisation) via a local signer — same path onDerive uses.
         setStage("signing");
-        log("signing derive message");
-        const sig = await account.signMessage({
-          message: DERIVE_MESSAGE(evm),
-        });
-        const seed = keccak256(toBytes(sig));
-        const seedBytes = new Uint8Array(
-          seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-        );
-
+        log("signing derive typed data (production path)");
         setStage("deriving");
         log("createWallet");
-        let derivedWalletId: string | null = null;
-        try {
-          const acc = await createWallet({
-            initSeed: seedBytes,
-            storageMode: "private",
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
-          });
-          derivedWalletId = acc.id().toString();
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          const m = msg.match(/id (0x[0-9a-fA-F]+)/);
-          if (m && /already being tracked/i.test(msg)) {
-            derivedWalletId = m[1];
-          } else {
-            throw e;
-          }
-        }
-        if (!derivedWalletId) throw new Error("no wallet id");
+        const derivedWalletId = await deriveDevWallet(account);
         setWalletId(derivedWalletId);
         storeWalletId(evmAddress, derivedWalletId);
         trace.walletId = derivedWalletId;
@@ -747,35 +740,12 @@ export function TrustlessRedeemPanel({
         const evm = account.address as `0x${string}`;
         trace.evm = evm;
 
-        // ── Fresh wallet: salt the derive message so each run gets its
-        // own Miden account with clean local state.
+        // ── Fresh wallet per run: same production derivation, isolated
+        // by a keyIndex derived from the run salt (replaces the old
+        // salted personal_sign message so the E2E stays on the real path).
         setStage("deriving");
-        const sig = await account.signMessage({
-          message: DERIVE_MESSAGE(evm) + `\n\nRoundtrip salt: ${runSalt}`,
-        });
-        const seed = keccak256(toBytes(sig));
-        const seedBytes = new Uint8Array(
-          seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-        );
-        let freshWalletId: string | null = null;
-        try {
-          const acc = await createWallet({
-            initSeed: seedBytes,
-            storageMode: "private",
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
-          });
-          freshWalletId = acc.id().toString();
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          const m = msg.match(/id (0x[0-9a-fA-F]+)/);
-          if (m && /already being tracked/i.test(msg)) {
-            freshWalletId = m[1];
-          } else {
-            throw e;
-          }
-        }
-        if (!freshWalletId) throw new Error("no fresh wallet id");
+        const keyIndex = BigInt(keccak256(toBytes(String(runSalt))));
+        const freshWalletId = await deriveDevWallet(account, keyIndex);
         setWalletId(freshWalletId);
         trace.walletId = freshWalletId;
         log("fresh wallet", freshWalletId);
@@ -1243,29 +1213,9 @@ export function TrustlessRedeemPanel({
     async (devKeyHex: string, salt: string, amountBase: string, basketSym?: string) => {
       const account = privateKeyToAccount(devKeyHex as `0x${string}`);
       const evm = account.address as `0x${string}`;
-      const sig = await account.signMessage({
-        message: DERIVE_MESSAGE(evm) + `\n\nRoundtrip salt: ${salt}`,
-      });
-      const seed = keccak256(toBytes(sig));
-      const seedBytes = new Uint8Array(
-        seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-      );
-      let wid: string | null = null;
-      try {
-        const acc = await createWallet({
-          initSeed: seedBytes,
-          storageMode: "private",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
-        });
-        wid = acc.id().toString();
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const m = msg.match(/id (0x[0-9a-fA-F]+)/);
-        if (m && /already being tracked/i.test(msg)) wid = m[1];
-        else throw e;
-      }
-      if (!wid) throw new Error("no wallet id");
+      // Production derivation path, run-isolated by keyIndex(salt).
+      const keyIndex = BigInt(keccak256(toBytes(String(salt))));
+      const wid = await deriveDevWallet(account, keyIndex);
       await runExclusive(() => syncState());
       const r = await fetch("/api/network-note", {
         method: "POST",
@@ -1307,29 +1257,9 @@ export function TrustlessRedeemPanel({
     async (devKeyHex: string, salt: string, amountBase: string, basketSym?: string) => {
       const account = privateKeyToAccount(devKeyHex as `0x${string}`);
       const evm = account.address as `0x${string}`;
-      const sig = await account.signMessage({
-        message: DERIVE_MESSAGE(evm) + `\n\nRoundtrip salt: ${salt}`,
-      });
-      const seed = keccak256(toBytes(sig));
-      const seedBytes = new Uint8Array(
-        seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-      );
-      let wid: string | null = null;
-      try {
-        const acc = await createWallet({
-          initSeed: seedBytes,
-          storageMode: "private",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
-        });
-        wid = acc.id().toString();
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const m = msg.match(/id (0x[0-9a-fA-F]+)/);
-        if (m && /already being tracked/i.test(msg)) wid = m[1];
-        else throw e;
-      }
-      if (!wid) throw new Error("no wallet id");
+      // Production derivation path, run-isolated by keyIndex(salt).
+      const keyIndex = BigInt(keccak256(toBytes(String(salt))));
+      const wid = await deriveDevWallet(account, keyIndex);
       await runExclusive(() => syncState());
 
       const r = await fetch("/api/network-redeem-note", {
@@ -1399,8 +1329,12 @@ export function TrustlessRedeemPanel({
   );
 
   // Expose the same flow via a window function for direct JS testing.
+  // DEV-ONLY: these hooks hand any injected script a turnkey
+  // derive/sign/emit/redeem toolkit driven by the already-loaded wallet,
+  // so they are dead-code-eliminated from prod builds.
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (process.env.NODE_ENV === "production") return;
     const w = window as unknown as {
       __darwinTrustlessRedeem?: (
         devKeyHex: string,
@@ -1458,7 +1392,6 @@ export function TrustlessRedeemPanel({
       try {
         resolvedWalletId = await deriveMidenWallet(createWallet, {
           evmAddress,
-          chainId,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           signTypedData: (td) => signTypedDataAsync(td as any),
           getCode: (addr) => publicClient!.getCode({ address: addr }),

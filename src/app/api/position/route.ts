@@ -4,6 +4,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { NextResponse } from "next/server";
 
+import {
+  acquireSlot,
+  busySlot,
+  rateLimit,
+  rateLimited,
+  redact,
+  releaseSlot,
+} from "../../../lib/apiGuard";
+
 /**
  * POST /api/position
  *
@@ -139,6 +148,7 @@ interface Body {
 }
 
 export async function POST(req: Request) {
+  if (!rateLimit(req)) return rateLimited();
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -206,20 +216,30 @@ export async function POST(req: Request) {
       "utf8",
     );
     const controller = body.controllerId ?? CONTROLLER_ID;
-    // Non-blocking freshness: fire a `miden-client sync` before the read
-    // so slot-10 writes made in the last few seconds are visible. If sync
-    // fails or hangs, we still fall through to exec and return whatever
-    // the local store has — better than blocking the whole response.
-    await runSync().catch(() => undefined);
-    const { stdout, stderr, code } = await runExec(scriptPath, controller);
+    if (!/^0x[0-9a-fA-F]{30}$/.test(controller)) {
+      return NextResponse.json({ error: "controllerId must be a Miden account hex" }, { status: 400 });
+    }
+    if (!acquireSlot()) return busySlot();
+    let stdout: string, stderr: string, code: number | null;
+    try {
+      // Non-blocking freshness: fire a `miden-client sync` before the read
+      // so slot-10 writes made in the last few seconds are visible. If sync
+      // fails or hangs, we still fall through to exec and return whatever
+      // the local store has — better than blocking the whole response.
+      await runSync().catch(() => undefined);
+      ({ stdout, stderr, code } = await runExec(scriptPath, controller));
+    } finally {
+      releaseSlot();
+    }
     if (code !== 0) {
+      console.error("[position] miden-client exec failed", code, stderr || stdout);
       const lastErr = (stderr + stdout)
         .split("\n")
         .filter((l) => /assertion|error|failed|✗|×/i.test(l))
         .slice(-3)
         .join(" / ");
       return NextResponse.json(
-        { error: lastErr || `miden-client exit ${code}` },
+        { error: redact(lastErr) || `miden-client exit ${code}` },
         { status: 500 },
       );
     }
@@ -228,8 +248,9 @@ export async function POST(req: Request) {
     // truncate_stack top. v0.14 fallback pattern kept for safety.
     const m = stdout.match(/Result:\s*(\d+)/) ?? stdout.match(/0:\s*(\d+)/);
     if (!m) {
+      console.error("[position] unparseable miden-client output", stdout);
       return NextResponse.json(
-        { error: "couldn't parse position from miden-client output", raw: stdout.slice(0, 500) },
+        { error: "couldn't parse position from miden-client output", raw: redact(stdout.slice(0, 500)) },
         { status: 500 },
       );
     }

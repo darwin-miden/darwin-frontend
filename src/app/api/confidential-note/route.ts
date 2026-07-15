@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
 import { NextResponse } from "next/server";
 
+import {
+  acquireSlot,
+  busySlot,
+  rateLimit,
+  rateLimited,
+  redact,
+  releaseSlot,
+} from "../../../lib/apiGuard";
 import { CONFIDENTIAL_FAUCETS } from "../../../lib/confidentialFaucets";
 
 /**
@@ -50,6 +58,7 @@ function runBuilder(args: string[]): Promise<{ stdout: string; stderr: string; c
 }
 
 export async function POST(req: Request) {
+  if (!rateLimit(req)) return rateLimited();
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -74,10 +83,10 @@ export async function POST(req: Request) {
   if (!/^0x[0-9a-fA-F]{30}$/.test(sender) || !/^0x[0-9a-fA-F]{30}$/.test(recipient)) {
     return NextResponse.json({ error: "sender/recipient must be Miden account hex" }, { status: 400 });
   }
-  const faucetId = CONFIDENTIAL_FAUCETS[basket];
-  if (!faucetId) {
+  if (!Object.prototype.hasOwnProperty.call(CONFIDENTIAL_FAUCETS, basket)) {
     return NextResponse.json({ error: "basket must be DCC, DAG or DCO" }, { status: 400 });
   }
+  const faucetId = CONFIDENTIAL_FAUCETS[basket];
   let amountBig: bigint;
   try {
     amountBig = BigInt(amount);
@@ -100,24 +109,31 @@ export async function POST(req: Request) {
     // NAV read hiccup — fall back to 1:1 rather than block the deposit.
   }
 
-  const { stdout, stderr, code } = await runBuilder([
-    "--emit-json",
-    "--faucet",
-    faucetId,
-    "--sender",
-    sender,
-    "--recipient",
-    recipient,
-    "--amount",
-    amountBig.toString(),
-    "--fee-factor",
-    "1",
-    "--nav-scale",
-    navScale.toString(),
-  ]);
+  if (!acquireSlot()) return busySlot();
+  let stdout: string, stderr: string, code: number | null;
+  try {
+    ({ stdout, stderr, code } = await runBuilder([
+      "--emit-json",
+      "--faucet",
+      faucetId,
+      "--sender",
+      sender,
+      "--recipient",
+      recipient,
+      "--amount",
+      amountBig.toString(),
+      "--fee-factor",
+      "1",
+      "--nav-scale",
+      navScale.toString(),
+    ]));
+  } finally {
+    releaseSlot();
+  }
   if (code !== 0) {
+    console.error("[confidential-note] builder failed", code, stderr || stdout);
     return NextResponse.json(
-      { error: `builder exit ${code}: ${(stderr || stdout).slice(-300)}` },
+      { error: `builder exit ${code}: ${redact((stderr || stdout).slice(-300))}` },
       { status: 500 },
     );
   }
@@ -126,6 +142,7 @@ export async function POST(req: Request) {
     const parsed = JSON.parse(lastLine);
     return NextResponse.json({ ...parsed, faucetId, navScale });
   } catch {
-    return NextResponse.json({ error: "couldn't parse builder output", raw: lastLine.slice(0, 300) }, { status: 500 });
+    console.error("[confidential-note] unparseable builder output", lastLine);
+    return NextResponse.json({ error: "couldn't parse builder output", raw: redact(lastLine.slice(0, 300)) }, { status: 500 });
   }
 }

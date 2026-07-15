@@ -56,7 +56,7 @@ import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 // string "falcon" — the low-level path doesn't convert.
 // Force the numeric enum value directly (2 = AuthRpoFalcon512).
 const AUTH_SCHEME_FALCON_ENUM_VALUE = 2;
-import { useAccount, useChainId, usePublicClient, useSignMessage, useSignTypedData } from "wagmi";
+import { useAccount, usePublicClient, useSignTypedData } from "wagmi";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keccak256, parseUnits, toBytes } from "viem";
 
@@ -85,9 +85,6 @@ import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
 import { createWalletClient, custom } from "viem";
 import { sepolia } from "viem/chains";
 import { useSwitchChain } from "wagmi";
-
-const DERIVE_MESSAGE = (evm: string) =>
-  `Darwin Protocol\n\nDerive Miden signing key.\n\nEVM address: ${evm}\n\nSigning this reveals nothing about your ETH funds and is safe to sign.`;
 
 type Stage =
   | "idle"
@@ -214,9 +211,7 @@ export function TrustlessDepositPanel({
   network?: boolean;
 } = {}) {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
-  const { signMessageAsync } = useSignMessage();
   const { signTypedDataAsync } = useSignTypedData();
-  const chainId = useChainId();
   const publicClient = usePublicClient();
   const { switchChainAsync } = useSwitchChain();
 
@@ -232,10 +227,13 @@ export function TrustlessDepositPanel({
 
   // Isolated debug hooks — the Playwright autonomous E2E test drives
   // step 1 (derive) and step 4 (credit slot-10 on v8-noauth) directly,
-  // bypassing MetaMask + wagmi + ConnectKit. Safe to keep in prod: the
-  // caller supplies the seed / user address, no secret leaks.
+  // bypassing MetaMask + wagmi + ConnectKit. DEV-ONLY: these expose a
+  // derive-from-seed + submit-against-controller toolkit that would widen
+  // any XSS blast radius, so they are dead-code-eliminated from prod
+  // builds (process.env.NODE_ENV is inlined by Next at build time).
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (process.env.NODE_ENV === "production") return;
     const w = window as unknown as {
       __darwinTrustlessDebug?: (hex: string) => Promise<string>;
       __darwinTrustlessCredit?: (
@@ -350,7 +348,6 @@ export function TrustlessDepositPanel({
       try {
         resolvedWalletId = await deriveMidenWallet(createWallet, {
           evmAddress,
-          chainId,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           signTypedData: (td) => signTypedDataAsync(td as any),
           getCode: (addr) => publicClient!.getCode({ address: addr }),

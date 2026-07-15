@@ -1,6 +1,15 @@
 import { spawn } from "node:child_process";
 import { NextResponse } from "next/server";
 
+import {
+  acquireSlot,
+  busySlot,
+  rateLimit,
+  rateLimited,
+  redact,
+  releaseSlot,
+} from "../../../lib/apiGuard";
+
 /**
  * POST /api/network-position
  *
@@ -61,6 +70,7 @@ function runReader(): Promise<{ stdout: string; stderr: string; code: number | n
 }
 
 export async function POST(req: Request) {
+  if (!rateLimit(req)) return rateLimited();
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -103,10 +113,17 @@ export async function POST(req: Request) {
     );
   }
 
-  const { stdout, stderr, code } = await runReader();
+  if (!acquireSlot()) return busySlot();
+  let stdout: string, stderr: string, code: number | null;
+  try {
+    ({ stdout, stderr, code } = await runReader());
+  } finally {
+    releaseSlot();
+  }
   if (code !== 0) {
+    console.error("[network-position] reader failed", code, stderr || stdout);
     return NextResponse.json(
-      { error: `reader exit ${code}: ${(stderr || stdout).slice(-200)}` },
+      { error: `reader exit ${code}: ${redact((stderr || stdout).slice(-200))}` },
       { status: 500 },
     );
   }
@@ -115,8 +132,9 @@ export async function POST(req: Request) {
   try {
     parsed = JSON.parse(lastLine);
   } catch {
+    console.error("[network-position] unparseable reader output", lastLine);
     return NextResponse.json(
-      { error: "couldn't parse reader output", raw: lastLine.slice(0, 200) },
+      { error: "couldn't parse reader output", raw: redact(lastLine.slice(0, 200)) },
       { status: 500 },
     );
   }

@@ -1,6 +1,15 @@
 import { spawn } from "node:child_process";
 import { NextResponse } from "next/server";
 
+import {
+  acquireSlot,
+  busySlot,
+  rateLimit,
+  rateLimited,
+  redact,
+  releaseSlot,
+} from "../../../../lib/apiGuard";
+
 /**
  * POST /api/faucet/mint
  *
@@ -74,6 +83,7 @@ interface Body {
 }
 
 export async function POST(req: Request) {
+  if (!rateLimit(req)) return rateLimited();
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -127,15 +137,22 @@ export async function POST(req: Request) {
 
   const targetHex = decodeBech32ToHex(target);
 
-  const { stdout, stderr, code } = await runMint([
-    "mint",
-    "-t", targetHex,
-    "-a", `${amount.toString()}::${faucetId}`,
-    "-n", "public",
-    "--force",
-  ]);
+  if (!acquireSlot()) return busySlot();
+  let stdout: string, stderr: string, code: number | null;
+  try {
+    ({ stdout, stderr, code } = await runMint([
+      "mint",
+      "-t", targetHex,
+      "-a", `${amount.toString()}::${faucetId}`,
+      "-n", "public",
+      "--force",
+    ]));
+  } finally {
+    releaseSlot();
+  }
 
   if (code !== 0) {
+    console.error("[faucet/mint] mint failed", code, stderr || stdout);
     // Surface the last interesting line — the miden-client banner
     // tends to wrap long blocks; the user just needs the verdict.
     const lastErr = (stderr + stdout)
@@ -144,7 +161,7 @@ export async function POST(req: Request) {
       .slice(-3)
       .join(" / ");
     return NextResponse.json(
-      { error: lastErr || `miden-client exit ${code}` },
+      { error: redact(lastErr) || `miden-client exit ${code}` },
       { status: 500 },
     );
   }

@@ -180,6 +180,22 @@ function SelfCustodyPane({ symbol }: { symbol: string }) {
           network-executed · no server, no extension
         </span>
       </div>
+      <p
+        style={{
+          fontSize: 11,
+          lineHeight: 1.55,
+          color: "var(--ink-3)",
+          margin: "0 0 12px",
+          borderLeft: "2px solid var(--rule)",
+          paddingLeft: 8,
+        }}
+      >
+        Your Miden key is derived in-browser from one signature and cached
+        locally, unencrypted — as every browser wallet is. Treat it as a{" "}
+        <strong style={{ color: "var(--ink-2)" }}>hot wallet</strong>: keep
+        balances modest. It never leaves this device and can be re-derived from
+        your wallet at any time.
+      </p>
       {mode === "deposit" ? (
         <TrustlessDepositPanel basket={basket} compact network />
       ) : (

@@ -1,6 +1,15 @@
 import { spawn } from "node:child_process";
 import { NextResponse } from "next/server";
 
+import {
+  acquireSlot,
+  busySlot,
+  rateLimit,
+  rateLimited,
+  redact,
+  releaseSlot,
+} from "../../../lib/apiGuard";
+
 /**
  * POST /api/network-note
  *
@@ -64,6 +73,7 @@ function runBuilder(args: string[]): Promise<{ stdout: string; stderr: string; c
 }
 
 export async function POST(req: Request) {
+  if (!rateLimit(req)) return rateLimited();
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -113,22 +123,29 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "amount out of range" }, { status: 400 });
   }
 
-  const { stdout, stderr, code } = await runBuilder([
-    "--emit-json",
-    "--target",
-    NETWORK_CONTROLLER,
-    "--sender",
-    sender,
-    "--user-evm",
-    userEvm,
-    "--basket",
-    basket,
-    "--amount",
-    amountBig.toString(),
-  ]);
+  if (!acquireSlot()) return busySlot();
+  let stdout: string, stderr: string, code: number | null;
+  try {
+    ({ stdout, stderr, code } = await runBuilder([
+      "--emit-json",
+      "--target",
+      NETWORK_CONTROLLER,
+      "--sender",
+      sender,
+      "--user-evm",
+      userEvm,
+      "--basket",
+      basket,
+      "--amount",
+      amountBig.toString(),
+    ]));
+  } finally {
+    releaseSlot();
+  }
   if (code !== 0) {
+    console.error("[network-note] builder failed", code, stderr || stdout);
     return NextResponse.json(
-      { error: `note builder exit ${code}: ${(stderr || stdout).slice(-300)}` },
+      { error: `note builder exit ${code}: ${redact((stderr || stdout).slice(-300))}` },
       { status: 500 },
     );
   }
@@ -138,8 +155,9 @@ export async function POST(req: Request) {
     const parsed = JSON.parse(lastLine) as { noteId: string; noteB64: string; scriptRoot: string };
     return NextResponse.json({ ...parsed, controllerId: NETWORK_CONTROLLER });
   } catch {
+    console.error("[network-note] unparseable builder output", lastLine);
     return NextResponse.json(
-      { error: "couldn't parse builder output", raw: lastLine.slice(0, 300) },
+      { error: "couldn't parse builder output", raw: redact(lastLine.slice(0, 300)) },
       { status: 500 },
     );
   }
