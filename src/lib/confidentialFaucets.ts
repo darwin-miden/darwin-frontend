@@ -16,7 +16,7 @@
 // Validated on-chain: honest deposit+redeem conserve exactly; non-dUSDC
 // collateral is rejected; the fee/nav lever is dead (mint stays 1:1).
 export const CONFIDENTIAL_FAUCETS: Record<string, string> = {
-  DCC: "0xb5c28d80b1b365914b8b25ae62b9c7",
-  DAG: "0xff0eccc6e13b4a1158f75afc6cdbb6",
-  DCO: "0xb01b65671e6378d12cc1bf42bd1de6",
+  DCC: "0x9463767a994d6f9178fce256261430",
+  DAG: "0x2fe3469cccf61a710d321df38c4ca1",
+  DCO: "0xf1a4752b3689beb110eebec647df20",
 };
