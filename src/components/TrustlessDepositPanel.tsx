@@ -61,6 +61,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { keccak256, parseUnits, toBytes } from "viem";
 
 import { EPOCH_DUSDC_FAUCET_ID } from "../lib/midenConstants";
+import { deriveMidenWallet } from "../lib/deriveWallet";
 import {
   TRUSTLESS_CONTROLLER_HEX,
   basketFelts,
@@ -335,55 +336,21 @@ export function TrustlessDepositPanel({
     try {
       setErrorMsg(null);
       setStage("signing");
-      const sig = await signMessageAsync({ message: DERIVE_MESSAGE(evmAddress) });
-      const seed = keccak256(toBytes(sig));
-      const seedBytes = new Uint8Array(
-        seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-      );
-
+      // Derive the wallet with minimal seed exposure — the signature +
+      // seed live only inside deriveMidenWallet's scope and the seed is
+      // wiped right after createWallet. Only the id comes back here.
+      // pauseSync guards the WASM RefCell against the SDK's auto-sync
+      // racing createWallet ("RefCell already borrowed" from platform.rs).
       setStage("deriving");
-      // Pause the SDK's internal auto-sync loop for the whole
-      // createWallet call. Without this, sync races the createWallet
-      // future on the WASM RefCell and panics ("RefCell already
-      // borrowed" from platform.rs).
       pauseSync();
-      let resolvedWalletId: string | null = null;
+      let resolvedWalletId: string;
       try {
-        // Explicit authScheme is load-bearing: @miden-sdk/react
-        // hard-codes `DEFAULTS.AUTH_SCHEME = AuthScheme.AuthRpoFalcon512`
-        // but the runtime `AuthScheme` from @miden-sdk/miden-sdk is
-        // `{Falcon:"falcon", ECDSA:"ecdsa"}` — no `AuthRpoFalcon512`
-        // key. So the default evaluates to `undefined` and wasm_bindgen
-        // throws "invalid enum value passed".
-        // storageMode "private" mirrors SelfCustodyWalletPanel; the
-        // Falcon key is deterministic from initSeed so the same
-        // signature reproduces the same wallet id.
-        try {
-          const account = await createWallet({
-            initSeed: seedBytes,
-            storageMode: "private",
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
-          });
-          resolvedWalletId = account.id().toString();
-        } catch (e) {
-          // On refresh, the previously-derived wallet is still in
-          // IndexedDB (private-mode wallets persist). `createWallet`
-          // detects the collision and throws "account with id 0x… is
-          // already being tracked" — pull the id out of the error
-          // message and treat it as success.
-          const msg = e instanceof Error ? e.message : String(e);
-          const m = msg.match(/id (0x[0-9a-fA-F]+)/);
-          if (m && /already being tracked/i.test(msg)) {
-            resolvedWalletId = m[1];
-          } else {
-            throw e;
-          }
-        }
+        resolvedWalletId = await deriveMidenWallet(createWallet, () =>
+          signMessageAsync({ message: DERIVE_MESSAGE(evmAddress) }),
+        );
       } finally {
         resumeSync();
       }
-      if (!resolvedWalletId) throw new Error("No wallet id resolved");
       setWalletId(resolvedWalletId);
       storeWalletId(evmAddress, resolvedWalletId);
       setStage("ready");

@@ -44,6 +44,7 @@ import {
   toBytes,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { deriveMidenWallet } from "../lib/deriveWallet";
 import { sepolia } from "viem/chains";
 import { useAccount, useSignMessage, useSwitchChain } from "wagmi";
 import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
@@ -1446,39 +1447,18 @@ export function TrustlessRedeemPanel({
     try {
       setErrorMsg(null);
       setStage("signing");
-      const sig = await signMessageAsync({
-        message: DERIVE_MESSAGE(evmAddress),
-      });
-      const seed = keccak256(toBytes(sig));
-      const seedBytes = new Uint8Array(
-        seed.slice(2).match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-      );
-
+      // Minimal seed exposure — signature + seed stay inside
+      // deriveMidenWallet and the seed is wiped after createWallet.
       setStage("deriving");
       pauseSync();
-      let resolvedWalletId: string | null = null;
+      let resolvedWalletId: string;
       try {
-        try {
-          const account = await createWallet({
-            initSeed: seedBytes,
-            storageMode: "private",
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as any,
-          });
-          resolvedWalletId = account.id().toString();
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          const m = msg.match(/id (0x[0-9a-fA-F]+)/);
-          if (m && /already being tracked/i.test(msg)) {
-            resolvedWalletId = m[1];
-          } else {
-            throw e;
-          }
-        }
+        resolvedWalletId = await deriveMidenWallet(createWallet, () =>
+          signMessageAsync({ message: DERIVE_MESSAGE(evmAddress) }),
+        );
       } finally {
         resumeSync();
       }
-      if (!resolvedWalletId) throw new Error("No wallet id resolved");
       setWalletId(resolvedWalletId);
       storeWalletId(evmAddress, resolvedWalletId);
       setStage("ready");
