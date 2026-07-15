@@ -9,7 +9,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "test:csp": "playwright test e2e/csp-smoke.spec.ts"
   },
   "dependencies": {
     "@epoch-protocol/epoch-intents-sdk": "^1.0.32",

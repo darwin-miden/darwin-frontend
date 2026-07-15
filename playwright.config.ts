@@ -18,6 +18,17 @@ export default defineConfig({
     baseURL: process.env.DARWIN_E2E_URL || "http://localhost:3010",
     trace: "on-first-retry",
   },
+  // Auto-start the dev server for the run unless one is already up (or an
+  // external DARWIN_E2E_URL is provided). Lets `npx playwright test` be
+  // self-contained.
+  webServer: process.env.DARWIN_E2E_URL
+    ? undefined
+    : {
+        command: "NODE_OPTIONS=--max-old-space-size=4096 npm run dev -- -p 3010",
+        url: "http://localhost:3010",
+        timeout: 180_000,
+        reuseExistingServer: !process.env.CI,
+      },
   projects: [
     {
       name: "chromium",
