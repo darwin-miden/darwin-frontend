@@ -24,10 +24,15 @@ export default defineConfig({
   webServer: process.env.DARWIN_E2E_URL
     ? undefined
     : {
-        // No NODE_OPTIONS heap cap here — a low cap crashes the dev
-        // compilation of this WASM-heavy app ("exited early"). Let Node
-        // size the heap to available RAM.
-        command: "npm run dev -- -p 3010",
+        // Invoke `next dev` DIRECTLY, not via `npm run dev`. Through npm,
+        // the wrapper spawns `next dev` as a child and detaches, so
+        // Playwright sees the npm parent exit before the URL is ready and
+        // declares "Process from config.webServer exited early" — while the
+        // real next-server keeps running, orphaned. Running the binary
+        // directly lets Playwright supervise the actual server process.
+        // No NODE_OPTIONS heap cap: a low cap crashes dev compilation of
+        // this WASM-heavy app. Let Node size the heap to available RAM.
+        command: "npx next dev -p 3010",
         url: "http://localhost:3010",
         timeout: 240_000,
         reuseExistingServer: !process.env.CI,
