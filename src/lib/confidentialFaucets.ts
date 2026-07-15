@@ -6,8 +6,12 @@
  * can claim. Positions = the user's private token balance (no public
  * per-user ledger). See darwin-relay send_confidential_deposit/redeem.
  */
+// v10.1 faucets — the notes bind value to real collateral: the deposit
+// mints from the actually-drained dUSDC (not an emitter storage felt) and
+// the redeem pays out the real burned amount (not a free storage felt).
+// Deposit+redeem validated on-chain against DCC (conservation exact).
 export const CONFIDENTIAL_FAUCETS: Record<string, string> = {
-  DCC: "0xfc0a3b234390daf16112dd1c1b49ba",
-  DAG: "0xe6bc7aa3e55a0b311bce40b8cb5338",
-  DCO: "0x84d4bfb35566af317a32d696d48bca",
+  DCC: "0x3a2a5457eddd76f137e7050ea8a904",
+  DAG: "0xb79116e85cf159315086d5af07840f",
+  DCO: "0xe80c8b66065f53115ab13b15e7e718",
 };
