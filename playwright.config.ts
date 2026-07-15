@@ -24,10 +24,15 @@ export default defineConfig({
   webServer: process.env.DARWIN_E2E_URL
     ? undefined
     : {
-        command: "NODE_OPTIONS=--max-old-space-size=4096 npm run dev -- -p 3010",
+        // No NODE_OPTIONS heap cap here — a low cap crashes the dev
+        // compilation of this WASM-heavy app ("exited early"). Let Node
+        // size the heap to available RAM.
+        command: "npm run dev -- -p 3010",
         url: "http://localhost:3010",
-        timeout: 180_000,
+        timeout: 240_000,
         reuseExistingServer: !process.env.CI,
+        stdout: "pipe",
+        stderr: "pipe",
       },
   projects: [
     {
