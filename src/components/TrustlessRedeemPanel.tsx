@@ -387,11 +387,17 @@ export function TrustlessRedeemPanel({
 
   const [stage, setStage] = useState<Stage>("idle");
   const [walletId, setWalletId] = useState<string | null>(null);
-  // Reuse a wallet already derived in this browser session (any panel).
+  // Track the connected EVM account. On an in-wallet account switch
+  // (A→B, no disconnect) evmAddress changes: reset walletId to whatever
+  // was derived for the NEW address (or null), so we never drive account
+  // A's already-unlocked Miden hot wallet while reading account B's
+  // position. Reuses a wallet already derived this session for B.
   useEffect(() => {
-    if (walletId || !evmAddress) return;
-    const stored = storedWalletId(evmAddress);
-    if (stored) setWalletId(stored);
+    if (!evmAddress) {
+      setWalletId(null);
+      return;
+    }
+    setWalletId(storedWalletId(evmAddress));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [evmAddress]);
   const [humanAmount, setHumanAmount] = useState<string>(REDEEM_AMOUNT_DEFAULT);

@@ -62,10 +62,19 @@ function runMint(args: string[]): Promise<{ stdout: string; stderr: string; code
     const child = spawn(MIDEN_CLIENT, args, { env: process.env });
     let stdout = "";
     let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
-    child.on("close", (code) => resolve({ stdout, stderr, code }));
-    setTimeout(() => child.kill("SIGKILL"), 60_000);
+    // Without this, a missing/non-exec binary emits an unhandled 'error'
+    // that crashes `next start` and leaks the acquired semaphore slot.
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr: stderr + String(e), code: -1 });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, code });
+    });
   });
 }
 

@@ -62,10 +62,18 @@ function runReader(): Promise<{ stdout: string; stderr: string; code: number | n
     const child = spawn(READER_BIN, ["--account", NETWORK_CONTROLLER, "--json"]);
     let stdout = "";
     let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
-    child.on("close", (code) => resolve({ stdout, stderr, code }));
-    setTimeout(() => child.kill("SIGKILL"), 60_000);
+    // Handle a missing/non-exec binary so it can't crash next start.
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr: stderr + String(e), code: -1 });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, code });
+    });
   });
 }
 

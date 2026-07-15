@@ -105,8 +105,16 @@ function runSync(): Promise<{ code: number | null }> {
     // write that landed on-chain since the last read gets picked up.
     // Without this the exec below returns stale map root.
     const child = spawn(MIDEN_CLIENT, ["sync"], { env: spawnEnv });
-    child.on("close", (code) => resolve({ code }));
-    setTimeout(() => child.kill("SIGKILL"), 30_000);
+    const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    // Handle a missing/non-exec binary so it can't crash next start.
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve({ code: -1 });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code });
+    });
   });
 }
 
@@ -127,10 +135,18 @@ function runExec(scriptPath: string, controllerId: string): Promise<{ stdout: st
     );
     let stdout = "";
     let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
-    child.on("close", (code) => resolve({ stdout, stderr, code }));
-    setTimeout(() => child.kill("SIGKILL"), 60_000);
+    // Handle a missing/non-exec binary so it can't crash next start.
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr: stderr + String(e), code: -1 });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, code });
+    });
   });
 }
 

@@ -49,7 +49,11 @@ const nextConfig = {
       // <script src> from other origins is still blocked.
       "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: https:",
+      // No blanket `https:` on img-src: connect-src is the exfil
+      // allowlist, but a blanket image host would let an injected script
+      // beacon the browser-held Falcon key out via `new Image().src=...`.
+      // The app loads zero external https images, so this costs nothing.
+      "img-src 'self' data:",
       "font-src 'self' data:",
       // The prover spawns Web Workers from blob: URLs.
       "worker-src 'self' blob:",
