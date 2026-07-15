@@ -46,7 +46,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { deriveMidenWallet } from "../lib/deriveWallet";
 import { sepolia } from "viem/chains";
-import { useAccount, useSignMessage, useSwitchChain } from "wagmi";
+import { useAccount, useChainId, usePublicClient, useSignMessage, useSignTypedData, useSwitchChain } from "wagmi";
 import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
 
 import {
@@ -375,6 +375,9 @@ export function TrustlessRedeemPanel({
 } = {}) {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
+  const { signTypedDataAsync } = useSignTypedData();
+  const chainId = useChainId();
+  const publicClient = usePublicClient();
   const { switchChainAsync } = useSwitchChain();
   const { createWallet, isCreating, error: createErr } = useCreateWallet();
   const { send: sendNote } = useSend();
@@ -1453,9 +1456,13 @@ export function TrustlessRedeemPanel({
       pauseSync();
       let resolvedWalletId: string;
       try {
-        resolvedWalletId = await deriveMidenWallet(createWallet, () =>
-          signMessageAsync({ message: DERIVE_MESSAGE(evmAddress) }),
-        );
+        resolvedWalletId = await deriveMidenWallet(createWallet, {
+          evmAddress,
+          chainId,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          signTypedData: (td) => signTypedDataAsync(td as any),
+          getCode: (addr) => publicClient!.getCode({ address: addr }),
+        });
       } finally {
         resumeSync();
       }

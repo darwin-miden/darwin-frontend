@@ -56,7 +56,7 @@ import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 // string "falcon" — the low-level path doesn't convert.
 // Force the numeric enum value directly (2 = AuthRpoFalcon512).
 const AUTH_SCHEME_FALCON_ENUM_VALUE = 2;
-import { useAccount, useSignMessage } from "wagmi";
+import { useAccount, useChainId, usePublicClient, useSignMessage, useSignTypedData } from "wagmi";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keccak256, parseUnits, toBytes } from "viem";
 
@@ -215,6 +215,9 @@ export function TrustlessDepositPanel({
 } = {}) {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
+  const { signTypedDataAsync } = useSignTypedData();
+  const chainId = useChainId();
+  const publicClient = usePublicClient();
   const { switchChainAsync } = useSwitchChain();
 
   const { createWallet, wallet, isCreating, error: createErr, reset } =
@@ -345,9 +348,13 @@ export function TrustlessDepositPanel({
       pauseSync();
       let resolvedWalletId: string;
       try {
-        resolvedWalletId = await deriveMidenWallet(createWallet, () =>
-          signMessageAsync({ message: DERIVE_MESSAGE(evmAddress) }),
-        );
+        resolvedWalletId = await deriveMidenWallet(createWallet, {
+          evmAddress,
+          chainId,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          signTypedData: (td) => signTypedDataAsync(td as any),
+          getCode: (addr) => publicClient!.getCode({ address: addr }),
+        });
       } finally {
         resumeSync();
       }
