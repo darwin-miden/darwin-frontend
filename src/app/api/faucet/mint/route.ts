@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import {
   acquireSlot,
   busySlot,
+  keyLimit,
   rateLimit,
   rateLimited,
   redact,
@@ -132,6 +133,20 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { error: `amount must be 1..${MAX_AMOUNT_PER_REQUEST}` },
       { status: 400 },
+    );
+  }
+  // Sanity-check the target shape before it reaches spawn argv (defense in
+  // depth — it's a single argv element so not injectable, but reject junk).
+  if (!/^(0x)?[0-9a-zA-Z]{6,120}$/.test(target)) {
+    return NextResponse.json({ error: "target has an invalid format" }, { status: 400 });
+  }
+  // Per-target drip cap: bound minting to a given wallet even across many
+  // (spoofable-in-theory) source IPs, so the operator's testnet faucets
+  // can't be slowly drained.
+  if (!keyLimit(`mint:${faucetId}:${target}`, 5)) {
+    return NextResponse.json(
+      { error: "mint drip cap for this target reached — retry later" },
+      { status: 429 },
     );
   }
 

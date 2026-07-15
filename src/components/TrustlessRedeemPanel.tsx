@@ -1469,53 +1469,26 @@ export function TrustlessRedeemPanel({
       setNetPhase("withdraw");
 
       if (network) {
-        // ── Network rail: request note → NTX builder debits the position
-        // and pays a private payback P2ID from the controller vault.
-        const amountBase = parseUnits(humanAmount, 6);
+        // ── Confidential rail: emit a confidential_redeem_note carrying
+        // the user's own basket tokens at the basket faucet-network
+        // account; the NTX builder burns them and releases the dUSDC into
+        // a PRIVATE payback note. Symmetric to the confidential deposit.
+        //
+        // This replaces the old /api/network-redeem-note slot-10 rail,
+        // which (a) debited a public controller position the confidential
+        // deposit never credited, and (b) paid out unconditionally from
+        // the controller vault regardless of that position — an
+        // unauthenticated drain. The confidential redeem burns the REAL
+        // basket tokens the user holds (must own them to fund the note)
+        // and the on-chain note pays out exactly that burned amount.
+        const amountBase = parseUnits(humanAmount, 6); // 1:1 with dUSDC
         setStage("quoting");
-        // Pre-flight: the vault can only pay what the position holds —
-        // an over-ask makes the NTB fail the note forever (verified
-        // live with a 31 dUSDC ask against a 3.4 position). Refuse it
-        // client-side with the actual balance instead.
-        try {
-          const { suffix, prefix } = evmToUserIdFelts(evmAddress);
-          const bf = basket
-            ? await basketFelts(basket.faucetHex)
-            : { basketSuffix: 0n, basketPrefix: 0n };
-          const pr = await fetch("/api/network-position", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              suffix: suffix.toString(),
-              prefix: prefix.toString(),
-              basketSuffix: bf.basketSuffix.toString(),
-              basketPrefix: bf.basketPrefix.toString(),
-            }),
-          });
-          const pj = (await pr.json()) as { position?: string };
-          if (pr.ok && pj.position !== undefined) {
-            const pos = BigInt(pj.position);
-            if (amountBase > pos) {
-              throw new Error(
-                `Your ${basket?.symbol ?? ""} network position holds ${(Number(pos) / 1e6).toFixed(2)} dUSDC — you asked to withdraw ${humanAmount}. Lower the amount.`,
-              );
-            }
-          }
-        } catch (e) {
-          if (e instanceof Error && e.message.includes("network position holds")) {
-            throw e;
-          }
-          // A position-read hiccup shouldn't block the withdraw — the
-          // network itself is the final validator.
-          console.warn("[network-redeem] pre-flight read failed:", e);
-        }
-        const r = await fetch("/api/network-redeem-note", {
+        const r = await fetch("/api/confidential-redeem", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             sender: walletId,
             recipient: walletId,
-            userEvm: evmAddress,
             basket: basket?.symbol ?? "DCC",
             amount: amountBase.toString(),
           }),
@@ -1528,7 +1501,7 @@ export function TrustlessRedeemPanel({
           error?: string;
         };
         if (!r.ok || !built.noteB64 || !built.paybackFileB64) {
-          throw new Error(built.error ?? `network-redeem-note ${r.status}`);
+          throw new Error(built.error ?? `confidential-redeem ${r.status}`);
         }
 
         setStage("sending-note");

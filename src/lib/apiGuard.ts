@@ -25,9 +25,18 @@ const MAX_PER_WINDOW = Number(process.env.DARWIN_RATE_LIMIT || 20);
 const hits = new Map<string, { count: number; resetAt: number }>();
 
 function clientIp(req: Request): string {
+  // Cloudflare sets cf-connecting-ip to the true client IP at the edge and
+  // overwrites any client-supplied value, so it can't be spoofed from the
+  // outside — unlike x-forwarded-for, whose first token the client fully
+  // controls (which would let an attacker rotate the rate-limit key). Use
+  // cf-connecting-ip first; XFF is only a spoofable last-resort fallback.
+  const cf = req.headers.get("cf-connecting-ip");
+  if (cf) return cf.trim();
+  const xrip = req.headers.get("x-real-ip");
+  if (xrip) return xrip.trim();
   const xff = req.headers.get("x-forwarded-for");
   if (xff) return xff.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip") || "unknown";
+  return "unknown";
 }
 
 /** True if the request is within its per-IP window budget. */
@@ -67,6 +76,24 @@ export function busySlot(): NextResponse {
     { error: "server busy (max concurrent jobs) — retry shortly" },
     { status: 503 },
   );
+}
+
+// Per-key fixed-window limiter (independent of the per-IP one) — e.g. a
+// drip cap keyed by faucet-mint target so a single target can't be spammed
+// even across many source IPs.
+const keyHits = new Map<string, { count: number; resetAt: number }>();
+export function keyLimit(key: string, maxPerWindow: number, windowMs = WINDOW_MS): boolean {
+  const now = Date.now();
+  const cur = keyHits.get(key);
+  if (!cur || now > cur.resetAt) {
+    keyHits.set(key, { count: 1, resetAt: now + windowMs });
+    if (keyHits.size > 5000) {
+      for (const [k, v] of keyHits) if (now > v.resetAt) keyHits.delete(k);
+    }
+    return true;
+  }
+  cur.count += 1;
+  return cur.count <= maxPerWindow;
 }
 
 /** Standard 429 response for a rate-limited request. */
