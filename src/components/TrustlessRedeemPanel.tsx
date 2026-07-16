@@ -331,7 +331,7 @@ function StageRow({
   );
 }
 
-const REDEEM_AMOUNT_DEFAULT = "1";
+const REDEEM_AMOUNT_DEFAULT = "";
 
 
 // The derive step is deterministic per EVM address and the signing keys

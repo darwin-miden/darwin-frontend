@@ -114,7 +114,7 @@ type Stage =
   | "done"
   | "error";
 
-const HUMAN_AMOUNT_DEFAULT = "1";
+const HUMAN_AMOUNT_DEFAULT = "";
 
 type StageState = "idle" | "running" | "done";
 
