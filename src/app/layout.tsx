@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Darwin | Confidential baskets, native to Miden",
+    default: "Darwin | Confidential baskets, native to zk",
     template: "Darwin | %s",
   },
   description:
@@ -26,7 +26,7 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://darwin.market"),
   openGraph: {
     title: "Darwin Protocol",
-    description: "Confidential baskets, native to Miden.",
+    description: "Confidential baskets, native to zk.",
     url: "https://darwin.market",
     siteName: "Darwin Protocol",
   },

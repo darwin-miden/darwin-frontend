@@ -48,7 +48,7 @@ export function MidenConnectButton() {
         type="button"
         style={{ minWidth: 140, opacity: 0.5, textAlign: "center" }}
       >
-        Miden…
+        Wallet…
       </button>
     );
   }
@@ -101,7 +101,7 @@ export function MidenConnectButton() {
       type="button"
       style={{ minWidth: 140, textAlign: "center" }}
     >
-      {connecting ? "Connecting…" : "Connect Miden"}
+      {connecting ? "Connecting…" : "Connect Wallet"}
     </button>
   );
 }

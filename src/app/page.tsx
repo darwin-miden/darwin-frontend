@@ -28,7 +28,7 @@ export default function Page() {
                 className="eyebrow"
                 style={{ marginBottom: 16, color: "var(--orange)" }}
               >
-                Live on Miden testnet + Sepolia
+                Live on testnet + Sepolia
               </div>
               <h1
                 style={{
@@ -48,7 +48,7 @@ export default function Page() {
                     letterSpacing: "-0.04em",
                   }}
                 >
-                  native to Miden.
+                  native to zk.
                 </em>
               </h1>
               <p
@@ -60,12 +60,12 @@ export default function Page() {
                   margin: "0 0 32px",
                 }}
               >
-                Hold a STARK-proven basket position privately on Miden.
-                    One MetaMask signature derives a Miden wallet in your
-                    browser; Epoch bridges Sepolia USDC and the Miden network
+                Hold a STARK-proven basket position privately, on-chain.
+                    One MetaMask signature derives a wallet in your
+                    browser; Epoch bridges Sepolia USDC and the network
                     itself executes your deposit — self-custody end to end.
-                    Miden wallet holders prove + submit directly in their
-                    browser via the Miden Web SDK.
+                    Wallet holders prove + submit directly in their
+                    browser via the Web SDK.
               </p>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                 <Link
@@ -125,7 +125,7 @@ export default function Page() {
               padding: 0,
             }}
           >
-            <Stat n="19" label="Miden accounts live" />
+            <Stat n="19" label="on-chain accounts live" />
             <Stat n="6" label="Sepolia contracts" />
             <Stat n="3" label="atomic flows on-chain" />
             <Stat n="290" label="green tests" />
@@ -159,7 +159,7 @@ export default function Page() {
             }}
           >
             Pick the rail that matches your wallet. Both land in the same
-            on-chain controller on Miden testnet.
+            on-chain controller on testnet.
           </p>
           <div
             style={{
@@ -173,7 +173,7 @@ export default function Page() {
             <Step
               num="1"
               title="Connect a wallet"
-              body="ETH wallet (MetaMask / WalletConnect / Coinbase) via Connect ETH, or a Miden wallet (MidenFi extension, Para, Turnkey) via Connect Miden. Both buttons are in the nav."
+              body="ETH wallet (MetaMask / WalletConnect / Coinbase) via Connect ETH, or a native wallet (browser extension, Para, Turnkey) via Connect. Both buttons are in the nav."
             />
             <Step
               num="2"
@@ -183,7 +183,7 @@ export default function Page() {
             <Step
               num="3"
               title="Deposit"
-              body="Self-custody: one MetaMask signature derives a Miden wallet in your browser, Epoch bridges Sepolia USDC, then the Miden network itself executes your deposit against the controller — no server, no extension. Miden wallet: sign an atomic deposit note straight to the controller, browser proves the STARK in <1 s."
+              body="Self-custody: one MetaMask signature derives a wallet in your browser, Epoch bridges Sepolia USDC, then the network itself executes your deposit against the controller — no server, no extension. Native wallet: sign an atomic deposit note straight to the controller, browser proves the STARK in <1 s."
               last
             />
           </div>
@@ -204,7 +204,7 @@ export default function Page() {
               fontWeight: 500,
             }}
           >
-            Three atomic flows, all live on Miden testnet.
+            Three atomic flows, all live on testnet.
           </h2>
           <div
             style={{
@@ -288,7 +288,7 @@ export default function Page() {
               num="03"
               href="/accounts"
               title="Deployed accounts"
-              body="19 Miden testnet accounts + 6 Sepolia contracts, each grouped by role and linked to the explorer."
+              body="19 testnet accounts + 6 Sepolia contracts, each grouped by role and linked to the explorer."
             />
             <PokeCard
               num="04"
@@ -312,7 +312,7 @@ export default function Page() {
             className="container"
             style={{
               display: "grid",
-              gridTemplateColumns: "1.5fr 1fr 1fr",
+              gridTemplateColumns: "1.5fr 1fr",
               gap: 48,
             }}
           >
@@ -328,42 +328,17 @@ export default function Page() {
                   marginTop: 8,
                 }}
               >
-                Every contract, every controller, every Rust crate is in the{" "}
+                Every contract, every controller, every Rust crate is{" "}
                 <a
                   href="https://github.com/darwin-miden"
                   target="_blank"
                   rel="noreferrer"
                   style={{ borderBottom: "1px dotted var(--rule)" }}
                 >
-                  darwin-miden
-                </a>{" "}
-                org. MIT licensed.
+                  open source
+                </a>
+                . MIT licensed.
               </p>
-            </div>
-            <div>
-              <h4
-                style={{
-                  margin: 0,
-                  fontFamily: "var(--font-mono-stack)",
-                  fontSize: 11,
-                  letterSpacing: "0.12em",
-                  color: "var(--ink-3)",
-                  textTransform: "uppercase",
-                }}
-              >
-                Miden testnet
-              </h4>
-              <ul style={{ paddingLeft: 0, listStyle: "none", marginTop: 10 }}>
-                <FootLink
-                  href="https://testnet.midenscan.com"
-                  label="testnet.midenscan.com"
-                />
-                <FootLink href="https://miden.xyz" label="miden.xyz" />
-                <FootLink
-                  href="https://docs.miden.xyz"
-                  label="docs.miden.xyz"
-                />
-              </ul>
             </div>
             <div>
               <h4

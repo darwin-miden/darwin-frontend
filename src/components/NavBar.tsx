@@ -19,7 +19,7 @@ const MidenConnectButton = dynamic(
         type="button"
         style={{ minWidth: 140, opacity: 0.5, textAlign: "center" }}
       >
-        Miden…
+        Wallet…
       </button>
     ),
   },
@@ -94,7 +94,7 @@ export function NavBar({ active }: { active?: NavKey }) {
                 window.location.hash = "miden";
               }}
             >
-              Connect Miden
+              Connect Wallet
             </button>
           ) : (
             <MidenConnectButton />
