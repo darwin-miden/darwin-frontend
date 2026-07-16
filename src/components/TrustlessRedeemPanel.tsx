@@ -439,21 +439,20 @@ export function TrustlessRedeemPanel({
     let cancelled = false;
     (async () => {
       try {
+        // Bare getBalance, NO syncState — this mirrors the deposit's working
+        // read: the shared client is already synced by the deposit flow, and
+        // adding a sync here was the slow/hanging step. Timeout-capped so a
+        // cold client (e.g. after a reload with no prior sync) can't hang it.
         const bal = (await Promise.race([
-          runExclusive(async () => {
-            try {
-              await syncState();
-            } catch {
-              /* stale is fine */
-            }
-            return (
+          runExclusive(() =>
+            (
               client as unknown as {
                 getBalance: (a: string, t: string) => Promise<bigint>;
               }
-            ).getBalance(walletId, faucet);
-          }),
+            ).getBalance(walletId, faucet),
+          ),
           new Promise<never>((_, rej) =>
-            setTimeout(() => rej(new Error("balance read timeout")), 22_000),
+            setTimeout(() => rej(new Error("balance read timeout")), 8_000),
           ),
         ])) as bigint;
         if (!cancelled && bal != null) {
