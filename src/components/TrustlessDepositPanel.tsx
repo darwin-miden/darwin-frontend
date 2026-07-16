@@ -559,12 +559,37 @@ export function TrustlessDepositPanel({
       setMidenNoteId(inboundIds[0] ?? epochNoteId);
 
       setStage("consuming");
-      // Consume everything pending (a stuck prior delivery may be queued
-      // alongside this deposit's note — drain them all into the vault).
-      const consumeResult = await consume({
-        accountId: walletId,
-        notes: inboundIds,
-      });
+      // Consume pending notes ONE AT A TIME. A batch consume is atomic, so a
+      // single mis-targeted leftover note — e.g. a P2ID whose target account
+      // isn't this wallet, stranded from earlier testing — fails the whole
+      // transaction ("P2ID's target account address and transaction address
+      // do not match") and takes this deposit's own good note down with it.
+      // Per-note, we consume what this wallet actually owns and skip the rest;
+      // skipped notes stay consumable (nothing is lost), and a stuck prior
+      // delivery still gets drained alongside this one.
+      let consumeResult:
+        | { transactionId?: { toString?: () => string } }
+        | null
+        | undefined = null;
+      let consumedAny = false;
+      const consumeErrors: string[] = [];
+      for (const id of inboundIds) {
+        try {
+          const res = await consume({ accountId: walletId, notes: [id] });
+          consumeResult = res ?? consumeResult;
+          consumedAny = true;
+        } catch (e) {
+          consumeErrors.push(`${id.slice(0, 12)}…: ${String(e).slice(0, 90)}`);
+          console.warn("[deposit] skipped un-consumable note", id, e);
+        }
+      }
+      if (!consumedAny) {
+        throw new Error(
+          `None of the ${inboundIds.length} delivered note(s) could be consumed by this wallet` +
+            (consumeErrors[0] ? ` — ${consumeErrors[0]}` : "") +
+            ". Your escrowed funds remain on-chain; refresh and retry.",
+        );
+      }
       setConsumeTx(consumeResult?.transactionId?.toString?.() ?? null);
 
       // Step 4 (network rail): emit an atomic deposit note at the
