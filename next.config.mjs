@@ -65,6 +65,10 @@ const nextConfig = {
         "https://*.miden.io",
         "https://faucet.testnet.miden.io",
         "https://testnet-dev.epochprotocol.xyz",
+        // The Epoch SDK hardcodes this thirdweb RPC for its Sepolia
+        // contract reads (getForcedWithdrawalStatus etc.); without it the
+        // browser blocks the read and every deposit fails "Failed to fetch".
+        "https://11155111.rpc.thirdweb.com",
         "https://miden-testnet-bridge.dev.eu-north-3.gateway.fm",
         "https://api.coingecko.com",
         "wss://relay.walletconnect.com",
