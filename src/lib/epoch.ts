@@ -56,13 +56,16 @@ export const EPOCH_USDC_SEPOLIA = {
 /**
  * Slippage buffer for Epoch minTokenOut on Sepolia→Miden.
  *
- * Epoch's testnet solver quotes ~0.996 dUSDC per 1 Sepolia USDC (small
- * price drift between the two test tokens). Setting minTokenOut to the
- * exact human amount makes the solver return NO_QUOTE_AVAILABLE because
- * the buffered quote falls under the floor. 500 bps = 5% buffer keeps
- * headroom for further testnet drift.
+ * Epoch's testnet solver quotes ~0.996 dUSDC per 1 Sepolia USDC (measured
+ * ~0.68% haircut on-chain 2026-07-16). minTokenOut must sit BELOW that
+ * quote or the solver returns NO_QUOTE_AVAILABLE — so we can't ask for the
+ * exact human amount. But 5% was far too generous for a 1:1 stablecoin
+ * bridge (it made "1" deposit only ~0.96): 100 bps = 1% keeps minTokenOut
+ * just under the ~0.996 quote, so "1" now deposits + delivers ~0.99 — much
+ * closer to what the user typed. Bump back up if NO_QUOTE reappears on
+ * testnet drift.
  */
-export const EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS = 500;
+export const EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS = 100;
 
 /** Apply a bps-denominated slippage discount to a base-unit amount. */
 export function applySlippageBps(baseUnits: string, bps: number): string {
