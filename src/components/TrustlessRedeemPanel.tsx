@@ -453,8 +453,10 @@ export function TrustlessRedeemPanel({
     return () => {
       cancelled = true;
     };
+    // client is a stable context singleton; include it so the read fires once
+    // it finishes loading after a reload that restored walletId synchronously.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [network, walletId, basket?.symbol, stage]);
+  }, [network, walletId, basket?.symbol, stage, client]);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [midenTxId, setMidenTxId] = useState<string | null>(null);
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
