@@ -1874,7 +1874,13 @@ export function TrustlessRedeemPanel({
   }
   const overPosition =
     positionBase != null && redeemBase != null && redeemBase > positionBase;
-  const redeemValid = redeemBase != null && redeemBase > 0n && !overPosition;
+  // The balance/Max are a best-effort helper (the confidential balance is a
+  // slow in-browser read that can lag behind the mutex). They must NEVER gate
+  // the withdraw — the button stays usable the instant an amount is typed,
+  // exactly as it did before the balance read existed. Over-position is a soft
+  // warning only; an over-withdraw just reverts on-chain (fee 0, no funds
+  // lost). Only the amount being empty/zero disables the button.
+  const redeemValid = redeemBase != null && redeemBase > 0n;
   const fmtDusdc = (base: bigint) =>
     parseFloat(formatUnits(base, 6)).toLocaleString(undefined, {
       maximumFractionDigits: 4,
@@ -2110,20 +2116,25 @@ export function TrustlessRedeemPanel({
                 {network ? "Withdraw" : "Redeem via Epoch (~2 min)"}
               </button>
             </div>
-            <div
-              style={{
-                fontSize: 12,
-                marginTop: 6,
-                fontFamily: "var(--font-mono-stack)",
-                color: overPosition ? "crimson" : "var(--ink-3)",
-              }}
-            >
-              {positionBase == null
-                ? "Reading your position…"
-                : overPosition
-                  ? `Insufficient — your position is ${fmtDusdc(positionBase)} USDC. Click Max or lower the amount.`
-                  : `Position: ${fmtDusdc(positionBase)} USDC`}
-            </div>
+            {/* Balance line only once the read resolves to a positive value.
+                While it's null (still reading) OR 0 (which can mean the DCC is
+                in an unconsumed private note the vault read doesn't see, not
+                truly empty) the withdraw stays fully usable with no distracting
+                text — matches the pre-balance behaviour the user relied on. */}
+            {positionBase != null && positionBase > 0n && (
+              <div
+                style={{
+                  fontSize: 12,
+                  marginTop: 6,
+                  fontFamily: "var(--font-mono-stack)",
+                  color: overPosition ? "crimson" : "var(--ink-3)",
+                }}
+              >
+                {overPosition
+                  ? `Balance: ${fmtDusdc(positionBase)} USDC — that's more than you hold; it'll revert if you don't own it.`
+                  : `Balance: ${fmtDusdc(positionBase)} USDC`}
+              </div>
+            )}
           </div>
         )}
 
