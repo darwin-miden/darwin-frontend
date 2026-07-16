@@ -61,7 +61,7 @@ import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 const AUTH_SCHEME_FALCON_ENUM_VALUE = 2;
 import { useAccount, usePublicClient, useSignTypedData } from "wagmi";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { keccak256, parseUnits, toBytes } from "viem";
+import { formatUnits, keccak256, parseUnits, toBytes } from "viem";
 
 import { EPOCH_DUSDC_FAUCET_ID } from "../lib/midenConstants";
 import { deriveMidenWallet } from "../lib/deriveWallet";
@@ -88,6 +88,18 @@ import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
 import { createWalletClient, custom } from "viem";
 import { sepolia } from "viem/chains";
 import { useSwitchChain } from "wagmi";
+
+// Minimal ERC-20 balanceOf — used to read the user's Sepolia USDC so the
+// deposit input can't exceed what they actually hold (and a Max button).
+const ERC20_BALANCE_ABI = [
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
 
 type Stage =
   | "idle"
@@ -328,6 +340,35 @@ export function TrustlessDepositPanel({
   }, [evmAddress]);
   const [humanAmount, setHumanAmount] = useState<string>(HUMAN_AMOUNT_DEFAULT);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // The connected wallet's Sepolia USDC balance (18-dec base units), so the
+  // deposit input is bounded by real funds and a Max button can fill it in.
+  const [usdcBalance, setUsdcBalance] = useState<bigint | null>(null);
+
+  // Read (and refresh) the ETH-side USDC balance. Refreshes on every stage
+  // change so it updates right after a deposit debits the wallet.
+  useEffect(() => {
+    if (!evmAddress || !publicClient) {
+      setUsdcBalance(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const bal = (await publicClient.readContract({
+          address: EPOCH_USDC_SEPOLIA.address,
+          abi: ERC20_BALANCE_ABI,
+          functionName: "balanceOf",
+          args: [evmAddress as `0x${string}`],
+        })) as bigint;
+        if (!cancelled) setUsdcBalance(bal);
+      } catch {
+        if (!cancelled) setUsdcBalance(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [evmAddress, publicClient, stage]);
   const [sepoliaTx, setSepoliaTx] = useState<string | null>(null);
   const [midenNoteId, setMidenNoteId] = useState<string | null>(null);
   const [consumeTx, setConsumeTx] = useState<string | null>(null);
@@ -713,6 +754,31 @@ export function TrustlessDepositPanel({
     }
   }
 
+  // ── Deposit-amount / balance validation (Sepolia USDC is 18-dec) ──
+  const usdcDecimals = EPOCH_USDC_SEPOLIA.decimals;
+  let amountBase: bigint | null;
+  try {
+    amountBase = parseUnits(humanAmount || "0", usdcDecimals);
+  } catch {
+    amountBase = null; // mid-typing (e.g. "1.") — treat as not-yet-valid
+  }
+  const insufficient =
+    usdcBalance != null && amountBase != null && amountBase > usdcBalance;
+  const amountValid = amountBase != null && amountBase > 0n && !insufficient;
+  const fmtUsdc = (base: bigint) =>
+    parseFloat(formatUnits(base, usdcDecimals)).toLocaleString(undefined, {
+      maximumFractionDigits: 4,
+    });
+  // Max leaves a ~1% cushion for the bridge fee so the reverse-quote can't
+  // pull more USDC than the wallet holds; floored to 2 decimals for a clean
+  // value. (The exact failure the user hit: typing 5 with a 4.18 balance.)
+  function setMaxAmount() {
+    if (usdcBalance == null || usdcBalance === 0n) return;
+    const cushioned = (usdcBalance * 99n) / 100n;
+    const human = Math.floor(parseFloat(formatUnits(cushioned, usdcDecimals)) * 100) / 100;
+    setHumanAmount(String(human));
+  }
+
   return (
     <section style={{ marginTop: compact ? 0 : 48 }}>
       {!compact && (
@@ -810,23 +876,59 @@ export function TrustlessDepositPanel({
 
       {walletId && stage !== "done" && stage !== "quoting" && stage !== "signing-sepolia" && stage !== "awaiting-delivery" && stage !== "consuming" && (
         <div style={{ marginTop: 16 }}>
-          <label style={{ fontSize: 13, marginRight: 12 }}>Amount (USDC):</label>
-          <input
-            type="number"
-            step="0.01"
-            min="0.01"
-            value={humanAmount}
-            onChange={(e) => setHumanAmount(e.target.value)}
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+            <label style={{ fontSize: 13 }}>Amount (USDC):</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0.01"
+              max={usdcBalance != null ? formatUnits(usdcBalance, usdcDecimals) : undefined}
+              value={humanAmount}
+              onChange={(e) => setHumanAmount(e.target.value)}
+              style={{
+                fontFamily: "var(--font-mono-stack)",
+                padding: "4px 8px",
+                width: 100,
+                borderColor: insufficient ? "crimson" : undefined,
+              }}
+            />
+            <button
+              type="button"
+              onClick={setMaxAmount}
+              disabled={usdcBalance == null || usdcBalance === 0n}
+              className="nav-cta"
+              style={{
+                padding: "4px 12px",
+                fontSize: 12,
+                opacity: usdcBalance == null || usdcBalance === 0n ? 0.5 : 1,
+              }}
+              title="Use your full balance minus a ~1% bridge-fee cushion"
+            >
+              Max
+            </button>
+            <button
+              onClick={onDeposit}
+              disabled={!amountValid}
+              className="nav-cta"
+              style={{ minWidth: 220, opacity: amountValid ? 1 : 0.5 }}
+            >
+              Step 2 · Deposit via Epoch
+            </button>
+          </div>
+          <div
             style={{
+              fontSize: 12,
+              marginTop: 6,
               fontFamily: "var(--font-mono-stack)",
-              padding: "4px 8px",
-              width: 100,
-              marginRight: 12,
+              color: insufficient ? "crimson" : "var(--ink-3)",
             }}
-          />
-          <button onClick={onDeposit} className="nav-cta" style={{ minWidth: 220 }}>
-            Step 2 · Deposit via Epoch
-          </button>
+          >
+            {usdcBalance == null
+              ? "Reading your USDC balance…"
+              : insufficient
+                ? `Insufficient — you hold ${fmtUsdc(usdcBalance)} USDC. Click Max or lower the amount.`
+                : `Balance: ${fmtUsdc(usdcBalance)} USDC`}
+          </div>
         </div>
       )}
 
