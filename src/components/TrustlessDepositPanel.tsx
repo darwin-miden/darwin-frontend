@@ -769,14 +769,15 @@ export function TrustlessDepositPanel({
     parseFloat(formatUnits(base, usdcDecimals)).toLocaleString(undefined, {
       maximumFractionDigits: 4,
     });
-  // Max = the full balance, floored to 2 decimals. The reverse-quote pulls
-  // marginally LESS USDC than the typed amount (the fee comes out of the
+  // Max = the full balance, floored to 4 decimals (matches the balance shown
+  // below the input, so no visible remainder is dropped). The reverse-quote
+  // pulls marginally LESS USDC than the typed amount (the fee comes out of the
   // Miden-side delivery, not added to the Sepolia input — verified on-chain),
-  // so depositing ~the whole balance is safe; the 2-decimal floor leaves a
-  // small natural cushion while still reading as "everything you have".
+  // so depositing ~the whole balance is safe; the 4-decimal floor only drops
+  // sub-0.0001 dust, not worth risking a failed tx over.
   function setMaxAmount() {
     if (usdcBalance == null || usdcBalance === 0n) return;
-    const human = Math.floor(parseFloat(formatUnits(usdcBalance, usdcDecimals)) * 100) / 100;
+    const human = Math.floor(parseFloat(formatUnits(usdcBalance, usdcDecimals)) * 1e4) / 1e4;
     setHumanAmount(String(human));
   }
 
