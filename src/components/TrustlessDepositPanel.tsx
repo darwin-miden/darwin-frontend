@@ -9,9 +9,12 @@
  * 2. keccak256(signature) → 32-byte seed → `useCreateWallet({ initSeed })`
  *    yields a Miden wallet fully derived from the ETH signature. Same
  *    signature from any device ⇒ same wallet, no backup needed.
- * 3. User funds the wallet with mBND once (via faucet.testnet.miden.io
- *    or an in-page drip). Needed because Miden 0.15 has no paymaster —
- *    the wallet pays its own tx fees. Bootstrap-only.
+ * 3. (No funding step.) Miden testnet fees are currently 0, so the fresh
+ *    derived wallet consumes its deposit note gasless — its first tx
+ *    deploys + consumes with fee=0 (verified on-chain 2026-07-16). When
+ *    Miden fees go live (mainnet), sponsor gas by pre-sending an mBND note
+ *    the wallet consumes — a 0-balance wallet self-funds from a received
+ *    MIDEN note (tested), so self-custody is preserved. No paymaster needed.
  * 4. User picks a USDC amount → deposit via Epoch's Sepolia→Miden bridge
  *    with `midenRecipientAccount = derivedWallet.id`.
  * 5. Frontend polls `useWaitForNotes` on the derived wallet until Epoch
@@ -768,13 +771,16 @@ export function TrustlessDepositPanel({
             browser session only — it is never displayed, stored on a
             server, or sent anywhere.
           </div>
-          <div style={{ marginTop: 4, color: "var(--ink-3)" }}>
-            Fund it with a bit of MIDEN once (bootstrap gas) via{" "}
-            <a href="https://faucet.testnet.miden.io/" target="_blank" rel="noreferrer">
-              faucet.testnet.miden.io
-            </a>{" "}
-            then deposit below.
-          </div>
+          {/*
+            No "fund with MIDEN" step: Miden testnet fees are currently 0,
+            so the fresh derived wallet consumes its deposit note gasless —
+            verified on-chain that a 0-balance, never-deployed wallet's very
+            first tx (deploy + consume) pays fee=0. RE-ADD a sponsor here
+            when Miden fees go live on mainnet: pre-send an mBND note the
+            wallet consumes (a 0-balance wallet self-funds from a received
+            MIDEN note — tested), which keeps full self-custody. No paymaster
+            needed either way.
+          */}
         </div>
       )}
 
