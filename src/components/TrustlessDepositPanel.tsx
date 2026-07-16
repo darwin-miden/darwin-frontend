@@ -543,8 +543,32 @@ export function TrustlessDepositPanel({
         // wallet's private token balance — no public per-user ledger.
         // Priced at the live NAV: mint_amount = deposit / NAV.
         setStage("crediting");
-        const amountBaseNet =
-          (parseUnits(humanAmount, EPOCH_USDC_SEPOLIA.midenDecimals) * 95n) / 100n;
+        // Drain exactly what Epoch actually delivered into the vault — NOT
+        // the requested amount. The testnet solver caps delivery, so a
+        // requested amount larger than what arrived underflows the drain
+        // ("subtracting X from fungible asset amount Y would underflow").
+        // Read the real dUSDC balance; only fall back to the requested 95%
+        // if the on-chain read is unavailable.
+        let amountBaseNet: bigint;
+        try {
+          const delivered = await runExclusive(() =>
+            (
+              client as unknown as {
+                getBalance: (a: string, t: string) => Promise<bigint>;
+              }
+            ).getBalance(walletId, EPOCH_USDC_SEPOLIA.midenFaucetId),
+          );
+          amountBaseNet = BigInt(delivered ?? 0n);
+        } catch {
+          amountBaseNet =
+            (parseUnits(humanAmount, EPOCH_USDC_SEPOLIA.midenDecimals) * 95n) /
+            100n;
+        }
+        if (amountBaseNet <= 0n) {
+          throw new Error(
+            "No dUSDC arrived from the bridge — the Epoch testnet solver may be out of liquidity. Try a smaller amount, or retry in a bit.",
+          );
+        }
         const r = await fetch("/api/confidential-note", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
