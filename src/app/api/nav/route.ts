@@ -38,10 +38,20 @@ export async function GET(req: Request) {
   }
   const basket = basketBySymbol(sym);
 
-  // Same-origin fetch to the cached prices endpoint. The cache is
-  // shared across both routes via the module-level singleton in
-  // /api/prices, so this round-trip is in-process.
-  const pricesUrl = new URL("/api/prices", url.origin);
+  // Same-origin fetch to the cached prices endpoint. Behind a
+  // forwarding tunnel/proxy, req.url can carry a forwarded `https` proto
+  // while the local server actually speaks `http` on that port, so
+  // url.origin becomes https://localhost:3010 and the self-fetch fails
+  // the TLS handshake ("wrong version number") → 500. Force http for a
+  // loopback host so the in-process round-trip always resolves.
+  const selfBase = new URL(url.origin);
+  if (
+    selfBase.protocol === "https:" &&
+    (selfBase.hostname === "localhost" || selfBase.hostname === "127.0.0.1")
+  ) {
+    selfBase.protocol = "http:";
+  }
+  const pricesUrl = new URL("/api/prices", selfBase);
   const r = await fetch(pricesUrl, { cache: "no-store" });
   if (!r.ok) {
     return Response.json(
