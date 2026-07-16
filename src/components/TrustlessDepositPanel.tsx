@@ -769,13 +769,14 @@ export function TrustlessDepositPanel({
     parseFloat(formatUnits(base, usdcDecimals)).toLocaleString(undefined, {
       maximumFractionDigits: 4,
     });
-  // Max leaves a ~1% cushion for the bridge fee so the reverse-quote can't
-  // pull more USDC than the wallet holds; floored to 2 decimals for a clean
-  // value. (The exact failure the user hit: typing 5 with a 4.18 balance.)
+  // Max = the full balance, floored to 2 decimals. The reverse-quote pulls
+  // marginally LESS USDC than the typed amount (the fee comes out of the
+  // Miden-side delivery, not added to the Sepolia input — verified on-chain),
+  // so depositing ~the whole balance is safe; the 2-decimal floor leaves a
+  // small natural cushion while still reading as "everything you have".
   function setMaxAmount() {
     if (usdcBalance == null || usdcBalance === 0n) return;
-    const cushioned = (usdcBalance * 99n) / 100n;
-    const human = Math.floor(parseFloat(formatUnits(cushioned, usdcDecimals)) * 100) / 100;
+    const human = Math.floor(parseFloat(formatUnits(usdcBalance, usdcDecimals)) * 100) / 100;
     setHumanAmount(String(human));
   }
 
