@@ -70,6 +70,7 @@ import {
   evmToUserIdFelts,
   fetchTrustlessPosition,
 } from "../lib/trustlessController";
+import { CONFIDENTIAL_FAUCETS } from "../lib/confidentialFaucets";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
@@ -403,35 +404,57 @@ export function TrustlessRedeemPanel({
   }, [evmAddress]);
   const [humanAmount, setHumanAmount] = useState<string>(REDEEM_AMOUNT_DEFAULT);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // Withdrawable position (dUSDC 6-dec base units) for this (user, basket),
-  // read from slot-10 so the withdraw input can't exceed it + a Max button.
+  // Withdrawable balance = the wallet's REAL confidential basket-token
+  // balance (6-dec base units) at the basket faucet. The network withdraw
+  // burns these tokens (see /api/confidential-redeem: amount = basket-token
+  // base units), so this — not the old slot-10 public ledger — is the true
+  // cap. Read in-browser via the WASM client; a private balance the server
+  // can't see, by design.
   const [positionBase, setPositionBase] = useState<bigint | null>(null);
 
-  // Read (and refresh) the slot-10 position. Refreshes on every stage change
-  // so it updates right after a withdraw debits it.
+  // Read (and refresh) the confidential token balance. Only reads in stable
+  // stages so it can't contend with the withdraw's own client ops mid-flow;
+  // refreshes on done/error so it reflects the post-withdraw balance.
   useEffect(() => {
-    if (!evmAddress) {
+    const stable =
+      stage === "idle" ||
+      stage === "ready" ||
+      stage === "done" ||
+      stage === "error";
+    if (!network || !walletId || !client || !basket || !stable) return;
+    const faucet = CONFIDENTIAL_FAUCETS[basket.symbol];
+    if (!faucet) {
       setPositionBase(null);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const rtFelts = basket ? await basketFelts(basket.faucetHex) : undefined;
-        const { position, positionKnown } = await fetchTrustlessPosition(
-          evmAddress,
-          rtFelts,
-        );
-        if (!cancelled) setPositionBase(positionKnown ? position : null);
+        // Sync + read in one exclusive turn so the balance is fresh (a just-
+        // credited DCC mint shows up) and nothing interleaves on the WASM
+        // RefCell.
+        const bal = await runExclusive(async () => {
+          try {
+            await syncState();
+          } catch {
+            /* stale read is fine; the flow re-syncs before spending */
+          }
+          return (
+            client as unknown as {
+              getBalance: (a: string, t: string) => Promise<bigint>;
+            }
+          ).getBalance(walletId, faucet);
+        });
+        if (!cancelled) setPositionBase(BigInt(bal ?? 0n));
       } catch {
-        if (!cancelled) setPositionBase(null);
+        /* keep the last known balance — don't flicker to null on a race */
       }
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [evmAddress, basket?.faucetHex, stage]);
+  }, [network, walletId, basket?.symbol, stage]);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [midenTxId, setMidenTxId] = useState<string | null>(null);
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
@@ -1840,8 +1863,9 @@ export function TrustlessRedeemPanel({
     }
   }
 
-  // ── Withdraw-amount / position validation (position is dUSDC 6-dec, and
-  // the withdraw amount is 1:1 with dUSDC — see parseUnits(humanAmount, 6)) ──
+  // ── Withdraw-amount / balance validation. The withdraw burns basket
+  // tokens 1:1 with the typed amount (parseUnits(humanAmount, 6)), so the cap
+  // is the wallet's confidential token balance (positionBase). ──
   let redeemBase: bigint | null;
   try {
     redeemBase = parseUnits(humanAmount || "0", 6);
@@ -1855,13 +1879,14 @@ export function TrustlessRedeemPanel({
     parseFloat(formatUnits(base, 6)).toLocaleString(undefined, {
       maximumFractionDigits: 4,
     });
-  // Max leaves a ~1% cushion for the exit bridge fee: the redeem consumes
-  // marginally MORE dUSDC than the USDC it delivers on Sepolia, so the whole
-  // position can't round-trip out. Floored to 2 decimals.
+  // Max = the full token balance, floored to 4 decimals (matches the balance
+  // shown below). No cushion needed: the burn is 1:1 and the Epoch exit leg
+  // consumes marginally LESS dUSDC than the burn releases (the slippage
+  // buffer keeps tokenIn under the released amount), so the whole balance
+  // withdraws — symmetric with the deposit Max.
   function setMaxRedeem() {
     if (positionBase == null || positionBase === 0n) return;
-    const cushioned = (positionBase * 99n) / 100n;
-    const human = Math.floor(parseFloat(formatUnits(cushioned, 6)) * 100) / 100;
+    const human = Math.floor(parseFloat(formatUnits(positionBase, 6)) * 1e4) / 1e4;
     setHumanAmount(String(human));
   }
 
@@ -2072,7 +2097,7 @@ export function TrustlessRedeemPanel({
                   fontSize: 12,
                   opacity: positionBase == null || positionBase === 0n ? 0.5 : 1,
                 }}
-                title="Withdraw your full position minus a ~1% bridge-fee cushion"
+                title="Withdraw your full confidential balance"
               >
                 Max
               </button>
