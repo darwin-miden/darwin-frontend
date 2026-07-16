@@ -70,6 +70,7 @@ import {
   evmToUserIdFelts,
   fetchTrustlessPosition,
 } from "../lib/trustlessController";
+import { readDccBalance, stashDccBalance } from "../lib/dccBalance";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
@@ -403,37 +404,20 @@ export function TrustlessRedeemPanel({
   }, [evmAddress]);
   const [humanAmount, setHumanAmount] = useState<string>(REDEEM_AMOUNT_DEFAULT);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // Displayed withdraw balance, read from the slot-10 position ledger via
-  // /api/position (server-side, fast, reliable — this is the read that
-  // actually DISPLAYS). The in-browser confidential getBalance doesn't resolve
-  // reliably in this panel, so the value shown here is the position ledger,
-  // which tracks deposits but the confidential withdraw doesn't decrement.
-  // Best-effort helper, never a hard gate on the withdraw.
+  // Displayed withdraw balance = the REAL confidential DCC balance, read from
+  // the cache the deposit/withdraw flows write (getBalance only resolves in a
+  // flow's warm client, so this is the only place it's reliably captured).
+  // Refreshes on stage changes so a just-finished flow's fresh value shows.
   const [positionBase, setPositionBase] = useState<bigint | null>(null);
 
   useEffect(() => {
-    if (!evmAddress) {
+    if (!walletId) {
       setPositionBase(null);
       return;
     }
-    let cancelled = false;
-    (async () => {
-      try {
-        const rtFelts = basket ? await basketFelts(basket.faucetHex) : undefined;
-        const { position, positionKnown } = await fetchTrustlessPosition(
-          evmAddress,
-          rtFelts,
-        );
-        if (!cancelled && positionKnown) setPositionBase(position);
-      } catch {
-        /* keep the last known value */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [evmAddress, basket?.faucetHex, stage]);
+    const v = readDccBalance(walletId);
+    if (v != null) setPositionBase(v);
+  }, [walletId, stage]);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [midenTxId, setMidenTxId] = useState<string | null>(null);
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
@@ -1833,6 +1817,11 @@ export function TrustlessRedeemPanel({
         }
       }
 
+      // Refresh the cached DCC balance after the burn (getBalance works here —
+      // warm client) so the panel shows the reduced balance right away.
+      if (walletId)
+        await stashDccBalance(client, runExclusive, walletId, basket?.symbol ?? "DCC");
+
       setStage("done");
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
@@ -2106,7 +2095,7 @@ export function TrustlessRedeemPanel({
               }}
             >
               {positionBase == null
-                ? "Balance: checking…"
+                ? "Balance: — (loads after your next deposit or withdraw)"
                 : overPosition
                   ? `Balance: ${fmtDusdc(positionBase)} USDC — more than you hold; a larger amount just reverts on-chain.`
                   : `Balance: ${fmtDusdc(positionBase)} USDC`}

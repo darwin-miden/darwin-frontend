@@ -88,6 +88,7 @@ import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
 import { createWalletClient, custom } from "viem";
 import { sepolia } from "viem/chains";
 import { useSwitchChain } from "wagmi";
+import { stashDccBalance } from "../lib/dccBalance";
 
 // Minimal ERC-20 balanceOf — used to read the user's Sepolia USDC so the
 // deposit input can't exceed what they actually hold (and a Max button).
@@ -687,6 +688,9 @@ export function TrustlessDepositPanel({
             /* not minted yet — keep polling */
           }
         }
+        // Stash the real DCC balance for the Withdraw panel (getBalance works
+        // here — warm client, mint just consumed into the vault).
+        await stashDccBalance(client, runExclusive, walletId, basket?.symbol ?? "DCC");
         setStage("done");
         return;
       }
