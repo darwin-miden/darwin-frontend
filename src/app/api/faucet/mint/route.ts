@@ -158,6 +158,14 @@ export async function POST(req: Request) {
       { status: 429 },
     );
   }
+  // Per-faucet cap: bound the TOTAL drain of a faucet across ALL targets,
+  // so rotating the recipient wallet can't sidestep the per-target cap.
+  if (!keyLimit(`mint:${faucetId}`, 60)) {
+    return NextResponse.json(
+      { error: "faucet drip cap reached — retry later" },
+      { status: 429 },
+    );
+  }
 
   const targetHex = decodeBech32ToHex(target);
 

@@ -36,8 +36,6 @@ const BUILDER_BIN =
   process.env.DARWIN_CONFIDENTIAL_DEPOSIT_BIN ||
   "/Users/eden/data/darwin/repos/darwin-relay/target/release/send_confidential_deposit";
 
-const SELF_ORIGIN = process.env.DARWIN_SELF_ORIGIN || "http://127.0.0.1:3010";
-
 interface Body {
   sender?: string;
   recipient?: string;
@@ -106,17 +104,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "amount out of range" }, { status: 400 });
   }
 
-  // Price the mint at the live NAV: mint_amount = amount / NAV.
-  let navScale = 1;
-  try {
-    const nr = await fetch(`${SELF_ORIGIN}/api/nav?basket=${basket}`, { cache: "no-store" });
-    if (nr.ok) {
-      const nj = (await nr.json()) as { navUsd?: number };
-      if (nj.navUsd && nj.navUsd > 0) navScale = Math.round(nj.navUsd);
-    }
-  } catch {
-    // NAV read hiccup — fall back to 1:1 rather than block the deposit.
-  }
+  // The confidential mint is 1:1 in base units by design: the on-chain
+  // note mints from the REAL drained collateral and ignores every NAV/fee
+  // storage felt (post-audit hardening), and redeem conserves exactly. So
+  // there is no NAV to fetch or apply here — mintAmount == amount. (The
+  // builder still takes --fee-factor/--nav-scale but treats them as dead
+  // no-ops; we pass 1/1 so the note storage is deterministic.)
 
   if (!acquireSlot()) return busySlot();
   let stdout: string, stderr: string, code: number | null;
@@ -134,7 +127,7 @@ export async function POST(req: Request) {
       "--fee-factor",
       "1",
       "--nav-scale",
-      navScale.toString(),
+      "1",
     ]));
   } finally {
     releaseSlot();
@@ -149,7 +142,7 @@ export async function POST(req: Request) {
   const lastLine = stdout.trim().split("\n").pop() ?? "";
   try {
     const parsed = JSON.parse(lastLine);
-    return NextResponse.json({ ...parsed, faucetId, navScale });
+    return NextResponse.json({ ...parsed, faucetId });
   } catch {
     console.error("[confidential-note] unparseable builder output", lastLine);
     return NextResponse.json({ error: "couldn't parse builder output", raw: redact(lastLine.slice(0, 300)) }, { status: 500 });

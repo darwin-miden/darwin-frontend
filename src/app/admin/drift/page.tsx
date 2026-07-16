@@ -13,6 +13,7 @@
  */
 
 import dynamic from "next/dynamic";
+import { notFound } from "next/navigation";
 import { useMemo, useState } from "react";
 import { BASKETS, type Basket, formatWeight } from "../../../lib/baskets";
 import {
@@ -72,6 +73,14 @@ function classifyDrift(maxDrift: number): {
 }
 
 export default function AdminDriftPage() {
+  // Operator-only tooling — keep it off the public prod surface. It stays
+  // reachable via `next dev` on localhost (NODE_ENV !== "production"); in
+  // the launchd prod build it 404s instead of exposing operator internals.
+  if (process.env.NODE_ENV === "production") notFound();
+  return <AdminDriftPageImpl />;
+}
+
+function AdminDriftPageImpl() {
   const [skew, setSkew] = useState<number>(1);
   const [showTrigger, setShowTrigger] = useState<string | null>(null);
 
