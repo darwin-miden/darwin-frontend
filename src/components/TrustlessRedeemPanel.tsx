@@ -430,21 +430,19 @@ export function TrustlessRedeemPanel({
     let cancelled = false;
     (async () => {
       try {
-        // Sync + read in one exclusive turn so the balance is fresh (a just-
-        // credited DCC mint shows up) and nothing interleaves on the WASM
-        // RefCell.
-        const bal = await runExclusive(async () => {
-          try {
-            await syncState();
-          } catch {
-            /* stale read is fine; the flow re-syncs before spending */
-          }
-          return (
+        // Read the CACHED balance only — no syncState. A full sync is a slow
+        // network round-trip and, behind the WASM mutex, queues behind any
+        // in-flight deposit/withdraw, so it left "Reading your position…"
+        // hanging for tens of seconds. getBalance alone is a fast local read;
+        // freshness is already provided by the sync the deposit/withdraw flow
+        // runs itself. Still via runExclusive so it can't race the RefCell.
+        const bal = await runExclusive(() =>
+          (
             client as unknown as {
               getBalance: (a: string, t: string) => Promise<bigint>;
             }
-          ).getBalance(walletId, faucet);
-        });
+          ).getBalance(walletId, faucet),
+        );
         if (!cancelled) setPositionBase(BigInt(bal ?? 0n));
       } catch {
         /* keep the last known balance — don't flicker to null on a race */
