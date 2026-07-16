@@ -70,7 +70,6 @@ import {
   evmToUserIdFelts,
   fetchTrustlessPosition,
 } from "../lib/trustlessController";
-import { CONFIDENTIAL_FAUCETS } from "../lib/confidentialFaucets";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
@@ -404,73 +403,37 @@ export function TrustlessRedeemPanel({
   }, [evmAddress]);
   const [humanAmount, setHumanAmount] = useState<string>(REDEEM_AMOUNT_DEFAULT);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // Displayed withdraw balance = the REAL confidential DCC balance. The
-  // vault is a private account (storageMode "private"), so no server — not
-  // even midenscan — can read it, and slot-10 is a stale public counter the
-  // confidential deposit never updates. The one place getBalance runs
-  // reliably is the deposit flow's warm client, which stashes the balance in
-  // sessionStorage; we read that instantly here and also try a live read to
-  // refine it. Best-effort helper, never a hard gate on the withdraw.
+  // Displayed withdraw balance, read from the slot-10 position ledger via
+  // /api/position (server-side, fast, reliable — this is the read that
+  // actually DISPLAYS). The in-browser confidential getBalance doesn't resolve
+  // reliably in this panel, so the value shown here is the position ledger,
+  // which tracks deposits but the confidential withdraw doesn't decrement.
+  // Best-effort helper, never a hard gate on the withdraw.
   const [positionBase, setPositionBase] = useState<bigint | null>(null);
-  // True once the live read has settled (resolved or timed out), so the UI can
-  // stop showing "checking…" and just show nothing when no balance is known.
-  const [balanceReadSettled, setBalanceReadSettled] = useState(false);
 
   useEffect(() => {
-    if (!network || !walletId || !basket) return;
-    const faucet = CONFIDENTIAL_FAUCETS[basket.symbol];
-    if (!faucet) return;
-    // 1) Instant: the balance the deposit flow persisted (reliable — it came
-    // from a getBalance that actually resolved, in the deposit's warm client).
-    if (typeof window !== "undefined") {
-      const cached = sessionStorage.getItem(`darwin-dcc-${walletId}`);
-      if (cached != null) {
-        try {
-          setPositionBase(BigInt(cached));
-        } catch {
-          /* ignore malformed */
-        }
-      }
+    if (!evmAddress) {
+      setPositionBase(null);
+      return;
     }
-    // 2) Best-effort live refine: sync + getBalance, capped by a timeout so it
-    // can never leave the line stuck on "checking…". If it can't resolve, the
-    // cached value (or nothing) stands and the withdraw stays fully usable.
-    if (!client) return;
     let cancelled = false;
     (async () => {
       try {
-        // Bare getBalance, NO syncState — this mirrors the deposit's working
-        // read: the shared client is already synced by the deposit flow, and
-        // adding a sync here was the slow/hanging step. Timeout-capped so a
-        // cold client (e.g. after a reload with no prior sync) can't hang it.
-        const bal = (await Promise.race([
-          runExclusive(() =>
-            (
-              client as unknown as {
-                getBalance: (a: string, t: string) => Promise<bigint>;
-              }
-            ).getBalance(walletId, faucet),
-          ),
-          new Promise<never>((_, rej) =>
-            setTimeout(() => rej(new Error("balance read timeout")), 8_000),
-          ),
-        ])) as bigint;
-        if (!cancelled && bal != null) {
-          setPositionBase(BigInt(bal));
-          if (typeof window !== "undefined")
-            sessionStorage.setItem(`darwin-dcc-${walletId}`, String(bal));
-        }
+        const rtFelts = basket ? await basketFelts(basket.faucetHex) : undefined;
+        const { position, positionKnown } = await fetchTrustlessPosition(
+          evmAddress,
+          rtFelts,
+        );
+        if (!cancelled && positionKnown) setPositionBase(position);
       } catch {
-        /* keep the cached value; the line just won't refine this pass */
-      } finally {
-        if (!cancelled) setBalanceReadSettled(true);
+        /* keep the last known value */
       }
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [network, walletId, basket?.symbol, stage, client]);
+  }, [evmAddress, basket?.faucetHex, stage]);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [midenTxId, setMidenTxId] = useState<string | null>(null);
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
@@ -2132,26 +2095,22 @@ export function TrustlessRedeemPanel({
                 {network ? "Withdraw" : "Redeem via Epoch (~2 min)"}
               </button>
             </div>
-            {/* Balance line. Shows the value when known; a brief "checking…"
-                only while the live read is still in flight; and nothing once
-                the read settled without a balance (so it can't stick on
-                "checking…"). Never gates the withdraw. */}
-            {(positionBase != null || !balanceReadSettled) && (
-              <div
-                style={{
-                  fontSize: 12,
-                  marginTop: 6,
-                  fontFamily: "var(--font-mono-stack)",
-                  color: overPosition ? "crimson" : "var(--ink-3)",
-                }}
-              >
-                {positionBase == null
-                  ? "Balance: checking…"
-                  : overPosition
-                    ? `Balance: ${fmtDusdc(positionBase)} USDC — more than you hold; a larger amount just reverts on-chain.`
-                    : `Balance: ${fmtDusdc(positionBase)} USDC`}
-              </div>
-            )}
+            {/* Balance line — reads the slot-10 position (fast, reliable). A
+                brief "checking…" then the value. Never gates the withdraw. */}
+            <div
+              style={{
+                fontSize: 12,
+                marginTop: 6,
+                fontFamily: "var(--font-mono-stack)",
+                color: overPosition ? "crimson" : "var(--ink-3)",
+              }}
+            >
+              {positionBase == null
+                ? "Balance: checking…"
+                : overPosition
+                  ? `Balance: ${fmtDusdc(positionBase)} USDC — more than you hold; a larger amount just reverts on-chain.`
+                  : `Balance: ${fmtDusdc(positionBase)} USDC`}
+            </div>
           </div>
         )}
 

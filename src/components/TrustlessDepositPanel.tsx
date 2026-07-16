@@ -88,7 +88,6 @@ import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
 import { createWalletClient, custom } from "viem";
 import { sepolia } from "viem/chains";
 import { useSwitchChain } from "wagmi";
-import { CONFIDENTIAL_FAUCETS } from "../lib/confidentialFaucets";
 
 // Minimal ERC-20 balanceOf — used to read the user's Sepolia USDC so the
 // deposit input can't exceed what they actually hold (and a Max button).
@@ -687,25 +686,6 @@ export function TrustlessDepositPanel({
           } catch (_) {
             /* not minted yet — keep polling */
           }
-        }
-        // Stash the confidential DCC balance for the Withdraw tab to display.
-        // The withdraw panel can't read the private vault reliably itself;
-        // this getBalance runs in the deposit's warm client where it works,
-        // so the withdraw shows the true balance instead of a stale counter.
-        try {
-          const dccFaucet = CONFIDENTIAL_FAUCETS[basket?.symbol ?? "DCC"];
-          if (dccFaucet && typeof window !== "undefined") {
-            const dccBal = await runExclusive(() =>
-              (
-                client as unknown as {
-                  getBalance: (a: string, t: string) => Promise<bigint>;
-                }
-              ).getBalance(walletId, dccFaucet),
-            );
-            sessionStorage.setItem(`darwin-dcc-${walletId}`, String(dccBal ?? 0n));
-          }
-        } catch {
-          /* best-effort — the withdraw tab falls back to a live read */
         }
         setStage("done");
         return;
