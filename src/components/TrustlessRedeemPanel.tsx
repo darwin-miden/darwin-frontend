@@ -428,24 +428,38 @@ export function TrustlessRedeemPanel({
       return;
     }
     let cancelled = false;
+    const getBal = () =>
+      (
+        client as unknown as {
+          getBalance: (a: string, t: string) => Promise<bigint>;
+        }
+      ).getBalance(walletId, faucet);
     (async () => {
+      // Pass 1 — CACHED read, no sync: fast. Right after a deposit (which just
+      // synced + consumed the mint into the vault) this already has the real
+      // balance, so it shows immediately without the slow "Reading…" hang.
       try {
-        // Read the CACHED balance only — no syncState. A full sync is a slow
-        // network round-trip and, behind the WASM mutex, queues behind any
-        // in-flight deposit/withdraw, so it left "Reading your position…"
-        // hanging for tens of seconds. getBalance alone is a fast local read;
-        // freshness is already provided by the sync the deposit/withdraw flow
-        // runs itself. Still via runExclusive so it can't race the RefCell.
-        const bal = await runExclusive(() =>
-          (
-            client as unknown as {
-              getBalance: (a: string, t: string) => Promise<bigint>;
-            }
-          ).getBalance(walletId, faucet),
-        );
+        const bal = await runExclusive(getBal);
         if (!cancelled) setPositionBase(BigInt(bal ?? 0n));
       } catch {
-        /* keep the last known balance — don't flicker to null on a race */
+        /* leave null; pass 2 may still populate it */
+      }
+      // Pass 2 — SYNCED read, in the background: corrects a cold/stale cache
+      // (e.g. a page reload with no prior sync this session). Non-blocking:
+      // the withdraw stayed usable throughout and the value just refines when
+      // this lands. Queues behind any in-flight flow via runExclusive.
+      try {
+        const bal = await runExclusive(async () => {
+          try {
+            await syncState();
+          } catch {
+            /* stale is fine */
+          }
+          return getBal();
+        });
+        if (!cancelled) setPositionBase(BigInt(bal ?? 0n));
+      } catch {
+        /* keep whatever pass 1 gave */
       }
     })();
     return () => {
@@ -2116,25 +2130,24 @@ export function TrustlessRedeemPanel({
                 {network ? "Withdraw" : "Redeem via Epoch (~2 min)"}
               </button>
             </div>
-            {/* Balance line only once the read resolves to a positive value.
-                While it's null (still reading) OR 0 (which can mean the DCC is
-                in an unconsumed private note the vault read doesn't see, not
-                truly empty) the withdraw stays fully usable with no distracting
-                text — matches the pre-balance behaviour the user relied on. */}
-            {positionBase != null && positionBase > 0n && (
-              <div
-                style={{
-                  fontSize: 12,
-                  marginTop: 6,
-                  fontFamily: "var(--font-mono-stack)",
-                  color: overPosition ? "crimson" : "var(--ink-3)",
-                }}
-              >
-                {overPosition
-                  ? `Balance: ${fmtDusdc(positionBase)} USDC — that's more than you hold; it'll revert if you don't own it.`
+            {/* Balance line. A quick muted "checking…" while the fast cached
+                read is pending (you asked to see the balance, so signal it's
+                coming), then the value. The withdraw stays fully usable the
+                whole time — this line never gates it. */}
+            <div
+              style={{
+                fontSize: 12,
+                marginTop: 6,
+                fontFamily: "var(--font-mono-stack)",
+                color: overPosition ? "crimson" : "var(--ink-3)",
+              }}
+            >
+              {positionBase == null
+                ? "Balance: checking…"
+                : overPosition
+                  ? `Balance: ${fmtDusdc(positionBase)} USDC — more than you hold; a larger amount just reverts on-chain.`
                   : `Balance: ${fmtDusdc(positionBase)} USDC`}
-              </div>
-            )}
+            </div>
           </div>
         )}
 
