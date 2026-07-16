@@ -37,6 +37,7 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
+  formatUnits,
   http,
   keccak256,
   parseTransaction,
@@ -402,6 +403,35 @@ export function TrustlessRedeemPanel({
   }, [evmAddress]);
   const [humanAmount, setHumanAmount] = useState<string>(REDEEM_AMOUNT_DEFAULT);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Withdrawable position (dUSDC 6-dec base units) for this (user, basket),
+  // read from slot-10 so the withdraw input can't exceed it + a Max button.
+  const [positionBase, setPositionBase] = useState<bigint | null>(null);
+
+  // Read (and refresh) the slot-10 position. Refreshes on every stage change
+  // so it updates right after a withdraw debits it.
+  useEffect(() => {
+    if (!evmAddress) {
+      setPositionBase(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const rtFelts = basket ? await basketFelts(basket.faucetHex) : undefined;
+        const { position, positionKnown } = await fetchTrustlessPosition(
+          evmAddress,
+          rtFelts,
+        );
+        if (!cancelled) setPositionBase(positionKnown ? position : null);
+      } catch {
+        if (!cancelled) setPositionBase(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evmAddress, basket?.faucetHex, stage]);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [midenTxId, setMidenTxId] = useState<string | null>(null);
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
@@ -1810,6 +1840,31 @@ export function TrustlessRedeemPanel({
     }
   }
 
+  // ── Withdraw-amount / position validation (position is dUSDC 6-dec, and
+  // the withdraw amount is 1:1 with dUSDC — see parseUnits(humanAmount, 6)) ──
+  let redeemBase: bigint | null;
+  try {
+    redeemBase = parseUnits(humanAmount || "0", 6);
+  } catch {
+    redeemBase = null; // mid-typing
+  }
+  const overPosition =
+    positionBase != null && redeemBase != null && redeemBase > positionBase;
+  const redeemValid = redeemBase != null && redeemBase > 0n && !overPosition;
+  const fmtDusdc = (base: bigint) =>
+    parseFloat(formatUnits(base, 6)).toLocaleString(undefined, {
+      maximumFractionDigits: 4,
+    });
+  // Max leaves a ~1% cushion for the exit bridge fee: the redeem consumes
+  // marginally MORE dUSDC than the USDC it delivers on Sepolia, so the whole
+  // position can't round-trip out. Floored to 2 decimals.
+  function setMaxRedeem() {
+    if (positionBase == null || positionBase === 0n) return;
+    const cushioned = (positionBase * 99n) / 100n;
+    const human = Math.floor(parseFloat(formatUnits(cushioned, 6)) * 100) / 100;
+    setHumanAmount(String(human));
+  }
+
   return (
     <section style={{ marginTop: 24 }}>
       <style>{`
@@ -1987,32 +2042,63 @@ export function TrustlessRedeemPanel({
         stage !== "quoting" &&
         stage !== "sending-note" &&
         stage !== "awaiting-fill" && (
-          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
-            <label style={{ fontSize: 13 }}>
-              {network ? "Withdraw (USDC to Sepolia):" : "USDC to receive on Sepolia:"}{" "}
-              <input
-                type="text"
-                inputMode="decimal"
-                value={humanAmount}
-                onChange={(e) => setHumanAmount(e.target.value)}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <label style={{ fontSize: 13 }}>
+                {network ? "Withdraw (USDC to Sepolia):" : "USDC to receive on Sepolia:"}{" "}
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={humanAmount}
+                  onChange={(e) => setHumanAmount(e.target.value)}
+                  style={{
+                    fontFamily: "var(--font-mono-stack)",
+                    fontSize: 13,
+                    padding: "4px 8px",
+                    width: 90,
+                    border: `1px solid ${overPosition ? "crimson" : "var(--ink)"}`,
+                    background: "var(--paper)",
+                    color: "var(--ink)",
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={setMaxRedeem}
+                disabled={positionBase == null || positionBase === 0n}
+                className="nav-cta"
                 style={{
-                  fontFamily: "var(--font-mono-stack)",
-                  fontSize: 13,
-                  padding: "4px 8px",
-                  width: 90,
-                  border: "1px solid var(--ink)",
-                  background: "var(--paper)",
-                  color: "var(--ink)",
+                  padding: "4px 12px",
+                  fontSize: 12,
+                  opacity: positionBase == null || positionBase === 0n ? 0.5 : 1,
                 }}
-              />
-            </label>
-            <button
-              onClick={onRedeem}
-              className="nav-cta"
-              style={{ minWidth: 260 }}
+                title="Withdraw your full position minus a ~1% bridge-fee cushion"
+              >
+                Max
+              </button>
+              <button
+                onClick={onRedeem}
+                disabled={!redeemValid}
+                className="nav-cta"
+                style={{ minWidth: 260, opacity: redeemValid ? 1 : 0.5 }}
+              >
+                {network ? "Withdraw" : "Redeem via Epoch (~2 min)"}
+              </button>
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                marginTop: 6,
+                fontFamily: "var(--font-mono-stack)",
+                color: overPosition ? "crimson" : "var(--ink-3)",
+              }}
             >
-              {network ? "Withdraw" : "Redeem via Epoch (~2 min)"}
-            </button>
+              {positionBase == null
+                ? "Reading your position…"
+                : overPosition
+                  ? `Insufficient — your position is ${fmtDusdc(positionBase)} USDC. Click Max or lower the amount.`
+                  : `Position: ${fmtDusdc(positionBase)} USDC`}
+            </div>
           </div>
         )}
 
