@@ -70,7 +70,6 @@ import {
   evmToUserIdFelts,
   fetchTrustlessPosition,
 } from "../lib/trustlessController";
-import { CONFIDENTIAL_FAUCETS } from "../lib/confidentialFaucets";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
@@ -404,71 +403,40 @@ export function TrustlessRedeemPanel({
   }, [evmAddress]);
   const [humanAmount, setHumanAmount] = useState<string>(REDEEM_AMOUNT_DEFAULT);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // Withdrawable balance = the wallet's REAL confidential basket-token
-  // balance (6-dec base units) at the basket faucet. The network withdraw
-  // burns these tokens (see /api/confidential-redeem: amount = basket-token
-  // base units), so this — not the old slot-10 public ledger — is the true
-  // cap. Read in-browser via the WASM client; a private balance the server
-  // can't see, by design.
+  // Displayed withdraw balance, read from the slot-10 position ledger via
+  // /api/position (server-side, fast, reliable). The in-browser
+  // client.getBalance for the confidential vault never resolved reliably here
+  // (WASM mutex / account-load timing) and left "checking…" stuck — the
+  // server read is what actually displays. slot-10 is credited 1:1 on every
+  // deposit, so it tracks what you put in; it's a best-effort helper, never a
+  // hard gate on the withdraw.
   const [positionBase, setPositionBase] = useState<bigint | null>(null);
 
-  // Read (and refresh) the confidential token balance. Only reads in stable
-  // stages so it can't contend with the withdraw's own client ops mid-flow;
-  // refreshes on done/error so it reflects the post-withdraw balance.
+  // Read (and refresh) the position. Refreshes on stage changes so it
+  // reflects a just-completed deposit/withdraw.
   useEffect(() => {
-    const stable =
-      stage === "idle" ||
-      stage === "ready" ||
-      stage === "done" ||
-      stage === "error";
-    if (!network || !walletId || !client || !basket || !stable) return;
-    const faucet = CONFIDENTIAL_FAUCETS[basket.symbol];
-    if (!faucet) {
+    if (!evmAddress) {
       setPositionBase(null);
       return;
     }
     let cancelled = false;
-    const getBal = () =>
-      (
-        client as unknown as {
-          getBalance: (a: string, t: string) => Promise<bigint>;
-        }
-      ).getBalance(walletId, faucet);
     (async () => {
-      // Pass 1 — CACHED read, no sync: fast. Right after a deposit (which just
-      // synced + consumed the mint into the vault) this already has the real
-      // balance, so it shows immediately without the slow "Reading…" hang.
       try {
-        const bal = await runExclusive(getBal);
-        if (!cancelled) setPositionBase(BigInt(bal ?? 0n));
+        const rtFelts = basket ? await basketFelts(basket.faucetHex) : undefined;
+        const { position, positionKnown } = await fetchTrustlessPosition(
+          evmAddress,
+          rtFelts,
+        );
+        if (!cancelled && positionKnown) setPositionBase(position);
       } catch {
-        /* leave null; pass 2 may still populate it */
-      }
-      // Pass 2 — SYNCED read, in the background: corrects a cold/stale cache
-      // (e.g. a page reload with no prior sync this session). Non-blocking:
-      // the withdraw stayed usable throughout and the value just refines when
-      // this lands. Queues behind any in-flight flow via runExclusive.
-      try {
-        const bal = await runExclusive(async () => {
-          try {
-            await syncState();
-          } catch {
-            /* stale is fine */
-          }
-          return getBal();
-        });
-        if (!cancelled) setPositionBase(BigInt(bal ?? 0n));
-      } catch {
-        /* keep whatever pass 1 gave */
+        /* keep the last known value */
       }
     })();
     return () => {
       cancelled = true;
     };
-    // client is a stable context singleton; include it so the read fires once
-    // it finishes loading after a reload that restored walletId synchronously.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [network, walletId, basket?.symbol, stage, client]);
+  }, [evmAddress, basket?.faucetHex, stage]);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [midenTxId, setMidenTxId] = useState<string | null>(null);
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
