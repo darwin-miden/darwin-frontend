@@ -1111,7 +1111,7 @@ export function TrustlessDepositPanel({
             }
             detail={
               stage === "crediting"
-                ? "Compiling set_user_position script + submitting against v8-noauth…"
+                ? "Minting your confidential position — proving on-chain and waiting for the network (up to ~2 min)…"
                 : creditTx
                   ? creditTx
                   : "waiting"
