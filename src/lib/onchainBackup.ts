@@ -157,8 +157,15 @@ export function buildSetBackupBatchScript(
   return `use miden::core::sys\n\nbegin\n${body}\n    exec.sys::truncate_stack\nend\n`;
 }
 
-/** Number of chunk writes per tx (tunable; keep well under Miden cycle limits). */
-export const BACKUP_CHUNKS_PER_TX = 16;
+/** Number of chunk writes (set_map_item calls) per tx. Each is a cheap storage-map
+ * set; the ceiling is per-tx MASM cycles, which 48 stays far under. Bigger ⇒ fewer
+ * txs ⇒ fewer WASM proofs (a ~4.5 KB backup → ~3 chunk txs + meta). */
+export const BACKUP_CHUNKS_PER_TX = 48;
+
+/** Max txs handed to one submitNewTransactionBatch call. Kept small (2) to bound
+ * peak WASM-prover memory per batch — a large single batch OOMs low-RAM browsers.
+ * Sequential batch calls still chain (each applies its txs locally before returning). */
+export const MAX_TXS_PER_SUBMIT = 2;
 
 /** Meta entry: value = [byteLen, nWords, 0, 0] at chunkIndex = BACKUP_META_INDEX. */
 export function buildSetBackupMetaScript(
@@ -176,41 +183,60 @@ export function buildSetBackupMetaScript(
 }
 
 /**
- * Write the encrypted account backup on-chain: meta entry + one slot-10 write
- * per 28-byte Word. `writeScript` compiles + executes a MASM tx against the
- * controller (provided by the panel, which owns the SDK hooks).
+ * Write the encrypted account backup on-chain: one slot-10 write per 28-byte
+ * Word, plus a meta entry. Txs are submitted via `submitBatch` — the SDK's
+ * submitNewTransactionBatch primitive (execute→prove→submit→APPLY each tx
+ * atomically with NO per-tx sync), which is how N sequential dependent txs to
+ * one account chain correctly in the browser (the Rust reference does the same
+ * with apply_transaction). A per-tx executeTx loop instead force-syncs around a
+ * growing stack of uncommitted txs and risks an account-lock / commitment
+ * mismatch, so it is NOT used here.
+ *
+ * Ordering: chunk batches first, then the meta tx as its OWN final batch — so a
+ * partial write is never seen as complete (recovery keys off meta's nWords), and
+ * an idempotent re-backup (unchanged size ⇒ meta tx is a no-op) fails only that
+ * isolated meta batch, which the caller can treat as already-current.
  */
 export async function writeOnchainBackup(params: {
   suffix: bigint;
   prefix: bigint;
   encryptedBytes: Uint8Array;
-  writeScript: (masmCode: string) => Promise<void>;
+  submitBatch: (masmCodes: string[]) => Promise<void>;
   onProgress?: (done: number, total: number) => void;
 }): Promise<number> {
-  const { suffix, prefix, encryptedBytes, writeScript, onProgress } = params;
+  const { suffix, prefix, encryptedBytes, submitBatch, onProgress } = params;
   const words = packBytesToWords(encryptedBytes);
-  const nBatches = Math.ceil(words.length / BACKUP_CHUNKS_PER_TX);
-  const totalTxs = nBatches + 1; // chunk batches + the meta tx
-  let done = 0;
-  // Chunk batches first, meta LAST — a partial write is never reported as
-  // complete (recovery keys off the meta entry's nWords).
-  for (let b = 0; b < nBatches; b++) {
+
+  // One script per BACKUP_CHUNKS_PER_TX group of words.
+  const chunkScripts: string[] = [];
+  for (let start = 0; start < words.length; start += BACKUP_CHUNKS_PER_TX) {
     const entries: { index: bigint; value: bigint[] }[] = [];
-    const start = b * BACKUP_CHUNKS_PER_TX;
     for (let i = start; i < Math.min(start + BACKUP_CHUNKS_PER_TX, words.length); i++) {
       entries.push({ index: BigInt(i), value: words[i] });
     }
-    await writeScript(buildSetBackupBatchScript(suffix, prefix, entries));
-    onProgress?.(++done, totalTxs);
+    chunkScripts.push(buildSetBackupBatchScript(suffix, prefix, entries));
   }
-  await writeScript(
+
+  const totalTxs = chunkScripts.length + 1; // + meta
+  let done = 0;
+  // Chunk txs, grouped into batches of at most MAX_TXS_PER_SUBMIT. Sequential
+  // batch calls still chain cleanly (each applies its txs locally before
+  // returning), so no sync between them.
+  for (let i = 0; i < chunkScripts.length; i += MAX_TXS_PER_SUBMIT) {
+    const group = chunkScripts.slice(i, i + MAX_TXS_PER_SUBMIT);
+    await submitBatch(group);
+    done += group.length;
+    onProgress?.(done, totalTxs);
+  }
+  // Meta LAST, in its own batch.
+  await submitBatch([
     buildSetBackupMetaScript(
       suffix,
       prefix,
       BigInt(encryptedBytes.length),
       BigInt(words.length),
     ),
-  );
+  ]);
   onProgress?.(totalTxs, totalTxs);
   return words.length;
 }
@@ -248,6 +274,9 @@ export async function readOnchainBackup(
   prefix: bigint,
   controllerId: string,
 ): Promise<Uint8Array | null> {
+  // Catch network errors (API briefly unreachable) → null, so callers treat it
+  // as "not found yet" and retry rather than throwing (a verification poll or a
+  // restore must survive a transient blip, not fail the whole operation).
   const r = await fetch("/api/backup-read", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -256,8 +285,8 @@ export async function readOnchainBackup(
       prefix: prefix.toString(),
       controllerId,
     }),
-  });
-  if (!r.ok) return null;
+  }).catch(() => null);
+  if (!r || !r.ok) return null;
   const j = (await r.json().catch(() => null)) as
     | { byteLen?: number; words?: string[][] }
     | null;

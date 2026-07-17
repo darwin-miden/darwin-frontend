@@ -401,29 +401,52 @@ export function TrustlessRedeemPanel({
   // with a MetaMask-derived key, and writes the chunks into the controller's
   // slot-10 map under a backup-namespace key. See src/lib/onchainBackup.ts.
 
-  // Compile + execute a MASM tx against the NoAuth controller (swallows the
-  // cosmetic post-commit book-keeping error, same as the deposit's slot-10
-  // credit — the write lands on-chain regardless).
-  const writeControllerScript = async (code: string) => {
-    const s = await compileTxScript({ code });
+  // Ensure the browser client tracks the NoAuth controller AND refreshes it to
+  // the node's latest committed state. importAccountById on an already-tracked
+  // account is a no-op, so the syncState is what un-stales the local copy —
+  // without it the first write conflicts with the mempool. Run once before writing.
+  const ensureControllerTracked = async () => {
+    const cImp = client as unknown as {
+      importAccountById?: (id: unknown) => Promise<unknown>;
+    };
+    if (!cImp.importAccountById) return;
+    const { AccountId } = await import("@miden-sdk/miden-sdk");
     try {
-      await executeTx({
-        accountId: TRUSTLESS_CONTROLLER_HEX,
-        request: () =>
-          new TransactionRequestBuilder().withCustomScript(s).build(),
-      });
+      await cImp.importAccountById(AccountId.fromHex(TRUSTLESS_CONTROLLER_HEX));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // "neither changed the account state" fires when a batch (or the meta tx)
-      // writes only values already on-chain — i.e. a re-backup where the account
-      // size is unchanged, so the meta [byteLen,nWords] is identical. The data
-      // is already correct on-chain, so this is a success, not a failure.
-      if (
-        !/apply transaction result|account data wasn't found|storage error|neither changed the account state/i.test(
-          msg,
-        )
-      )
-        throw e;
+      if (!/already being tracked/i.test(msg)) throw e;
+    }
+    await syncState();
+  };
+
+  // Submit N MASM txs to the NoAuth controller as ONE atomic batch via the SDK's
+  // submitNewTransactionBatch (execute→prove→submit→APPLY each, no per-tx sync) —
+  // the browser equivalent of the Rust reference's sequential apply loop, and the
+  // only safe way to chain many writes to one account. Only "neither changed the
+  // account state" is swallowed (idempotent re-write of unchanged data); every
+  // other failure propagates, so a genuinely failed backup is never silent.
+  const submitControllerBatch = async (codes: string[]) => {
+    const { AccountId } = await import("@miden-sdk/miden-sdk");
+    const reqs: Uint8Array[] = [];
+    for (const code of codes) {
+      const s = await compileTxScript({ code });
+      reqs.push(
+        new TransactionRequestBuilder().withCustomScript(s).build().serialize(),
+      );
+    }
+    const accId = AccountId.fromHex(TRUSTLESS_CONTROLLER_HEX);
+    const cAny = client as unknown as {
+      submitNewTransactionBatch: (
+        id: unknown,
+        reqs: Uint8Array[],
+      ) => Promise<number>;
+    };
+    try {
+      await cAny.submitNewTransactionBatch(accId, reqs);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/neither changed the account state/i.test(msg)) throw e;
     }
   };
 
@@ -450,16 +473,36 @@ export function TrustlessRedeemPanel({
       const { suffix, prefix } = evmToUserIdFelts(evmAddress);
       const nWords = Math.ceil(enc.length / 28);
       setBackupMsg(`writing ${nWords} chunks on-chain (batched)… this takes a bit`);
+      // Track + refresh the controller first, else the first write conflicts.
+      await runExclusive(() => ensureControllerTracked());
       await runExclusive(() =>
         writeOnchainBackup({
           suffix,
           prefix,
           encryptedBytes: enc,
-          writeScript: writeControllerScript,
+          submitBatch: submitControllerBatch,
           onProgress: (d, t) => setBackupMsg(`writing on-chain… tx ${d}/${t}`),
         }),
       );
-      setBackupMsg("✓ backed up ON-CHAIN. Restorable on any device, no server.");
+      // Verify the backup is really readable on-chain before declaring success —
+      // the writes go through the mempool, so poll a few block-times for the
+      // committed state to reflect them (warm forces a fresh server-side sync).
+      setBackupMsg("verifying on-chain…");
+      let verified = false;
+      for (let attempt = 0; attempt < 6 && !verified; attempt++) {
+        await warmOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
+        const rb = await readOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
+        if (rb && rb.length === enc.length && rb.every((b, i) => b === enc[i])) {
+          verified = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      setBackupMsg(
+        verified
+          ? "✓ backed up & verified ON-CHAIN. Restorable on any device, no server."
+          : "✓ backed up on-chain (still confirming — wait ~1 min before Restore).",
+      );
     } catch (e) {
       setBackupMsg("backup failed: " + String(e).slice(0, 90));
     }
@@ -504,6 +547,198 @@ export function TrustlessRedeemPanel({
       setBackupMsg("restore failed: " + String(e).slice(0, 90));
     }
   }
+
+  // Browser self-test (gated behind ?backuptest) — validates the backup data
+  // path end-to-end WITHOUT MetaMask or funds: creates a throwaway private
+  // wallet, exports its account file, runs gzip→encrypt→decrypt→gunzip→
+  // deserialize→import, and reports on window.__darwinBackupSelfTest(). Harmless
+  // (no seed derivation, no controller writes) so it survives the prod build.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!new URLSearchParams(window.location.search).has("backuptest")) return;
+    const w = window as unknown as {
+      __darwinBackupSelfTest?: () => Promise<Record<string, unknown>>;
+    };
+    w.__darwinBackupSelfTest = async () => {
+      const r: Record<string, unknown> = {};
+      try {
+        const cAny = client as unknown as {
+          exportAccountFile?: (id: unknown) => Promise<{ serialize: () => Uint8Array }>;
+          importAccountFile?: (file: unknown) => Promise<string>;
+        };
+        r.hasExport = typeof cAny.exportAccountFile === "function";
+        r.hasImport = typeof cAny.importAccountFile === "function";
+        if (!cAny.exportAccountFile || !cAny.importAccountFile)
+          throw new Error("exportAccountFile/importAccountFile missing on client");
+        const seed = crypto.getRandomValues(new Uint8Array(32));
+        const acct = (await createWallet({
+          initSeed: seed,
+          storageMode: "private",
+          authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as never,
+        })) as unknown as { id: () => { toString: () => string } };
+        const id = acct.id().toString();
+        r.walletId = id;
+        const { AccountId } = await import("@miden-sdk/miden-sdk");
+        const file = await cAny.exportAccountFile(AccountId.fromHex(id));
+        const fileBytes = file.serialize();
+        r.fileBytes = fileBytes.length;
+        const key = await crypto.subtle.generateKey(
+          { name: "AES-GCM", length: 256 },
+          false,
+          ["encrypt", "decrypt"],
+        );
+        const enc = await encryptBytes(key, await gzip(fileBytes));
+        r.encBytes = enc.length;
+        const back = await gunzip(await decryptBytes(key, enc));
+        r.roundtripEqual =
+          back.length === fileBytes.length && back.every((b, i) => b === fileBytes[i]);
+        const af = AccountFile.deserialize(back);
+        try {
+          await cAny.importAccountFile(af);
+          r.imported = true;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          r.importErr = msg;
+          r.imported = /already being tracked|already exist/i.test(msg);
+        }
+        r.ok =
+          r.hasExport === true &&
+          r.hasImport === true &&
+          r.roundtripEqual === true &&
+          r.imported === true;
+      } catch (e) {
+        r.error = e instanceof Error ? (e.stack ?? e.message) : String(e);
+        r.ok = false;
+      }
+      return r;
+    };
+    // Full ON-CHAIN round-trip (slow: real controller writes + WASM proving):
+    // export → gzip → encrypt → writeOnchainBackup (real txs) → readOnchainBackup
+    // (via /api/backup-read) → decrypt → gunzip → deserialize → import. Uses a
+    // fixed TEST namespace so it never collides with a real user's backup.
+    const wf = window as unknown as {
+      __darwinBackupFullTest?: (nChunks?: number) => Promise<Record<string, unknown>>;
+    };
+    wf.__darwinBackupFullTest = async (nChunks?: number) => {
+      const r: Record<string, unknown> = {};
+      const log = (m: string) => {
+        try {
+          console.log("[selftest] " + m);
+        } catch {
+          /* noop */
+        }
+      };
+      try {
+        const { AccountId } = await import("@miden-sdk/miden-sdk");
+        const cAny = client as unknown as {
+          exportAccountFile: (id: unknown) => Promise<{ serialize: () => Uint8Array }>;
+          importAccountFile: (file: unknown) => Promise<string>;
+        };
+        // Fixed test namespace (never a real user).
+        const { suffix, prefix } = evmToUserIdFelts(
+          "0x000000000000000000000000000000000000ba5e",
+        );
+        let enc: Uint8Array;
+        let key: CryptoKey | null = null;
+        let fileBytes: Uint8Array | null = null;
+        if (nChunks && nChunks > 0) {
+          // Light mode: dummy random payload of N chunks — validates the
+          // multi-tx write-chaining + on-chain round-trip with minimal proving.
+          enc = crypto.getRandomValues(new Uint8Array(nChunks * 28));
+          r.mode = `dummy-${nChunks}ch`;
+          log(`dummy payload ${enc.length}B (${nChunks} chunks)`);
+        } else {
+          // Full mode: real account file through the entire pipeline.
+          const seed = crypto.getRandomValues(new Uint8Array(32));
+          const acct = (await createWallet({
+            initSeed: seed,
+            storageMode: "private",
+            authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as never,
+          })) as unknown as { id: () => { toString: () => string } };
+          const id = acct.id().toString();
+          log(`wallet ${id}`);
+          const file = await cAny.exportAccountFile(AccountId.fromHex(id));
+          fileBytes = file.serialize();
+          r.fileBytes = fileBytes.length;
+          key = await crypto.subtle.generateKey(
+            { name: "AES-GCM", length: 256 },
+            true,
+            ["encrypt", "decrypt"],
+          );
+          enc = await encryptBytes(key, await gzip(fileBytes));
+          r.mode = "full-file";
+        }
+        r.encBytes = enc.length;
+        log("ensureControllerTracked…");
+        await ensureControllerTracked();
+        log("writing on-chain (submitNewTransactionBatch)…");
+        const t0 = performance.now();
+        await writeOnchainBackup({
+          suffix,
+          prefix,
+          encryptedBytes: enc,
+          submitBatch: submitControllerBatch,
+          onProgress: (d, t) => {
+            r.writeProgress = `${d}/${t}`;
+            log(`write ${d}/${t}`);
+          },
+        });
+        r.writeMs = Math.round(performance.now() - t0);
+        log(`written in ${r.writeMs}ms; reading back (poll for commit)…`);
+        // Poll a few block-times for the committed state to reflect the writes.
+        let readBack: Uint8Array | null = null;
+        const t1 = performance.now();
+        for (let a = 0; a < 8; a++) {
+          await warmOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
+          const rb = await readOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
+          if (rb && rb.length === enc.length && rb.every((b, i) => b === enc[i])) {
+            readBack = rb;
+            break;
+          }
+          log(`read attempt ${a + 1}: ${rb ? rb.length : "null"}B (want ${enc.length})`);
+          await new Promise((res) => setTimeout(res, 5000));
+        }
+        r.readMs = Math.round(performance.now() - t1);
+        r.readBytes = readBack ? readBack.length : 0;
+        r.onchainEqual = !!readBack;
+        if (!readBack) {
+          r.ok = false;
+          return r;
+        }
+        if (nChunks && nChunks > 0) {
+          r.ok = r.onchainEqual === true; // chaining + round-trip validated
+          return r;
+        }
+        const back = await gunzip(await decryptBytes(key as CryptoKey, readBack));
+        r.decryptEqual =
+          !!fileBytes &&
+          back.length === fileBytes.length &&
+          back.every((b, i) => b === (fileBytes as Uint8Array)[i]);
+        const af = AccountFile.deserialize(back);
+        try {
+          await cAny.importAccountFile(af);
+          r.imported = true;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          r.importErr = msg;
+          r.imported = /already being tracked|already exist/i.test(msg);
+        }
+        r.ok =
+          r.onchainEqual === true &&
+          r.decryptEqual === true &&
+          r.imported === true;
+      } catch (e) {
+        r.error = e instanceof Error ? (e.stack ?? e.message) : String(e);
+        r.ok = false;
+      }
+      return r;
+    };
+    return () => {
+      const g = window as unknown as Record<string, unknown>;
+      delete g.__darwinBackupSelfTest;
+      delete g.__darwinBackupFullTest;
+    };
+  }, [client, createWallet]);
 
   const [stage, setStage] = useState<Stage>("idle");
   const [walletId, setWalletId] = useState<string | null>(null);
