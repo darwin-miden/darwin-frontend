@@ -161,7 +161,8 @@ export async function POST(req: Request) {
       batches.push({ at: i, idx });
     }
     const words: string[][] = new Array(nWords);
-    const CONCURRENCY = 8;
+    // 14-core machine — 12 concurrent execs covers most backups in 1-2 waves.
+    const CONCURRENCY = 12;
     let cursor = 0;
     const worker = async () => {
       for (;;) {
