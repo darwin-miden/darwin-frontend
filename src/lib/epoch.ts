@@ -79,6 +79,15 @@ export interface EpochQuoteParams {
   midenRecipientId: string;
   /** Min Miden output, base units of the dUSDC faucet (18 decimals). */
   minTokenOut: string;
+  /**
+   * Exact USDC INPUT to send (Sepolia base units, 18-dec). When set (non-zero)
+   * this is a FORWARD quote: the user sends exactly this much USDC and the
+   * backend computes the dUSDC output — so "deposit 7" sends exactly 7 and Max =
+   * the full balance always fits. When "0"/omitted it's a reverse quote (backend
+   * computes the required USDC from minTokenOut — the input then exceeds the
+   * typed amount, which breaks Max).
+   */
+  tokenInAmount?: string;
 }
 
 export interface EpochQuote {
@@ -94,9 +103,9 @@ function buildTaskData(params: EpochQuoteParams) {
     intentData: {
       isNative: false,
       depositTokenAddress: EPOCH_USDC_SEPOLIA.address,
-      // tokenInAmount = "0" → reverse-quote (backend computes required USDC
-      // from minTokenOut). Same convention as Miden bridging-app.
-      tokenInAmount: "0",
+      // Forward quote when tokenInAmount is a non-zero exact USDC input (send
+      // exactly what the user typed); "0" falls back to reverse-quote.
+      tokenInAmount: params.tokenInAmount ?? "0",
       outputTokenAddress: ZERO_ADDRESS,
       minTokenOut: params.minTokenOut,
       destinationChainId: String(MIDEN_DESTINATION_CHAIN_ID),

@@ -75,7 +75,6 @@ import {
 import {
   ALLOCATOR_URL,
   applySlippageBps,
-  EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
   EPOCH_USDC_SEPOLIA,
   SEPOLIA_CHAIN_ID,
   dusdcMidenBaseUnits,
@@ -456,13 +455,22 @@ export function TrustlessDepositPanel({
         walletClient,
       });
 
+      // FORWARD quote: send EXACTLY the USDC the user typed (Sepolia 18-dec), so
+      // "deposit 7" sends 7 and Max = full balance always fits. The dUSDC output
+      // is solver-priced; protect it with a generous floor (the testnet solver's
+      // spread varies — don't fail an otherwise-good deposit).
+      const tokenInAmount = parseUnits(
+        humanAmount,
+        EPOCH_USDC_SEPOLIA.decimals,
+      ).toString();
       const minTokenOut = applySlippageBps(
         dusdcMidenBaseUnits(humanAmount),
-        EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
+        1000, // accept ≥90% out (was a tight reverse-quote guarantee)
       );
       const quote = await fetchQuote(sdkRef.current, {
         evmSourceAddress: evmAddress as `0x${string}`,
         midenRecipientId: walletId,
+        tokenInAmount,
         minTokenOut,
       });
       setStage("signing-sepolia");
