@@ -641,7 +641,11 @@ export function TrustlessDepositPanel({
         for (let attempt = 0; attempt < 6; attempt++) {
           try {
             const acc = (await runExclusive(() =>
-              client.getAccount(DusdcAccountId.fromHex(walletId)),
+              (
+                client as unknown as {
+                  getAccount: (id: unknown) => Promise<unknown>;
+                }
+              ).getAccount(DusdcAccountId.fromHex(walletId)),
             )) as { vault: () => { getBalance: (id: unknown) => bigint } } | null;
             const bal = acc ? BigInt(acc.vault().getBalance(dusdcFaucet) ?? 0n) : 0n;
             if (bal > 0n) {
