@@ -436,10 +436,14 @@ export function TrustlessRedeemPanel({
         evmAddress as `0x${string}`,
       );
       // Export the ACCOUNT file (vault + nonce — small), not the whole store.
+      // WebClient.exportAccountFile(AccountId) → AccountFile; serialize() → bytes.
+      const { AccountId } = await import("@miden-sdk/miden-sdk");
       const clientAny = client as unknown as {
-        accounts: { export: (id: string) => Promise<{ serialize: () => Uint8Array }> };
+        exportAccountFile: (id: unknown) => Promise<{ serialize: () => Uint8Array }>;
       };
-      const file = await runExclusive(() => clientAny.accounts.export(walletId));
+      const file = await runExclusive(() =>
+        clientAny.exportAccountFile(AccountId.fromHex(walletId)),
+      );
       const fileBytes = file.serialize();
       // gzip BEFORE encrypt — fewer chunks = fewer write txs + read execs.
       const enc = await encryptBytes(key, await gzip(fileBytes));
@@ -481,13 +485,19 @@ export function TrustlessRedeemPanel({
       }
       // decrypt → gunzip (mirror of backup's gzip → encrypt).
       const fileBytes = await gunzip(await decryptBytes(key, enc));
-      // import() needs an AccountFile, not raw bytes (verified headless: the
-      // napi layer rejects a Uint8Array here). Deserialize first.
+      // WebClient.importAccountFile needs an AccountFile, not raw bytes.
       const accountFile = AccountFile.deserialize(fileBytes);
       const clientAny = client as unknown as {
-        accounts: { import: (opts: { file: unknown }) => Promise<unknown> };
+        importAccountFile: (file: unknown) => Promise<string>;
       };
-      await runExclusive(() => clientAny.accounts.import({ file: accountFile }));
+      try {
+        await runExclusive(() => clientAny.importAccountFile(accountFile));
+      } catch (e) {
+        // Same-session restore (account already in this store) — the goal
+        // (having the account locally) is already met, so treat as success.
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!/already being tracked|already exist/i.test(msg)) throw e;
+      }
       await runExclusive(() => syncState());
       setBackupMsg("✓ restored from chain — your balance is back.");
     } catch (e) {
