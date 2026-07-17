@@ -101,6 +101,33 @@ function b64ToU8(b64: string): Uint8Array {
   return u8;
 }
 
+/** AES-GCM encrypt raw bytes → iv(12) ‖ ciphertext. Used by the on-chain backup. */
+export async function encryptBytes(
+  key: CryptoKey,
+  data: Uint8Array,
+): Promise<Uint8Array> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv: bs(iv) }, key, bs(data)),
+  );
+  const packed = new Uint8Array(iv.length + ct.length);
+  packed.set(iv);
+  packed.set(ct, iv.length);
+  return packed;
+}
+
+/** Inverse of encryptBytes. */
+export async function decryptBytes(
+  key: CryptoKey,
+  packed: Uint8Array,
+): Promise<Uint8Array> {
+  const iv = packed.subarray(0, 12);
+  const ct = packed.subarray(12);
+  return new Uint8Array(
+    await crypto.subtle.decrypt({ name: "AES-GCM", iv: bs(iv) }, key, bs(ct)),
+  );
+}
+
 async function encryptBlob(key: CryptoKey, plaintext: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(

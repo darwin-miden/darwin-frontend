@@ -23,8 +23,6 @@ import {
   useCompile,
   useConsume,
   useCreateWallet,
-  useExportStore,
-  useImportStore,
   useMiden,
   useSend,
   useSyncControl,
@@ -33,12 +31,6 @@ import {
   useWaitForCommit,
   useWaitForNotes,
 } from "@miden-sdk/react";
-import {
-  backupStore,
-  deriveBackupKey,
-  hasBackupKey,
-  restoreStore,
-} from "../lib/storeBackup";
 import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -79,6 +71,8 @@ import {
   fetchTrustlessPosition,
 } from "../lib/trustlessController";
 import { readDccBalance, stashDccBalance } from "../lib/dccBalance";
+import { decryptBytes, deriveBackupKey, encryptBytes } from "../lib/storeBackup";
+import { readOnchainBackup, writeOnchainBackup } from "../lib/onchainBackup";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
@@ -394,13 +388,35 @@ export function TrustlessRedeemPanel({
   const { runExclusive, client } = useMiden();
   const { txScript: compileTxScript } = useCompile();
   const { execute: executeTx } = useTransaction();
-  const { exportStore } = useExportStore();
-  const { importStore } = useImportStore();
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
 
-  // Encrypted store backup (recovery across browser-clear / device-switch).
-  // The confidential vault lives only in this browser; back it up encrypted so
-  // it can be restored anywhere by re-signing. See src/lib/storeBackup.ts.
+  // PURELY ON-CHAIN encrypted backup (recovery across browser-clear /
+  // device-switch), zero server/IPFS. Exports the account file, encrypts it
+  // with a MetaMask-derived key, and writes the chunks into the controller's
+  // slot-10 map under a backup-namespace key. See src/lib/onchainBackup.ts.
+
+  // Compile + execute a MASM tx against the NoAuth controller (swallows the
+  // cosmetic post-commit book-keeping error, same as the deposit's slot-10
+  // credit — the write lands on-chain regardless).
+  const writeControllerScript = async (code: string) => {
+    const s = await compileTxScript({ code });
+    try {
+      await executeTx({
+        accountId: TRUSTLESS_CONTROLLER_HEX,
+        request: () =>
+          new TransactionRequestBuilder().withCustomScript(s).build(),
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (
+        !/apply transaction result|account data wasn't found|storage error/i.test(
+          msg,
+        )
+      )
+        throw e;
+    }
+  };
+
   async function onBackup() {
     if (!walletId || !evmAddress) return;
     setBackupMsg("sign to encrypt…");
@@ -409,11 +425,28 @@ export function TrustlessRedeemPanel({
         (td) => signTypedDataAsync(td),
         evmAddress as `0x${string}`,
       );
-      setBackupMsg("backing up…");
-      await runExclusive(() => backupStore(exportStore, key, walletId));
-      setBackupMsg("✓ backed up (encrypted). You can restore on any device.");
+      // Export the ACCOUNT file (vault + nonce — small), not the whole store.
+      const clientAny = client as unknown as {
+        accounts: { export: (id: string) => Promise<{ serialize: () => Uint8Array }> };
+      };
+      const file = await runExclusive(() => clientAny.accounts.export(walletId));
+      const fileBytes = file.serialize();
+      const enc = await encryptBytes(key, fileBytes);
+      const { suffix, prefix } = evmToUserIdFelts(evmAddress);
+      const nWords = Math.ceil(enc.length / 28);
+      setBackupMsg(`writing ${nWords} chunks on-chain… (this takes a bit)`);
+      await runExclusive(() =>
+        writeOnchainBackup({
+          suffix,
+          prefix,
+          encryptedBytes: enc,
+          writeScript: writeControllerScript,
+          onProgress: (d, t) => setBackupMsg(`writing on-chain… ${d}/${t}`),
+        }),
+      );
+      setBackupMsg("✓ backed up ON-CHAIN. Restorable on any device, no server.");
     } catch (e) {
-      setBackupMsg("backup failed: " + String(e).slice(0, 80));
+      setBackupMsg("backup failed: " + String(e).slice(0, 90));
     }
   }
 
@@ -425,29 +458,22 @@ export function TrustlessRedeemPanel({
         (td) => signTypedDataAsync(td),
         evmAddress as `0x${string}`,
       );
-      setBackupMsg("restoring…");
-      const ok = await runExclusive(() => restoreStore(importStore, key, walletId));
-      setBackupMsg(
-        ok
-          ? "✓ restored — your balance is back. (Reload if it doesn't refresh.)"
-          : "no backup found for this wallet yet.",
-      );
+      const { suffix, prefix } = evmToUserIdFelts(evmAddress);
+      setBackupMsg("reading on-chain backup…");
+      const enc = await readOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
+      if (!enc) {
+        setBackupMsg("no on-chain backup found for this wallet yet.");
+        return;
+      }
+      const fileBytes = await decryptBytes(key, enc);
+      const clientAny = client as unknown as {
+        accounts: { import: (opts: { file: Uint8Array }) => Promise<unknown> };
+      };
+      await runExclusive(() => clientAny.accounts.import({ file: fileBytes }));
+      await runExclusive(() => syncState());
+      setBackupMsg("✓ restored from chain — your balance is back.");
     } catch (e) {
-      setBackupMsg("restore failed: " + String(e).slice(0, 80));
-    }
-  }
-
-  // Silent auto-backup after a flow, once the user has set up a backup key.
-  async function autoBackup() {
-    if (!walletId || !evmAddress || !hasBackupKey(evmAddress as `0x${string}`)) return;
-    try {
-      const key = await deriveBackupKey(
-        (td) => signTypedDataAsync(td),
-        evmAddress as `0x${string}`,
-      );
-      await runExclusive(() => backupStore(exportStore, key, walletId));
-    } catch {
-      /* best-effort */
+      setBackupMsg("restore failed: " + String(e).slice(0, 90));
     }
   }
 
@@ -1885,8 +1911,6 @@ export function TrustlessRedeemPanel({
       // warm client) so the panel shows the reduced balance right away.
       if (walletId)
         await stashDccBalance(client, runExclusive, walletId, basket?.symbol ?? "DCC");
-      // Auto-backup the new state (silent — only if a backup key is set up).
-      await autoBackup();
 
       setStage("done");
     } catch (e) {
@@ -2175,18 +2199,18 @@ export function TrustlessRedeemPanel({
                 onClick={onBackup}
                 className="nav-cta"
                 style={{ padding: "3px 10px", fontSize: 11 }}
-                title="Encrypt your Miden store with your MetaMask-derived key and save it, so you can recover on any device"
+                title="Encrypt your account with your MetaMask-derived key and write it ON-CHAIN (no server), so you can recover on any device"
               >
-                🔒 Back up wallet
+                🔗 Back up on-chain
               </button>
               <button
                 type="button"
                 onClick={onRestore}
                 className="nav-cta"
                 style={{ padding: "3px 10px", fontSize: 11 }}
-                title="Restore your encrypted backup on this device (re-sign to decrypt)"
+                title="Read your on-chain backup and restore your account on this device (re-sign to decrypt)"
               >
-                ♻️ Restore
+                ♻️ Restore from chain
               </button>
             </div>
             {backupMsg && (

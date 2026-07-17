@@ -34,14 +34,12 @@ import {
   useCompile,
   useConsume,
   useCreateWallet,
-  useExportStore,
   useMiden,
   useSyncControl,
   useSyncState,
   useTransaction,
   useWaitForNotes,
 } from "@miden-sdk/react";
-import { backupStore, deriveBackupKey, hasBackupKey } from "../lib/storeBackup";
 import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 
 // AuthScheme in @miden-sdk/miden-sdk has TWO shapes:
@@ -242,23 +240,6 @@ export function TrustlessDepositPanel({
   const { txScript: compileTxScript } = useCompile();
   const { pauseSync, resumeSync } = useSyncControl();
   const { client, runExclusive } = useMiden();
-  const { exportStore } = useExportStore();
-
-  // Silent auto-backup after a deposit — only if the user has set up a backup
-  // key (via the Withdraw tab's "Back up wallet"). Keeps the encrypted backup
-  // current so recovery on another device reflects the latest deposit.
-  async function autoBackup(id: string) {
-    if (!evmAddress || !hasBackupKey(evmAddress as `0x${string}`)) return;
-    try {
-      const key = await deriveBackupKey(
-        (td) => signTypedDataAsync(td),
-        evmAddress as `0x${string}`,
-      );
-      await runExclusive(() => backupStore(exportStore, key, id));
-    } catch {
-      /* best-effort */
-    }
-  }
 
   // Isolated debug hooks — the Playwright autonomous E2E test drives
   // step 1 (derive) and step 4 (credit slot-10 on v8-noauth) directly,
@@ -710,8 +691,6 @@ export function TrustlessDepositPanel({
         // Stash the real DCC balance for the Withdraw panel (getBalance works
         // here — warm client, mint just consumed into the vault).
         await stashDccBalance(client, runExclusive, walletId, basket?.symbol ?? "DCC");
-        // Auto-backup the new state (silent — only if a backup key is set up).
-        await autoBackup(walletId);
         setStage("done");
         return;
       }
