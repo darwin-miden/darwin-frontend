@@ -10,6 +10,7 @@ import {
   redact,
   releaseSlot,
 } from "../../../../lib/apiGuard";
+import { ASSET_FAUCETS } from "../../../../lib/midenConstants";
 
 /**
  * POST /api/faucet/mint
@@ -40,17 +41,17 @@ const MAC_API_BASE = process.env.DARWIN_MAC_API_BASE;
 
 const MIDEN_CLIENT =
   process.env.DARWIN_MIDEN_CLIENT_BIN ||
-  "/Users/eden/Library/Application Support/midenup/toolchains/0.14.0/bin/miden-client";
+  "/Users/eden/Library/Application Support/midenup/toolchains/0.15.0/bin/miden-client";
 
 // Allowlist of faucet IDs we'll mint from. Anything else → 400. Avoids
 // the panel being repurposed to mint from arbitrary user-supplied
-// faucets that happen to be in the operator's store.
-const ALLOWED_FAUCETS = new Set([
-  "0x7b727cd8d659d72042a9872c9c68b0", // dETH
-  "0x2357c29fd5ed992038b0c44bf54aaf", // dWBTC
-  "0x049d581b3233f42040501b99d2bd52", // dUSDT
-  "0x93968449ab8ec92035a92a38d747f9", // dDAI
-]);
+// faucets that happen to be in the operator's store. Derived from the
+// ACTIVE asset set (ASSET_FAUCETS follows NEXT_PUBLIC_MIDEN_V015) so it
+// can't drift from the ids the frontend actually drips — a hardcoded
+// V014 list silently rejected every V015 drip ("faucetId not in allowlist").
+const ALLOWED_FAUCETS = new Set(
+  Object.values(ASSET_FAUCETS).map((f) => f.id),
+);
 
 // 1e18 = enough for one 1.0 unit drip of an 18-decimal asset (dETH/dDAI).
 // 6-/8-decimal faucets (dUSDT/dWBTC) request much smaller numbers so the

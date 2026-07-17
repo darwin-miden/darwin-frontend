@@ -60,7 +60,7 @@ import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 // Force the numeric enum value directly (2 = AuthRpoFalcon512).
 const AUTH_SCHEME_FALCON_ENUM_VALUE = 2;
 import { useAccount, usePublicClient, useSignTypedData } from "wagmi";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, keccak256, parseUnits, toBytes } from "viem";
 
 import { EPOCH_DUSDC_FAUCET_ID } from "../lib/midenConstants";
@@ -344,6 +344,13 @@ export function TrustlessDepositPanel({
   // The connected wallet's Sepolia USDC balance (18-dec base units), so the
   // deposit input is bounded by real funds and a Max button can fill it in.
   const [usdcBalance, setUsdcBalance] = useState<bigint | null>(null);
+  // Testnet faucet plumbing: mint mock USDC to a new account so a first-time
+  // tester (e.g. the Miden team) never has to source it. `faucetNonce` forces a
+  // balance re-read after a mint; `autoFundedRef` guards the auto-mint to once
+  // per address so it can't loop while the mint is in flight.
+  const [faucetNonce, setFaucetNonce] = useState(0);
+  const [faucetBusy, setFaucetBusy] = useState(false);
+  const autoFundedRef = useRef<Set<string>>(new Set());
 
   // Read (and refresh) the ETH-side USDC balance. Refreshes on every stage
   // change so it updates right after a deposit debits the wallet.
@@ -369,7 +376,42 @@ export function TrustlessDepositPanel({
     return () => {
       cancelled = true;
     };
-  }, [evmAddress, publicClient, stage]);
+  }, [evmAddress, publicClient, stage, faucetNonce]);
+
+  // Mint test USDC to the connected account via the server-side faucet, which
+  // pays gas from a disposable key — so a brand-new zero-ETH account works with
+  // no MetaMask popup. Best-effort; re-reads the balance a few times as the
+  // mint lands. Backs both the "Get test USDC" button and the auto-mint below.
+  const mintTestUsdc = useCallback(async () => {
+    if (!evmAddress || faucetBusy) return;
+    setFaucetBusy(true);
+    try {
+      const r = await fetch("/api/faucet-usdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: evmAddress, token: "epoch-usdc" }),
+      });
+      if (r.ok) {
+        for (let i = 0; i < 8; i++) {
+          await new Promise((res) => setTimeout(res, 2_000));
+          setFaucetNonce((n) => n + 1);
+        }
+      }
+    } catch {
+      /* best-effort */
+    } finally {
+      setFaucetBusy(false);
+    }
+  }, [evmAddress, faucetBusy]);
+
+  // Auto-fund a brand-new account: once its balance reads ~empty, mint once.
+  useEffect(() => {
+    if (!evmAddress || usdcBalance == null) return;
+    if (usdcBalance >= parseUnits("1", EPOCH_USDC_SEPOLIA.decimals)) return;
+    if (autoFundedRef.current.has(evmAddress)) return;
+    autoFundedRef.current.add(evmAddress);
+    void mintTestUsdc();
+  }, [evmAddress, usdcBalance, mintTestUsdc]);
   const [sepoliaTx, setSepoliaTx] = useState<string | null>(null);
   const [midenNoteId, setMidenNoteId] = useState<string | null>(null);
   const [consumeTx, setConsumeTx] = useState<string | null>(null);
@@ -981,6 +1023,20 @@ export function TrustlessDepositPanel({
             >
               Step 2 · Deposit via Epoch
             </button>
+            <button
+              type="button"
+              onClick={mintTestUsdc}
+              disabled={faucetBusy}
+              className="nav-cta"
+              style={{
+                padding: "4px 12px",
+                fontSize: 12,
+                opacity: faucetBusy ? 0.5 : 1,
+              }}
+              title="Mint 100 test USDC to your wallet — testnet faucet, no gas needed"
+            >
+              {faucetBusy ? "Minting…" : "Get test USDC"}
+            </button>
           </div>
           <div
             style={{
@@ -990,11 +1046,13 @@ export function TrustlessDepositPanel({
               color: insufficient ? "crimson" : "var(--ink-3)",
             }}
           >
-            {usdcBalance == null
-              ? "Reading your USDC balance…"
-              : insufficient
-                ? `Insufficient — you hold ${fmtUsdc(usdcBalance)} USDC. Click Max or lower the amount.`
-                : `Balance: ${fmtUsdc(usdcBalance)} USDC`}
+            {faucetBusy
+              ? "Adding test USDC to your account…"
+              : usdcBalance == null
+                ? "Reading your USDC balance…"
+                : insufficient
+                  ? `Insufficient — you hold ${fmtUsdc(usdcBalance)} USDC. Click “Get test USDC”, Max, or lower the amount.`
+                  : `Balance: ${fmtUsdc(usdcBalance)} USDC`}
           </div>
         </div>
       )}
