@@ -31,7 +31,7 @@ import {
   useWaitForCommit,
   useWaitForNotes,
 } from "@miden-sdk/react";
-import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
+import { AccountFile, TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createPublicClient,
@@ -434,14 +434,14 @@ export function TrustlessRedeemPanel({
       const enc = await encryptBytes(key, fileBytes);
       const { suffix, prefix } = evmToUserIdFelts(evmAddress);
       const nWords = Math.ceil(enc.length / 28);
-      setBackupMsg(`writing ${nWords} chunks on-chain… (this takes a bit)`);
+      setBackupMsg(`writing ${nWords} chunks on-chain (batched)… this takes a bit`);
       await runExclusive(() =>
         writeOnchainBackup({
           suffix,
           prefix,
           encryptedBytes: enc,
           writeScript: writeControllerScript,
-          onProgress: (d, t) => setBackupMsg(`writing on-chain… ${d}/${t}`),
+          onProgress: (d, t) => setBackupMsg(`writing on-chain… tx ${d}/${t}`),
         }),
       );
       setBackupMsg("✓ backed up ON-CHAIN. Restorable on any device, no server.");
@@ -466,10 +466,13 @@ export function TrustlessRedeemPanel({
         return;
       }
       const fileBytes = await decryptBytes(key, enc);
+      // import() needs an AccountFile, not raw bytes (verified headless: the
+      // napi layer rejects a Uint8Array here). Deserialize first.
+      const accountFile = AccountFile.deserialize(fileBytes);
       const clientAny = client as unknown as {
-        accounts: { import: (opts: { file: Uint8Array }) => Promise<unknown> };
+        accounts: { import: (opts: { file: unknown }) => Promise<unknown> };
       };
-      await runExclusive(() => clientAny.accounts.import({ file: fileBytes }));
+      await runExclusive(() => clientAny.accounts.import({ file: accountFile }));
       await runExclusive(() => syncState());
       setBackupMsg("✓ restored from chain — your balance is back.");
     } catch (e) {

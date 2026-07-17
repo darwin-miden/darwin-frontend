@@ -102,6 +102,34 @@ end
 `;
 }
 
+/**
+ * Batch write: N set_user_position calls in ONE tx (one proof), each writing a
+ * chunk Word. `dropw` after each call discards the returned old value so the
+ * stack stays shallow. A 4.5 KB account file is ~161 chunks — batching ~16 per
+ * tx cuts it from ~161 proofs to ~10.
+ */
+export function buildSetBackupBatchScript(
+  suffix: bigint,
+  prefix: bigint,
+  entries: { index: bigint; value: bigint[] }[],
+): string {
+  const body = entries
+    .map(({ index, value }) => {
+      const [f0, f1, f2, f3] = [
+        value[0] ?? 0n,
+        value[1] ?? 0n,
+        value[2] ?? 0n,
+        value[3] ?? 0n,
+      ];
+      return `    push.${f3} push.${f2} push.${f1} push.${f0}\n    push.${suffix} push.${prefix} push.${BACKUP_MAGIC} push.${index}\n    call.${SET_USER_POSITION_MAST}\n    dropw`;
+    })
+    .join("\n");
+  return `use miden::core::sys\n\nbegin\n${body}\n    exec.sys::truncate_stack\nend\n`;
+}
+
+/** Number of chunk writes per tx (tunable; keep well under Miden cycle limits). */
+export const BACKUP_CHUNKS_PER_TX = 16;
+
 /** Meta entry: value = [byteLen, nWords, 0, 0] at chunkIndex = BACKUP_META_INDEX. */
 export function buildSetBackupMetaScript(
   suffix: bigint,
@@ -131,12 +159,19 @@ export async function writeOnchainBackup(params: {
 }): Promise<number> {
   const { suffix, prefix, encryptedBytes, writeScript, onProgress } = params;
   const words = packBytesToWords(encryptedBytes);
-  const total = words.length + 1;
-  // Chunks first, meta LAST — so a partial write is never reported as complete
-  // (recovery keys off the meta entry's nWords).
-  for (let i = 0; i < words.length; i++) {
-    await writeScript(buildSetBackupChunkScript(suffix, prefix, BigInt(i), words[i]));
-    onProgress?.(i + 1, total);
+  const nBatches = Math.ceil(words.length / BACKUP_CHUNKS_PER_TX);
+  const totalTxs = nBatches + 1; // chunk batches + the meta tx
+  let done = 0;
+  // Chunk batches first, meta LAST — a partial write is never reported as
+  // complete (recovery keys off the meta entry's nWords).
+  for (let b = 0; b < nBatches; b++) {
+    const entries: { index: bigint; value: bigint[] }[] = [];
+    const start = b * BACKUP_CHUNKS_PER_TX;
+    for (let i = start; i < Math.min(start + BACKUP_CHUNKS_PER_TX, words.length); i++) {
+      entries.push({ index: BigInt(i), value: words[i] });
+    }
+    await writeScript(buildSetBackupBatchScript(suffix, prefix, entries));
+    onProgress?.(++done, totalTxs);
   }
   await writeScript(
     buildSetBackupMetaScript(
@@ -146,7 +181,7 @@ export async function writeOnchainBackup(params: {
       BigInt(words.length),
     ),
   );
-  onProgress?.(total, total);
+  onProgress?.(totalTxs, totalTxs);
   return words.length;
 }
 
