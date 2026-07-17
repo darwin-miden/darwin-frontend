@@ -558,6 +558,21 @@ export function MidenDepositPanel({ basket }: Props) {
           : `Deposit ${amount} ${asset?.label ?? ""} → ${basket.symbol}`}
       </button>
 
+      {insufficient && walletAccount && (
+        <a
+          href="/faucet"
+          className="nav-cta"
+          style={{
+            display: "inline-block",
+            marginTop: 12,
+            fontSize: 13,
+            textDecoration: "none",
+          }}
+        >
+          Get test {asset?.label ?? "tokens"} from the faucet →
+        </a>
+      )}
+
       {result?.transactionId && (
         <p style={{ marginTop: 10, fontSize: 12, color: "var(--ink-3)" }}>
           Tx submitted: <code>{result.transactionId.slice(0, 16)}…</code>
