@@ -81,11 +81,15 @@ export function buildSetBackupChunkScript(
   value: bigint[], // [f0,f1,f2,f3]
 ): string {
   const [f0, f1, f2, f3] = [value[0] ?? 0n, value[1] ?? 0n, value[2] ?? 0n, value[3] ?? 0n];
+  // Push VALUE in REVERSE (f3 first) so f0 lands on TOP of the value word ⇒
+  // the stored map word is [f0,f1,f2,f3], matching packBytesToWords and the
+  // /api/backup-read parse. (Verified on-chain: pushing f0-first stored it
+  // reversed as [f3,f2,f1,f0], breaking the round-trip.)
   return `use miden::core::sys
 
 begin
-    # VALUE word (goes to bottom): the 4 chunk felts
-    push.${f0} push.${f1} push.${f2} push.${f3}
+    # VALUE word: pushed f3,f2,f1,f0 so the word reads [f0,f1,f2,f3]
+    push.${f3} push.${f2} push.${f1} push.${f0}
 
     # KEY word on top: [chunk_index, BACKUP_MAGIC, user_prefix, user_suffix]
     push.${suffix} push.${prefix}
