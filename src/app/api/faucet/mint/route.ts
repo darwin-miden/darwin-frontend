@@ -60,7 +60,12 @@ const MAX_AMOUNT_PER_REQUEST = 1_000_000_000_000_000_000n;
 
 function runMint(args: string[]): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
-    const child = spawn(MIDEN_CLIENT, args, { env: process.env });
+    // Point the client at the dedicated asset-faucet store (which holds the
+    // V015 faucet accounts + their signing keys) via HOME, if configured.
+    // Falls back to the default HOME store otherwise.
+    const faucetHome = process.env.DARWIN_FAUCET_MIDEN_HOME;
+    const env = faucetHome ? { ...process.env, HOME: faucetHome } : process.env;
+    const child = spawn(MIDEN_CLIENT, args, { env });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
@@ -173,6 +178,10 @@ export async function POST(req: Request) {
   if (!acquireSlot()) return busySlot();
   let stdout: string, stderr: string, code: number | null;
   try {
+    // Keep the dedicated faucet store fresh — a stale/fresh store fails the
+    // tx-input fetch ("block N not found"). Incremental after the first sync,
+    // so this is fast. Best-effort: the mint itself surfaces real errors.
+    await runMint(["sync"]);
     ({ stdout, stderr, code } = await runMint([
       "mint",
       "-t", targetHex,

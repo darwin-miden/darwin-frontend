@@ -75,28 +75,28 @@ const ASSET_FAUCETS_V014: Record<string, AssetFaucet> = {
 const ASSET_FAUCETS_V015: Record<string, AssetFaucet> = {
   "darwin-eth": {
     symbol: "dETH",
-    id: "0xb0411b0e0c4985115c03d034234110",
+    id: "0x9e419ffe4da7557115139516cd8e6f",
     decimals: 8,
     referencePriceUsd: 2000,
     minAmountHuman: "0.0005",
   },
   "darwin-wbtc": {
     symbol: "dWBTC",
-    id: "0xf4779bc231d7c0713e8dd1175daa75",
+    id: "0x0cbb9fc8890a29312c046f582edff8",
     decimals: 8,
     referencePriceUsd: 60000,
     minAmountHuman: "0.00001",
   },
   "darwin-usdt": {
     symbol: "dUSDT",
-    id: "0xa80e2f25818339712c73ed8d8e9fa8",
+    id: "0x119a367204dff8111eb1775deb31d4",
     decimals: 6,
     referencePriceUsd: 1,
     minAmountHuman: "1",
   },
   "darwin-dai": {
     symbol: "dDAI",
-    id: "0xd3ddf8c8a8bfe7715e1d92e2f8cd1f",
+    id: "0x20933d1943af2f3157242712083448",
     decimals: 6,
     referencePriceUsd: 1,
     minAmountHuman: "1",
