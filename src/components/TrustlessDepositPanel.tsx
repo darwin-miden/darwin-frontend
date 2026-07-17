@@ -580,7 +580,9 @@ export function TrustlessDepositPanel({
           consumeResult = res ?? consumeResult;
           consumedAny = true;
         } catch (e) {
-          consumeErrors.push(`${id.slice(0, 12)}…: ${String(e).slice(0, 90)}`);
+          // Keep the FULL node reason (the grpc status after "submit_prov:") —
+          // it's what distinguishes a network mismatch from a real rejection.
+          consumeErrors.push(`${id.slice(0, 12)}…: ${String(e).slice(0, 400)}`);
           console.warn("[deposit] skipped un-consumable note", id, e);
         }
       }
