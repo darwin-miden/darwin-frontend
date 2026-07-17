@@ -76,6 +76,7 @@ import {
   gunzip,
   gzip,
   readOnchainBackup,
+  warmOnchainBackup,
   writeOnchainBackup,
 } from "../lib/onchainBackup";
 
@@ -462,13 +463,16 @@ export function TrustlessRedeemPanel({
 
   async function onRestore() {
     if (!walletId || !evmAddress) return;
+    // Warm the store now (fire-and-forget) so the sync overlaps the signature
+    // prompt below and the read a moment later skips its own sync.
+    const { suffix, prefix } = evmToUserIdFelts(evmAddress);
+    void warmOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
     setBackupMsg("sign to decrypt…");
     try {
       const key = await deriveBackupKey(
         (td) => signTypedDataAsync(td),
         evmAddress as `0x${string}`,
       );
-      const { suffix, prefix } = evmToUserIdFelts(evmAddress);
       setBackupMsg("reading on-chain backup…");
       const enc = await readOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
       if (!enc) {

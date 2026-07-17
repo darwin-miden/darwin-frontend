@@ -28,7 +28,12 @@ const MIDEN_CLIENT =
 // independent of backup size). Falls back to the exec loop if it fails.
 const BACKUP_READ_BIN =
   process.env.DARWIN_BACKUP_READ_BIN ||
-  "/Users/eden/data/darwin/repos/darwin-protocol/target/debug/backup_read";
+  "/Users/eden/data/darwin/repos/darwin-protocol/target/release/backup_read";
+// If the store was synced within this many seconds (dedicated marker file), the
+// reader skips its own ~400ms network sync — the (older) backup is already
+// local. The restore flow fires a `warm` sync while the user signs, so the read
+// that follows lands inside this window. 0 disables (always sync).
+const BACKUP_READ_FRESH_SECS = process.env.DARWIN_BACKUP_READ_FRESH_SECS || "30";
 const GET_USER_POSITION_MAST_ROOT =
   "0x47b239ea11ad0375cca5a082369f721729c6d63a1fb170e6b5be5755dd06301f";
 // Must match src/lib/onchainBackup.ts.
@@ -77,7 +82,13 @@ function readViaBin(
     const child = spawn(
       BACKUP_READ_BIN,
       [controllerId, suffix, prefix],
-      { env: { ...env, MIDEN_NETWORK: "testnet" } },
+      {
+        env: {
+          ...env,
+          MIDEN_NETWORK: "testnet",
+          BACKUP_READ_FRESH_SECS,
+        },
+      },
     );
     let stdout = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
@@ -105,6 +116,33 @@ function readViaBin(
         resolve(null);
       }
     });
+  });
+}
+
+/**
+ * Warm the local store: run the reader in warm mode (force sync + write the
+ * freshness marker, no chunk reads). Fired at the start of a restore while the
+ * user signs, so the actual read a moment later skips its own sync. Resolves
+ * when the sync completes (or fails — best-effort).
+ */
+function runWarm(
+  controllerId: string,
+  suffix: string,
+  prefix: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      BACKUP_READ_BIN,
+      [controllerId, suffix, prefix],
+      // No FRESH_SECS ⇒ warm always syncs, guaranteeing a fresh marker.
+      { env: { ...env, MIDEN_NETWORK: "testnet", BACKUP_READ_WARM: "1" } },
+    );
+    const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    child.stdout.on("data", () => {});
+    child.stderr.on("data", () => {});
+    child.on("error", () => (clearTimeout(timer), resolve()));
+    child.on("close", () => (clearTimeout(timer), resolve()));
   });
 }
 
@@ -151,7 +189,7 @@ function parseFelts(stdout: string): bigint[] {
 
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as
-    | { suffix?: string; prefix?: string; controllerId?: string }
+    | { suffix?: string; prefix?: string; controllerId?: string; warm?: boolean }
     | null;
   if (!body?.suffix || !body?.prefix)
     return jsonError("missing suffix/prefix");
@@ -183,6 +221,15 @@ export async function POST(req: Request) {
 
   const midenHome = process.env.DARWIN_MIDEN_HOME;
   const env = midenHome ? { ...process.env, HOME: midenHome } : process.env;
+
+  // Warm mode: sync the store now (write the freshness marker) and return, so a
+  // follow-up read skips its own sync. Fired while the user signs the restore.
+  if (body.warm) {
+    await runWarm(controllerId, body.suffix, body.prefix, env).catch(() => {});
+    return new Response(JSON.stringify({ warmed: true }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   // Fast path: single in-process Rust reader. Falls through to the per-chunk
   // exec loop below if the binary is missing or errors.

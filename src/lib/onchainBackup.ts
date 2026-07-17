@@ -215,6 +215,33 @@ export async function writeOnchainBackup(params: {
   return words.length;
 }
 
+/**
+ * Warm the backend store (fire-and-forget): triggers a sync now so a follow-up
+ * readOnchainBackup skips its own ~400ms network sync. Call at the start of a
+ * restore, before the (multi-second) signature prompt, so the sync overlaps the
+ * user signing. Never throws — a cold read still works, just slower.
+ */
+export async function warmOnchainBackup(
+  suffix: bigint,
+  prefix: bigint,
+  controllerId: string,
+): Promise<void> {
+  try {
+    await fetch("/api/backup-read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        suffix: suffix.toString(),
+        prefix: prefix.toString(),
+        controllerId,
+        warm: true,
+      }),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Read the on-chain backup back into encrypted bytes (null if none). */
 export async function readOnchainBackup(
   suffix: bigint,
