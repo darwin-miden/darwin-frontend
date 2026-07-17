@@ -1,0 +1,197 @@
+════════════════════════════════════════════════════════════════════
+CALL DEVREL MIDEN — PREP COMPLÈTE
+════════════════════════════════════════════════════════════════════
+
+──────────────────────────────────────────────
+STRUCTURE DU CALL (~20 min)
+──────────────────────────────────────────────
+1. Update (2 min)        — ce qui a shippé depuis le dernier sync
+2. Démo live (4 min)     — le rail self-custody de bout en bout
+3. Architecture (3 min)  — aujourd'hui vs cible network account
+4. Q&A network accounts (8 min) — la liste de questions ci-dessous
+5. Asks + next steps (2 min)
+
+──────────────────────────────────────────────
+1. L'UPDATE (ce que tu dis en ouverture)
+──────────────────────────────────────────────
+"Since our last sync we shipped a fully trustless self-custody rail
+on darwin.market: one MetaMask signature derives a Miden wallet
+in-browser, Epoch bridges Sepolia USDC to dUSDC, the browser proves
+everything itself — consume, per-basket position accounting on the
+controller — and redeem works the same way back to Sepolia. Zero
+Darwin backend in the loop. Validated with 10+ E2E runs both
+directions, ~40-60s per leg."
+
+──────────────────────────────────────────────
+2. DÉMO LIVE (l'enchaînement)
+──────────────────────────────────────────────
+a. darwin.market/baskets/DCC → les 3 tabs de dépôt
+   "Custodial via notre relay, Miden-natif, et le nouveau :
+    Self-custody."
+b. Tab Self-custody → CTA → 1 signature MetaMask
+   "Une signature = un wallet Miden déterministe. Même sig sur
+    n'importe quel device = même wallet. Rien à backup."
+c. Deposit 1 USDC → la table live déroule les 5 stages
+   PENDANT LES PROVES WASM (le beat clé) :
+   "Le browser consume la note et écrit la position lui-même —
+    proving ZK in-page. Le controller est NoAuth aujourd'hui ;
+    avec les network accounts, c'est le réseau qui exécutera.
+    C'est exactement ce dont je veux parler."
+d. darwin.market/portfolio → la position par basket
+e. Midenscan : le compte controller + la tx — "le basket vit
+   on-chain, pas dans une DB chez nous"
+   https://testnet.midenscan.com/account/0x2cc265c53378fb3171eaf12e03c644
+
+BACKUP si Epoch tousse : positions existantes du portfolio + les
+tx midenscan/etherscan des runs précédents.
+
+CHECK 30 MIN AVANT : curl darwin.market/api/position (tunnel Mac)
++ un quote sur la page deposit (liquidité Epoch).
+
+──────────────────────────────────────────────
+3. ARCHITECTURE — AUJOURD'HUI vs CIBLE
+──────────────────────────────────────────────
+Aujourd'hui, 3 rails qui convergent sur le même slot-10 :
+  1. ETH wallet  → Epoch → relay custodial → atomic_deposit_note
+  2. Miden wallet → atomic deposit note direct
+  3. Self-custody → browser écrit la position sur un controller
+     NoAuth (workaround : n'importe qui peut soumettre un tx bundle)
+
+Cible avec network accounts :
+  Le controller devient un network account. Les deposits sont des
+  notes taguées vers lui ; le Network Transaction Builder (NTX) du
+  node les consume et exécute le MASM du controller — qui valide
+  tout (montants, NAV, mint). Le relay disparaît, le NoAuth
+  disparaît. Zéro opérateur, zéro backend, validation dans le code.
+
+Levier : "Your NTX infra is already deployed on testnet — the
+binary, GetNetworkNoteStatus RPC, everything. Our controller MASM
+is ready, our deposit notes are already the right shape. We could
+be your first real DeFi protocol on network transactions."
+
+──────────────────────────────────────────────
+4. QUESTIONS NETWORK ACCOUNTS (à poser dans cet ordre)
+──────────────────────────────────────────────
+
+DISPONIBILITÉ / ACCÈS
+Q1. "Is the NTX builder on the public testnet open to third-party
+    network accounts today, or is it gated to system accounts like
+    the faucets? Do we need an allowlist or registration with the
+    operator?"
+Q2. "Can we deploy an account with network storage mode from the
+    current miden-client 0.15 / Web SDK, or is that tooling still
+    coming?"
+
+MÉCANIQUE
+Q3. "What's the exact flow for targeting a note at a network
+    account — is it just the note tag set to the full account ID
+    (I saw v0.13 moved network note queries to full IDs)? Anything
+    special in the note script?"
+Q4. "I saw in the release notes the NTB discards non-single-target
+    network notes — what are the constraints on note shape? Our
+    atomic_deposit_note calls into the controller's exported
+    procedures — is that the right pattern for network execution?"
+Q5. "Does the NTB batch multiple pending notes into one network tx
+    (the Uniswap example from the blog)? What ordering guarantees
+    do we get — matters for our NAV math."
+
+ÉCONOMIE / FIABILITÉ
+Q6. "Who pays for network transaction execution and proving? Any
+    fee model or rate limits per account?"
+Q7. "When a note gets Discarded (per GetNetworkNoteStatus), what
+    happens to the assets — is P2IDE with a recall height the
+    recommended pattern so users can reclaim?"
+Q8. "How does the NTB behave under load or failures — the 0.14.11
+    notes mention retry with exponential backoff; is delivery
+    eventually guaranteed once a note is committed?"
+
+ROADMAP / PARTENARIAT
+Q9. "Any breaking changes expected for network accounts in 0.16?
+    What's the path to production readiness / mainnet?"
+Q10. "Can Darwin be a design partner / pilot on this? We have the
+     controller variant ready and a full E2E test harness — we can
+     give you real-world feedback within days of getting access."
+
+BONUS (UX self-custody, si le temps)
+Q11. "Separate topic: our derived wallets need MIDEN for gas
+     (bootstrap friction). Any roadmap on fee delegation /
+     paymaster-style flows so a fresh wallet can consume its first
+     note without pre-funding?"
+
+──────────────────────────────────────────────
+5. ASKS DE FIN DE CALL
+──────────────────────────────────────────────
+- Early access / allowlist NTX pour notre controller
+- Un contact direct avec l'équipe NTB (channel ou intro)
+- Confirmation qu'on peut citer Miden network transactions dans
+  notre roadmap publique
+
+──────────────────────────────────────────────
+MESSAGE À ENVOYER AVANT LE CALL
+──────────────────────────────────────────────
+Hey! Quick update before our call — big milestone since last time:
+
+Darwin now has a fully trustless self-custody rail, live on
+darwin.market: one MetaMask signature derives a Miden wallet
+in-browser, Epoch bridges Sepolia USDC → dUSDC, the browser proves
+and submits everything itself (consume + per-basket position
+accounting on the controller), and redeem works the same way back
+to Sepolia. Zero backend in the loop — validated with 10+ E2E runs
+both directions.
+
+The one compromise: the controller runs a NoAuth component so the
+browser can write positions without a key. That's exactly the gap
+network accounts would close — the controller consuming deposit
+notes itself via network transactions is our target architecture
+(no relay, no NoAuth). Saw the NTX builder is already part of the
+testnet deployment — would love to talk access and timeline.
+
+I'll demo the full flow on the call, takes ~3 min end to end.
+
+──────────────────────────────────────────────
+LIENS À AVOIR SOUS LA MAIN
+──────────────────────────────────────────────
+- Blog transaction model (exemple Uniswap) :
+  https://miden.xyz/resource/blog/transactions
+- Docs storage modes (network mode) :
+  https://docs.miden.xyz/quick-start/accounts/
+- Releases node (NTX builder, GetNetworkNoteStatus) :
+  https://github.com/0xMiden/node/releases
+- Notre controller trustless sur Midenscan :
+  https://testnet.midenscan.com/account/0x2cc265c53378fb3171eaf12e03c644
+- Controller relay (v0.15) :
+  https://testnet.midenscan.com/account/0x6687e59f895c7e3115c654ca7ccbbb
+
+──────────────────────────────────────────────
+MESSAGE TELEGRAM TEAM MIDEN — NETWORK ACCOUNTS
+──────────────────────────────────────────────
+Hey team! Quick one on network accounts / the NTX builder.
+
+We just shipped a fully self-custodial rail on darwin.market: one
+MetaMask signature derives a Miden wallet in-browser, Epoch bridges
+USDC both directions, and the browser proves + submits everything
+itself — including per-basket position accounting on our controller.
+Zero backend. The only compromise: the controller runs a NoAuth
+component so users can write positions without a key. Works, but
+obviously not production-grade.
+
+Network transactions are exactly what closes that gap — the
+controller as a network account, deposit notes consumed by the NTX
+builder, validation living in the controller's MASM. No relay, no
+NoAuth.
+
+I saw the NTX builder ships with the testnet deployment
+(miden-ntx-builder, GetNetworkNoteStatus etc.), so a few questions:
+
+1. Is it open to third-party network accounts on the public testnet,
+   or gated to system accounts? Allowlist needed?
+2. Can we deploy a network-storage-mode account with current
+   miden-client 0.15 tooling?
+3. Targeting: is a note tag with the full account ID enough for the
+   NTB to pick it up?
+4. When a note ends up Discarded — is P2IDE + recall height the
+   recommended pattern so users can reclaim?
+
+Our controller MASM is ready and we have a full E2E harness — happy
+to be a pilot / design partner on this and report real-world
+feedback within days. 🚀

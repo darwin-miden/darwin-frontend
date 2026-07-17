@@ -625,25 +625,34 @@ export function TrustlessDepositPanel({
         // Priced at the live NAV: mint_amount = deposit / NAV.
         setStage("crediting");
         // Drain exactly what Epoch actually delivered into the vault — NOT
-        // the requested amount. The testnet solver caps delivery, so a
-        // requested amount larger than what arrived underflows the drain
-        // ("subtracting X from fungible asset amount Y would underflow").
-        // Read the real dUSDC balance; only fall back to the requested 95%
-        // if the on-chain read is unavailable.
-        let amountBaseNet: bigint;
-        try {
-          const delivered = await runExclusive(() =>
-            (
-              client as unknown as {
-                getBalance: (a: string, t: string) => Promise<bigint>;
-              }
-            ).getBalance(walletId, EPOCH_USDC_SEPOLIA.midenFaucetId),
-          );
-          amountBaseNet = BigInt(delivered ?? 0n);
-        } catch {
-          amountBaseNet =
-            (parseUnits(humanAmount, EPOCH_USDC_SEPOLIA.midenDecimals) * 95n) /
-            100n;
+        // the requested amount. The testnet solver caps delivery, so a note
+        // funded for MORE than what arrived underflows when the wallet emits
+        // it ("subtracting X from fungible asset amount Y would underflow",
+        // where Y is the vault balance). Read the wallet's OWN private vault
+        // via getAccount → vault().getBalance — the reliable local read.
+        // (`client.getBalance` never resolves here and was silently falling
+        // back to the requested amount, funding an over-sized note.) Retry a
+        // few times: the vault may lag a beat behind the consume.
+        const { AccountId: DusdcAccountId } = await import("@miden-sdk/miden-sdk");
+        const dusdcFaucet = DusdcAccountId.fromHex(
+          EPOCH_USDC_SEPOLIA.midenFaucetId,
+        );
+        let amountBaseNet = 0n;
+        for (let attempt = 0; attempt < 6; attempt++) {
+          try {
+            const acc = (await runExclusive(() =>
+              client.getAccount(DusdcAccountId.fromHex(walletId)),
+            )) as { vault: () => { getBalance: (id: unknown) => bigint } } | null;
+            const bal = acc ? BigInt(acc.vault().getBalance(dusdcFaucet) ?? 0n) : 0n;
+            if (bal > 0n) {
+              amountBaseNet = bal;
+              break;
+            }
+          } catch {
+            /* vault not synced yet — retry below */
+          }
+          await runExclusive(() => syncState()).catch(() => {});
+          await new Promise((res) => setTimeout(res, 2_000));
         }
         if (amountBaseNet <= 0n) {
           throw new Error(

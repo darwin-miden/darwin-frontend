@@ -1,0 +1,11 @@
+Hey @mpatni @Abhimanyu — all good, it works! 🎉
+
+The bug was on our side: we sent midenNoteType: "Public" instead of
+"P2ID". Found it by diffing against your example repo — huge help:
+https://github.com/epochprotocol/miden-integration-example
+
+Both directions work now (10+ deposits, multiple redeems, ~40-60s
+fills). Sorry for the noise and thanks for the support!
+
+Small feedback: a clearer error than "quote isn't available" for an
+invalid midenNoteType would have saved us a day 😄
