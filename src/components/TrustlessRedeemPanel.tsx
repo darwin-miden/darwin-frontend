@@ -72,7 +72,12 @@ import {
 } from "../lib/trustlessController";
 import { readDccBalance, stashDccBalance } from "../lib/dccBalance";
 import { decryptBytes, deriveBackupKey, encryptBytes } from "../lib/storeBackup";
-import { readOnchainBackup, writeOnchainBackup } from "../lib/onchainBackup";
+import {
+  gunzip,
+  gzip,
+  readOnchainBackup,
+  writeOnchainBackup,
+} from "../lib/onchainBackup";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
@@ -431,7 +436,8 @@ export function TrustlessRedeemPanel({
       };
       const file = await runExclusive(() => clientAny.accounts.export(walletId));
       const fileBytes = file.serialize();
-      const enc = await encryptBytes(key, fileBytes);
+      // gzip BEFORE encrypt — fewer chunks = fewer write txs + read execs.
+      const enc = await encryptBytes(key, await gzip(fileBytes));
       const { suffix, prefix } = evmToUserIdFelts(evmAddress);
       const nWords = Math.ceil(enc.length / 28);
       setBackupMsg(`writing ${nWords} chunks on-chain (batched)… this takes a bit`);
@@ -465,7 +471,8 @@ export function TrustlessRedeemPanel({
         setBackupMsg("no on-chain backup found for this wallet yet.");
         return;
       }
-      const fileBytes = await decryptBytes(key, enc);
+      // decrypt → gunzip (mirror of backup's gzip → encrypt).
+      const fileBytes = await gunzip(await decryptBytes(key, enc));
       // import() needs an AccountFile, not raw bytes (verified headless: the
       // napi layer rejects a Uint8Array here). Deserialize first.
       const accountFile = AccountFile.deserialize(fileBytes);

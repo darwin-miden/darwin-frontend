@@ -151,19 +151,31 @@ export async function POST(req: Request) {
         headers: { "Content-Type": "application/json" },
       });
 
-    // 2) all chunk words, 4 per exec
-    const words: string[][] = [];
+    // 2) all chunk words, 4 per exec — run execs CONCURRENTLY (each reads the
+    // already-synced local store, so concurrent reads are safe) to cut the
+    // ~40-exec sequential read (~40s) down to a handful of parallel waves.
+    const batches: { at: number; idx: bigint[] }[] = [];
     for (let i = 0; i < nWords; i += WORDS_PER_EXEC) {
       const idx: bigint[] = [];
       for (let j = i; j < Math.min(i + WORDS_PER_EXEC, nWords); j++) idx.push(BigInt(j));
-      const felts = await readBatch(idx);
-      // felts are index0-word first ([0..3]=idx[0], [4..7]=idx[1], …)
-      for (let k = 0; k < idx.length; k++) {
-        const w = felts.slice(k * 4, k * 4 + 4).map((f) => (f ?? 0n).toString());
-        while (w.length < 4) w.push("0");
-        words.push(w);
-      }
+      batches.push({ at: i, idx });
     }
+    const words: string[][] = new Array(nWords);
+    const CONCURRENCY = 8;
+    let cursor = 0;
+    const worker = async () => {
+      for (;;) {
+        const b = batches[cursor++];
+        if (!b) return;
+        const felts = await readBatch(b.idx);
+        for (let k = 0; k < b.idx.length; k++) {
+          const w = felts.slice(k * 4, k * 4 + 4).map((f) => (f ?? 0n).toString());
+          while (w.length < 4) w.push("0");
+          words[b.at + k] = w;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
     return new Response(JSON.stringify({ byteLen, words }), {
       headers: { "Content-Type": "application/json" },
     });

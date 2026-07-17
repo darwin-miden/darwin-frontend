@@ -35,6 +35,36 @@ const BYTES_PER_FELT = 7;
 const FELTS_PER_WORD = 4;
 export const BYTES_PER_WORD = BYTES_PER_FELT * FELTS_PER_WORD; // 28
 
+// ── gzip (fewer chunks = fewer write txs AND fewer read execs) ──
+async function streamThrough(
+  data: Uint8Array,
+  s: "CompressionStream" | "DecompressionStream",
+): Promise<Uint8Array> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Ctor = (globalThis as any)[s];
+  const stream = new Ctor("gzip");
+  const writer = stream.writable.getWriter();
+  void writer.write(data);
+  void writer.close();
+  const reader = stream.readable.getReader();
+  const parts: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+  }
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+export const gzip = (data: Uint8Array) => streamThrough(data, "CompressionStream");
+export const gunzip = (data: Uint8Array) => streamThrough(data, "DecompressionStream");
+
 /** Pack bytes into Words (each a 4-tuple of Felt bigints). */
 export function packBytesToWords(bytes: Uint8Array): bigint[][] {
   const words: bigint[][] = [];
