@@ -23,6 +23,12 @@ const MAC_API_BASE = process.env.DARWIN_MAC_API_BASE;
 const MIDEN_CLIENT =
   process.env.DARWIN_MIDEN_CLIENT_BIN ||
   "/Users/eden/Library/Application Support/midenup/toolchains/0.15.0/bin/miden-client";
+// In-process Rust reader: one sync + in-memory get_map_item for every chunk.
+// Replaces the per-chunk `miden-client exec` spawns (flat ~sync-time read,
+// independent of backup size). Falls back to the exec loop if it fails.
+const BACKUP_READ_BIN =
+  process.env.DARWIN_BACKUP_READ_BIN ||
+  "/Users/eden/data/darwin/repos/darwin-protocol/target/debug/backup_read";
 const GET_USER_POSITION_MAST_ROOT =
   "0x47b239ea11ad0375cca5a082369f721729c6d63a1fb170e6b5be5755dd06301f";
 // Must match src/lib/onchainBackup.ts.
@@ -53,6 +59,53 @@ function buildBatchReadScript(
     )
     .join("\n");
   return `use miden::core::sys\n\nbegin\n${reads}\n  exec.sys::truncate_stack\nend\n`;
+}
+
+/**
+ * Fast path: run the in-process Rust reader (`backup_read <ctrl> <suf> <pre>`),
+ * which syncs once then reads every chunk from the local store's slot-10 map
+ * with plain get_map_item lookups — no per-chunk VM exec, no per-chunk process.
+ * Returns { byteLen, words } on success, or null to fall back to the exec loop.
+ */
+function readViaBin(
+  controllerId: string,
+  suffix: string,
+  prefix: string,
+  env: NodeJS.ProcessEnv,
+): Promise<{ byteLen: number; words: string[][] } | null> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      BACKUP_READ_BIN,
+      [controllerId, suffix, prefix],
+      { env: { ...env, MIDEN_NETWORK: "testnet" } },
+    );
+    let stdout = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", () => {});
+    child.on("error", () => (clearTimeout(timer), resolve(null)));
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return resolve(null);
+      try {
+        const j = JSON.parse(stdout.trim());
+        if (
+          typeof j?.byteLen === "number" &&
+          Array.isArray(j?.words) &&
+          j.words.every(
+            (w: unknown) =>
+              Array.isArray(w) && w.length === 4 && w.every((f) => typeof f === "string"),
+          )
+        ) {
+          resolve({ byteLen: j.byteLen, words: j.words });
+        } else {
+          resolve(null);
+        }
+      } catch {
+        resolve(null);
+      }
+    });
+  });
 }
 
 function runSync(env: NodeJS.ProcessEnv): Promise<void> {
@@ -130,6 +183,18 @@ export async function POST(req: Request) {
 
   const midenHome = process.env.DARWIN_MIDEN_HOME;
   const env = midenHome ? { ...process.env, HOME: midenHome } : process.env;
+
+  // Fast path: single in-process Rust reader. Falls through to the per-chunk
+  // exec loop below if the binary is missing or errors.
+  const fast = await readViaBin(controllerId, body.suffix, body.prefix, env).catch(
+    () => null,
+  );
+  if (fast) {
+    return new Response(JSON.stringify(fast), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const tmp = await mkdtemp(path.join(tmpdir(), "darwin-bkr-"));
   try {
     await runSync(env).catch(() => undefined);

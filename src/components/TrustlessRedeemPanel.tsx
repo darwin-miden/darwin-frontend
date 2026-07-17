@@ -413,8 +413,12 @@ export function TrustlessRedeemPanel({
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      // "neither changed the account state" fires when a batch (or the meta tx)
+      // writes only values already on-chain — i.e. a re-backup where the account
+      // size is unchanged, so the meta [byteLen,nWords] is identical. The data
+      // is already correct on-chain, so this is a success, not a failure.
       if (
-        !/apply transaction result|account data wasn't found|storage error/i.test(
+        !/apply transaction result|account data wasn't found|storage error|neither changed the account state/i.test(
           msg,
         )
       )
