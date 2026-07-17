@@ -37,6 +37,38 @@ export async function stashDccBalance(
   }
 }
 
+/**
+ * Read the DCC balance LIVE from the account's own vault:
+ * getAccount → vault().getBalance(faucet). This is a local, synchronous read of
+ * the private account the browser OWNS — reliable once the account is
+ * imported/synced (e.g. right after a restore, or on page load with a derived
+ * wallet), unlike `client.getBalance` which only resolves in a warm flow client.
+ * Stashes the result to the cache and returns it (null on any failure).
+ */
+export async function liveDccBalance(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
+  runExclusive: <T>(fn: () => Promise<T>) => Promise<T>,
+  walletId: string,
+  basketSymbol: string,
+): Promise<bigint | null> {
+  try {
+    const faucetHex = CONFIDENTIAL_FAUCETS[basketSymbol];
+    if (!faucetHex) return null;
+    const { AccountId } = await import("@miden-sdk/miden-sdk");
+    const acc = (await runExclusive(() =>
+      client.getAccount(AccountId.fromHex(walletId)),
+    )) as { vault: () => { getBalance: (id: unknown) => bigint } } | null | undefined;
+    if (!acc) return null;
+    const bal = acc.vault().getBalance(AccountId.fromHex(faucetHex));
+    const v = BigInt(bal ?? 0n);
+    if (typeof window !== "undefined") localStorage.setItem(key(walletId), String(v));
+    return v;
+  } catch {
+    return null;
+  }
+}
+
 /** Read the last-stashed DCC balance (6-dec base units), or null if unknown. */
 export function readDccBalance(walletId: string): bigint | null {
   if (typeof window === "undefined") return null;

@@ -70,7 +70,7 @@ import {
   evmToUserIdFelts,
   fetchTrustlessPosition,
 } from "../lib/trustlessController";
-import { readDccBalance, stashDccBalance } from "../lib/dccBalance";
+import { liveDccBalance, readDccBalance, stashDccBalance } from "../lib/dccBalance";
 import { decryptBytes, deriveBackupKey, encryptBytes } from "../lib/storeBackup";
 import {
   gunzip,
@@ -499,7 +499,20 @@ export function TrustlessRedeemPanel({
         if (!/already being tracked|already exist/i.test(msg)) throw e;
       }
       await runExclusive(() => syncState());
-      setBackupMsg("✓ restored from chain — your balance is back.");
+      // Read the confidential balance live from the freshly-imported vault so the
+      // display updates and the message is honest (shows the real amount, incl. 0).
+      const bal = await liveDccBalance(
+        client,
+        runExclusive,
+        walletId,
+        basket?.symbol ?? "DCC",
+      );
+      if (bal != null) setPositionBase(bal);
+      setBackupMsg(
+        bal != null
+          ? `✓ restored from chain — balance: ${fmtDusdc(bal)} USDC.`
+          : "✓ restored from chain.",
+      );
     } catch (e) {
       setBackupMsg("restore failed: " + String(e).slice(0, 90));
     }
@@ -728,6 +741,24 @@ export function TrustlessRedeemPanel({
     const v = readDccBalance(walletId);
     if (v != null) setPositionBase(v);
   }, [walletId, stage]);
+
+  // Live-refresh the confidential balance from the OWNED vault whenever the
+  // wallet changes (getAccount → vault().getBalance — reliable for a private
+  // account we own). Fixes "Balance: —" on a fresh load / after a restore, where
+  // the flow-written cache is empty. Best-effort; falls back to the cache value.
+  useEffect(() => {
+    if (!walletId) return;
+    let cancelled = false;
+    void liveDccBalance(client, runExclusive, walletId, basket?.symbol ?? "DCC").then(
+      (b) => {
+        if (!cancelled && b != null) setPositionBase(b);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletId]);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [midenTxId, setMidenTxId] = useState<string | null>(null);
   const [sepoliaTxHint, setSepoliaTxHint] = useState<string | null>(null);
@@ -2405,7 +2436,7 @@ export function TrustlessRedeemPanel({
               }}
             >
               {positionBase == null
-                ? "Balance: — (loads after your next deposit or withdraw)"
+                ? "Balance: reading confidential vault…"
                 : overPosition
                   ? `Balance: ${fmtDusdc(positionBase)} USDC — more than you hold; a larger amount just reverts on-chain.`
                   : `Balance: ${fmtDusdc(positionBase)} USDC`}
