@@ -420,33 +420,50 @@ export function TrustlessRedeemPanel({
     await syncState();
   };
 
-  // Submit N MASM txs to the NoAuth controller as ONE atomic batch via the SDK's
-  // submitNewTransactionBatch (execute→prove→submit→APPLY each, no per-tx sync) —
-  // the browser equivalent of the Rust reference's sequential apply loop, and the
-  // only safe way to chain many writes to one account. Only "neither changed the
-  // account state" is swallowed (idempotent re-write of unchanged data); every
-  // other failure propagates, so a genuinely failed backup is never silent.
-  const submitControllerBatch = async (codes: string[]) => {
-    const { AccountId } = await import("@miden-sdk/miden-sdk");
-    const reqs: Uint8Array[] = [];
-    for (const code of codes) {
-      const s = await compileTxScript({ code });
-      reqs.push(
-        new TransactionRequestBuilder().withCustomScript(s).build().serialize(),
-      );
-    }
+  // Remote prover URL — MUST match the browser's rpcUrl (devnet when
+  // NEXT_PUBLIC_MIDEN_V015=1, else testnet), same as MidenDynamicProviders.
+  const CONTROLLER_PROVER_URL =
+    process.env.NEXT_PUBLIC_MIDEN_V015 === "1"
+      ? "https://tx-prover.devnet.miden.io"
+      : "https://tx-prover.testnet.miden.io";
+
+  // Submit ONE MASM tx to the public NoAuth controller, proved OFF the main
+  // thread. `submitNewTransactionWithProver` and `submitNewTransaction` are the
+  // SDK's WORKER-forwarded submit methods (execute→prove→submit→APPLY on the
+  // worker) — `submitNewTransactionBatch` is NOT worker-forwarded and proves on
+  // the main thread, freezing the tab ("Page Unresponsive"). The remote prover
+  // computes the STARK server-side (near-instant) and is safe here: these txs run
+  // as the PUBLIC controller, so the witness carries only public storage + the
+  // AES-encrypted backup bytes — nothing about the private DCC wallet (which
+  // keeps proving locally; NEVER route it through a remote prover). Local
+  // worker-proving fallback if the remote prover is unreachable. Only "neither
+  // changed the account state" (idempotent re-write) is swallowed.
+  const submitControllerTx = async (code: string) => {
+    const { AccountId, TransactionProver } = await import("@miden-sdk/miden-sdk");
+    const s = await compileTxScript({ code });
+    const req = new TransactionRequestBuilder().withCustomScript(s).build();
     const accId = AccountId.fromHex(TRUSTLESS_CONTROLLER_HEX);
     const cAny = client as unknown as {
-      submitNewTransactionBatch: (
-        id: unknown,
-        reqs: Uint8Array[],
-      ) => Promise<number>;
+      submitNewTransactionWithProver: (id: unknown, r: unknown, p: unknown) => Promise<unknown>;
+      submitNewTransaction: (id: unknown, r: unknown) => Promise<unknown>;
     };
+    const idempotent = (m: string) => /neither changed the account state/i.test(m);
     try {
-      await cAny.submitNewTransactionBatch(accId, reqs);
+      await cAny.submitNewTransactionWithProver(
+        accId,
+        req,
+        TransactionProver.newRemoteProver(CONTROLLER_PROVER_URL, 90_000n),
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (!/neither changed the account state/i.test(msg)) throw e;
+      if (idempotent(msg)) return; // already-current write ⇒ success
+      // Remote prover failed/unreachable → prove locally on the worker.
+      try {
+        await cAny.submitNewTransaction(accId, req);
+      } catch (e2) {
+        const m2 = e2 instanceof Error ? e2.message : String(e2);
+        if (!idempotent(m2)) throw e2;
+      }
     }
   };
 
@@ -480,7 +497,7 @@ export function TrustlessRedeemPanel({
           suffix,
           prefix,
           encryptedBytes: enc,
-          submitBatch: submitControllerBatch,
+          submitOne: submitControllerTx,
           onProgress: (d, t) => setBackupMsg(`writing on-chain… tx ${d}/${t}`),
         }),
       );
@@ -677,7 +694,7 @@ export function TrustlessRedeemPanel({
           suffix,
           prefix,
           encryptedBytes: enc,
-          submitBatch: submitControllerBatch,
+          submitOne: submitControllerTx,
           onProgress: (d, t) => {
             r.writeProgress = `${d}/${t}`;
             log(`write ${d}/${t}`);
