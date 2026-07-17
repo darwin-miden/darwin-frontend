@@ -23,6 +23,8 @@ import {
   useCompile,
   useConsume,
   useCreateWallet,
+  useExportStore,
+  useImportStore,
   useMiden,
   useSend,
   useSyncControl,
@@ -31,6 +33,12 @@ import {
   useWaitForCommit,
   useWaitForNotes,
 } from "@miden-sdk/react";
+import {
+  backupStore,
+  deriveBackupKey,
+  hasBackupKey,
+  restoreStore,
+} from "../lib/storeBackup";
 import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -386,6 +394,62 @@ export function TrustlessRedeemPanel({
   const { runExclusive, client } = useMiden();
   const { txScript: compileTxScript } = useCompile();
   const { execute: executeTx } = useTransaction();
+  const { exportStore } = useExportStore();
+  const { importStore } = useImportStore();
+  const [backupMsg, setBackupMsg] = useState<string | null>(null);
+
+  // Encrypted store backup (recovery across browser-clear / device-switch).
+  // The confidential vault lives only in this browser; back it up encrypted so
+  // it can be restored anywhere by re-signing. See src/lib/storeBackup.ts.
+  async function onBackup() {
+    if (!walletId || !evmAddress) return;
+    setBackupMsg("sign to encrypt…");
+    try {
+      const key = await deriveBackupKey(
+        (td) => signTypedDataAsync(td),
+        evmAddress as `0x${string}`,
+      );
+      setBackupMsg("backing up…");
+      await runExclusive(() => backupStore(exportStore, key, walletId));
+      setBackupMsg("✓ backed up (encrypted). You can restore on any device.");
+    } catch (e) {
+      setBackupMsg("backup failed: " + String(e).slice(0, 80));
+    }
+  }
+
+  async function onRestore() {
+    if (!walletId || !evmAddress) return;
+    setBackupMsg("sign to decrypt…");
+    try {
+      const key = await deriveBackupKey(
+        (td) => signTypedDataAsync(td),
+        evmAddress as `0x${string}`,
+      );
+      setBackupMsg("restoring…");
+      const ok = await runExclusive(() => restoreStore(importStore, key, walletId));
+      setBackupMsg(
+        ok
+          ? "✓ restored — your balance is back. (Reload if it doesn't refresh.)"
+          : "no backup found for this wallet yet.",
+      );
+    } catch (e) {
+      setBackupMsg("restore failed: " + String(e).slice(0, 80));
+    }
+  }
+
+  // Silent auto-backup after a flow, once the user has set up a backup key.
+  async function autoBackup() {
+    if (!walletId || !evmAddress || !hasBackupKey(evmAddress as `0x${string}`)) return;
+    try {
+      const key = await deriveBackupKey(
+        (td) => signTypedDataAsync(td),
+        evmAddress as `0x${string}`,
+      );
+      await runExclusive(() => backupStore(exportStore, key, walletId));
+    } catch {
+      /* best-effort */
+    }
+  }
 
   const [stage, setStage] = useState<Stage>("idle");
   const [walletId, setWalletId] = useState<string | null>(null);
@@ -1821,6 +1885,8 @@ export function TrustlessRedeemPanel({
       // warm client) so the panel shows the reduced balance right away.
       if (walletId)
         await stashDccBalance(client, runExclusive, walletId, basket?.symbol ?? "DCC");
+      // Auto-backup the new state (silent — only if a backup key is set up).
+      await autoBackup();
 
       setStage("done");
     } catch (e) {
@@ -2100,6 +2166,41 @@ export function TrustlessRedeemPanel({
                   ? `Balance: ${fmtDusdc(positionBase)} USDC — more than you hold; a larger amount just reverts on-chain.`
                   : `Balance: ${fmtDusdc(positionBase)} USDC`}
             </div>
+            {/* Encrypted backup / restore — recovery across browser-clear or
+                device-switch. The confidential vault lives only in this
+                browser; the backup is encrypted with a MetaMask-derived key. */}
+            <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={onBackup}
+                className="nav-cta"
+                style={{ padding: "3px 10px", fontSize: 11 }}
+                title="Encrypt your Miden store with your MetaMask-derived key and save it, so you can recover on any device"
+              >
+                🔒 Back up wallet
+              </button>
+              <button
+                type="button"
+                onClick={onRestore}
+                className="nav-cta"
+                style={{ padding: "3px 10px", fontSize: 11 }}
+                title="Restore your encrypted backup on this device (re-sign to decrypt)"
+              >
+                ♻️ Restore
+              </button>
+            </div>
+            {backupMsg && (
+              <div
+                style={{
+                  fontSize: 11,
+                  marginTop: 5,
+                  fontFamily: "var(--font-mono-stack)",
+                  color: /fail/.test(backupMsg) ? "crimson" : "var(--ink-3)",
+                }}
+              >
+                {backupMsg}
+              </div>
+            )}
           </div>
         )}
 
