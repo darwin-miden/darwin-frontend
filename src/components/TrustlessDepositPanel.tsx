@@ -89,6 +89,7 @@ import { createWalletClient, custom } from "viem";
 import { sepolia } from "viem/chains";
 import { useSwitchChain } from "wagmi";
 import { stashDccBalance } from "../lib/dccBalance";
+import { autoBackupWallet, restoreFromBackup } from "../lib/walletBackup";
 
 // Minimal ERC-20 balanceOf — used to read the user's Sepolia USDC so the
 // deposit input can't exceed what they actually hold (and a Max button).
@@ -402,6 +403,9 @@ export function TrustlessDepositPanel({
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           signTypedData: (td) => signTypedDataAsync(td as any),
           getCode: (addr) => publicClient!.getCode({ address: addr }),
+          // Silent auto-restore on a cleared store / new device.
+          tryRestore: () =>
+            restoreFromBackup({ client, runExclusive, syncState, evmAddress: evmAddress! }),
         });
       } finally {
         resumeSync();
@@ -693,6 +697,15 @@ export function TrustlessDepositPanel({
         // Stash the real DCC balance for the Withdraw panel (getBalance works
         // here — warm client, mint just consumed into the vault).
         await stashDccBalance(client, runExclusive, walletId, basket?.symbol ?? "DCC");
+        // Silent auto-backup — the deposit just changed the wallet's state, so
+        // protect it immediately (no prompt, no UI). Best-effort, non-blocking.
+        void autoBackupWallet({
+          client,
+          runExclusive,
+          walletId,
+          evmAddress: evmAddress!,
+          force: true,
+        });
         setStage("done");
         return;
       }

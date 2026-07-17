@@ -1,4 +1,5 @@
 import { keccak256 } from "viem";
+import { cacheBackupKeyFromSeed } from "./storeBackup";
 
 /**
  * Secure derivation of the self-custody Miden wallet from an EVM
@@ -148,6 +149,14 @@ export interface DeriveOptions {
    * diverging from the production derivation path.
    */
   keyIndex?: bigint;
+  /**
+   * Optional auto-restore hook, called AFTER the backup key is cached but BEFORE
+   * createWallet. If it imports an on-chain backup into the (empty) store it
+   * returns the restored wallet id, and createWallet is skipped — so a cleared
+   * browser / new device silently recovers instead of creating a fresh shell.
+   * Returns null when there's nothing to restore (then a normal wallet is made).
+   */
+  tryRestore?: () => Promise<string | null>;
 }
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
@@ -202,6 +211,25 @@ export async function deriveMidenWallet(
   const canon = canonicalizeSignature(sig);
   const seedBytes = keccak256(canon, "bytes");
   canon.fill(0);
+  // Ride this ONE signature to also cache the encrypted-backup key, so
+  // auto-backup/restore never prompt again (invisible). Best-effort: a failure
+  // here must never break wallet derivation.
+  try {
+    await cacheBackupKeyFromSeed(opts.evmAddress, seedBytes);
+  } catch {
+    /* backup key is best-effort */
+  }
+  // Auto-restore BEFORE createWallet: on a cleared store this imports the backup
+  // into the empty store (no shell to conflict with) and we're done. A returning
+  // user with the account already local gets null (import → "already tracked")
+  // and falls through to createWallet, which returns the existing account.
+  if (opts.tryRestore) {
+    const restoredId = await opts.tryRestore().catch(() => null);
+    if (restoredId) {
+      seedBytes.fill(0);
+      return restoredId;
+    }
+  }
   try {
     const acc = await createWallet({
       initSeed: seedBytes,

@@ -71,7 +71,8 @@ import {
   fetchTrustlessPosition,
 } from "../lib/trustlessController";
 import { liveDccBalance, readDccBalance, stashDccBalance } from "../lib/dccBalance";
-import { decryptBytes, deriveBackupKey, encryptBytes } from "../lib/storeBackup";
+import { autoBackupWallet, restoreFromBackup } from "../lib/walletBackup";
+import { decryptBytes, encryptBytes } from "../lib/storeBackup";
 import {
   gunzip,
   gzip,
@@ -394,129 +395,12 @@ export function TrustlessRedeemPanel({
   const { runExclusive, client } = useMiden();
   const { txScript: compileTxScript } = useCompile();
   const { execute: executeTx } = useTransaction();
-  const [backupMsg, setBackupMsg] = useState<string | null>(null);
+  // Backup & restore are INVISIBLE + automatic — no buttons, no prompts, nothing
+  // for the user to see (src/lib/walletBackup.ts): auto-backup after every
+  // deposit/withdraw and on load (autoBackupWallet), auto-restore on derivation
+  // (restoreFromBackup wired into deriveMidenWallet's tryRestore). The Mac relay
+  // does the on-chain write; the backup key rides the wallet-derivation signature.
 
-  // PURELY ON-CHAIN encrypted backup (recovery across browser-clear /
-  // device-switch), zero server/IPFS. Exports the account file, encrypts it
-  // with a MetaMask-derived key, and writes the chunks into the controller's
-  // slot-10 map under a backup-namespace key. See src/lib/onchainBackup.ts.
-
-  // NOTE: the backup WRITE goes through the Mac relay (writeOnchainBackupViaMac):
-  // the browser worker cannot apply/chain txs to the public NoAuth controller it
-  // doesn't track, and main-thread proving freezes the tab. The native client
-  // writes the (already-encrypted) ciphertext instead — fast, no freeze. See
-  // onBackup + /api/backup-write.
-
-  async function onBackup() {
-    if (!walletId || !evmAddress) return;
-    setBackupMsg("sign to encrypt…");
-    try {
-      const key = await deriveBackupKey(
-        (td) => signTypedDataAsync(td),
-        evmAddress as `0x${string}`,
-      );
-      // Export the ACCOUNT file (vault + nonce — small), not the whole store.
-      // WebClient.exportAccountFile(AccountId) → AccountFile; serialize() → bytes.
-      const { AccountId } = await import("@miden-sdk/miden-sdk");
-      const clientAny = client as unknown as {
-        exportAccountFile: (id: unknown) => Promise<{ serialize: () => Uint8Array }>;
-      };
-      const file = await runExclusive(() =>
-        clientAny.exportAccountFile(AccountId.fromHex(walletId)),
-      );
-      const fileBytes = file.serialize();
-      // gzip BEFORE encrypt — fewer chunks = fewer write txs + read execs.
-      const enc = await encryptBytes(key, await gzip(fileBytes));
-      const { suffix, prefix } = evmToUserIdFelts(evmAddress);
-      const nWords = Math.ceil(enc.length / 28);
-      setBackupMsg(`writing ${nWords} chunks on-chain…`);
-      // Mac-relay write: send ONLY the ciphertext; the native client writes it to
-      // the public controller (fast, no browser freeze — the browser worker can't
-      // apply txs to the public controller it doesn't track). The server sees only
-      // opaque ciphertext + public ids; the key/wallet never leave the browser.
-      const res = await writeOnchainBackupViaMac({
-        suffix,
-        prefix,
-        controllerId: TRUSTLESS_CONTROLLER_HEX,
-        encryptedBytes: enc,
-      });
-      if (!res.ok) throw new Error(res.error || "on-chain write failed");
-      // Verify the backup is really readable on-chain before declaring success —
-      // the writes go through the mempool, so poll a few block-times for the
-      // committed state to reflect them (warm forces a fresh server-side sync).
-      setBackupMsg("verifying on-chain…");
-      let verified = false;
-      for (let attempt = 0; attempt < 6 && !verified; attempt++) {
-        await warmOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
-        const rb = await readOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
-        if (rb && rb.length === enc.length && rb.every((b, i) => b === enc[i])) {
-          verified = true;
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 5000));
-      }
-      setBackupMsg(
-        verified
-          ? "✓ backed up & verified ON-CHAIN. Restorable on any device, no server."
-          : "✓ backed up on-chain (still confirming — wait ~1 min before Restore).",
-      );
-    } catch (e) {
-      setBackupMsg("backup failed: " + String(e).slice(0, 90));
-    }
-  }
-
-  async function onRestore() {
-    if (!walletId || !evmAddress) return;
-    // Warm the store now (fire-and-forget) so the sync overlaps the signature
-    // prompt below and the read a moment later skips its own sync.
-    const { suffix, prefix } = evmToUserIdFelts(evmAddress);
-    void warmOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
-    setBackupMsg("sign to decrypt…");
-    try {
-      const key = await deriveBackupKey(
-        (td) => signTypedDataAsync(td),
-        evmAddress as `0x${string}`,
-      );
-      setBackupMsg("reading on-chain backup…");
-      const enc = await readOnchainBackup(suffix, prefix, TRUSTLESS_CONTROLLER_HEX);
-      if (!enc) {
-        setBackupMsg("no on-chain backup found for this wallet yet.");
-        return;
-      }
-      // decrypt → gunzip (mirror of backup's gzip → encrypt).
-      const fileBytes = await gunzip(await decryptBytes(key, enc));
-      // WebClient.importAccountFile needs an AccountFile, not raw bytes.
-      const accountFile = AccountFile.deserialize(fileBytes);
-      const clientAny = client as unknown as {
-        importAccountFile: (file: unknown) => Promise<string>;
-      };
-      try {
-        await runExclusive(() => clientAny.importAccountFile(accountFile));
-      } catch (e) {
-        // Same-session restore (account already in this store) — the goal
-        // (having the account locally) is already met, so treat as success.
-        const msg = e instanceof Error ? e.message : String(e);
-        if (!/already being tracked|already exist/i.test(msg)) throw e;
-      }
-      await runExclusive(() => syncState());
-      // Read the confidential balance live from the freshly-imported vault so the
-      // display updates and the message is honest (shows the real amount, incl. 0).
-      const bal = await liveDccBalance(
-        client,
-        runExclusive,
-        walletId,
-        basket?.symbol ?? "DCC",
-      );
-      if (bal != null) setPositionBase(bal);
-      setBackupMsg(
-        bal != null
-          ? `✓ restored from chain — balance: ${fmtDusdc(bal)} USDC.`
-          : "✓ restored from chain.",
-      );
-    } catch (e) {
-      setBackupMsg("restore failed: " + String(e).slice(0, 90));
-    }
-  }
 
   // Browser self-test (gated behind ?backuptest) — validates the backup data
   // path end-to-end WITHOUT MetaMask or funds: creates a throwaway private
@@ -751,7 +635,17 @@ export function TrustlessRedeemPanel({
     let cancelled = false;
     void liveDccBalance(client, runExclusive, walletId, basket?.symbol ?? "DCC").then(
       (b) => {
-        if (!cancelled && b != null) setPositionBase(b);
+        if (cancelled || b == null) return;
+        setPositionBase(b);
+        // A wallet that holds a balance must always have a current backup —
+        // silently (re)back it up on load (debounced, no prompt, no UI).
+        if (b > 0n && evmAddress)
+          void autoBackupWallet({
+            client,
+            runExclusive,
+            walletId,
+            evmAddress: evmAddress as `0x${string}`,
+          });
       },
     );
     return () => {
@@ -1758,6 +1652,9 @@ export function TrustlessRedeemPanel({
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           signTypedData: (td) => signTypedDataAsync(td as any),
           getCode: (addr) => publicClient!.getCode({ address: addr }),
+          // Silent auto-restore on a cleared store / new device.
+          tryRestore: () =>
+            restoreFromBackup({ client, runExclusive, syncState, evmAddress: evmAddress! }),
         });
       } finally {
         resumeSync();
@@ -2163,6 +2060,16 @@ export function TrustlessRedeemPanel({
       if (walletId)
         await stashDccBalance(client, runExclusive, walletId, basket?.symbol ?? "DCC");
 
+      // Silent auto-backup — the withdraw changed the wallet's state.
+      if (walletId && evmAddress)
+        void autoBackupWallet({
+          client,
+          runExclusive,
+          walletId,
+          evmAddress: evmAddress as `0x${string}`,
+          force: true,
+        });
+
       setStage("done");
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
@@ -2441,41 +2348,9 @@ export function TrustlessRedeemPanel({
                   ? `Balance: ${fmtDusdc(positionBase)} USDC — more than you hold; a larger amount just reverts on-chain.`
                   : `Balance: ${fmtDusdc(positionBase)} USDC`}
             </div>
-            {/* Encrypted backup / restore — recovery across browser-clear or
-                device-switch. The confidential vault lives only in this
-                browser; the backup is encrypted with a MetaMask-derived key. */}
-            <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={onBackup}
-                className="nav-cta"
-                style={{ padding: "3px 10px", fontSize: 11 }}
-                title="Encrypt your account with your MetaMask-derived key and write it ON-CHAIN (no server), so you can recover on any device"
-              >
-                🔗 Back up on-chain
-              </button>
-              <button
-                type="button"
-                onClick={onRestore}
-                className="nav-cta"
-                style={{ padding: "3px 10px", fontSize: 11 }}
-                title="Read your on-chain backup and restore your account on this device (re-sign to decrypt)"
-              >
-                ♻️ Restore from chain
-              </button>
-            </div>
-            {backupMsg && (
-              <div
-                style={{
-                  fontSize: 11,
-                  marginTop: 5,
-                  fontFamily: "var(--font-mono-stack)",
-                  color: /fail/.test(backupMsg) ? "crimson" : "var(--ink-3)",
-                }}
-              >
-                {backupMsg}
-              </div>
-            )}
+            {/* Backup & restore are automatic + invisible — no buttons. Your
+                confidential state is backed up on-chain (encrypted) after every
+                deposit/withdraw, and restored silently on a new device. */}
           </div>
         )}
 

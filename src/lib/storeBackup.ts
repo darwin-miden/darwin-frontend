@@ -85,6 +85,43 @@ export function hasBackupKey(evmAddress: `0x${string}`): boolean {
   return keyCache.has(evmAddress.toLowerCase());
 }
 
+// Domain separator so the backup key is a one-way, independent function of the
+// wallet seed — knowing it never reveals the Falcon key.
+const BACKUP_KEY_LABEL = new TextEncoder().encode("darwin-encrypted-backup-v1");
+
+/**
+ * Derive + cache the AES backup key from the SAME material as the wallet seed
+ * (domain-separated), so backup/restore ride the wallet-derivation signature and
+ * NEVER need a second MetaMask prompt — the whole point of invisible auto-backup.
+ * Called from deriveMidenWallet right after the seed is computed. Idempotent.
+ */
+export async function cacheBackupKeyFromSeed(
+  evmAddress: `0x${string}`,
+  seedBytes: Uint8Array,
+): Promise<void> {
+  const cacheId = evmAddress.toLowerCase();
+  if (keyCache.has(cacheId)) return;
+  const material = new Uint8Array(seedBytes.length + BACKUP_KEY_LABEL.length);
+  material.set(seedBytes);
+  material.set(BACKUP_KEY_LABEL, seedBytes.length);
+  const keyBytes = keccak256(material, "bytes");
+  material.fill(0);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    bs(keyBytes),
+    "AES-GCM",
+    false,
+    ["encrypt", "decrypt"],
+  );
+  keyBytes.fill(0);
+  keyCache.set(cacheId, key);
+}
+
+/** Read the cached backup key (null if not derived this session). */
+export function cachedBackupKey(evmAddress: `0x${string}`): CryptoKey | null {
+  return keyCache.get(evmAddress.toLowerCase()) ?? null;
+}
+
 // ── base64 helpers (chunked — the store dump can be large) ──
 function u8ToB64(u8: Uint8Array): string {
   let s = "";
