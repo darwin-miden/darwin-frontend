@@ -77,7 +77,7 @@ import {
   gzip,
   readOnchainBackup,
   warmOnchainBackup,
-  writeOnchainBackup,
+  writeOnchainBackupViaMac,
 } from "../lib/onchainBackup";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
@@ -401,71 +401,11 @@ export function TrustlessRedeemPanel({
   // with a MetaMask-derived key, and writes the chunks into the controller's
   // slot-10 map under a backup-namespace key. See src/lib/onchainBackup.ts.
 
-  // Ensure the browser client tracks the NoAuth controller AND refreshes it to
-  // the node's latest committed state. importAccountById on an already-tracked
-  // account is a no-op, so the syncState is what un-stales the local copy —
-  // without it the first write conflicts with the mempool. Run once before writing.
-  const ensureControllerTracked = async () => {
-    const cImp = client as unknown as {
-      importAccountById?: (id: unknown) => Promise<unknown>;
-    };
-    if (!cImp.importAccountById) return;
-    const { AccountId } = await import("@miden-sdk/miden-sdk");
-    try {
-      await cImp.importAccountById(AccountId.fromHex(TRUSTLESS_CONTROLLER_HEX));
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (!/already being tracked/i.test(msg)) throw e;
-    }
-    await syncState();
-  };
-
-  // Remote prover URL — MUST match the browser's rpcUrl (devnet when
-  // NEXT_PUBLIC_MIDEN_V015=1, else testnet), same as MidenDynamicProviders.
-  const CONTROLLER_PROVER_URL =
-    process.env.NEXT_PUBLIC_MIDEN_V015 === "1"
-      ? "https://tx-prover.devnet.miden.io"
-      : "https://tx-prover.testnet.miden.io";
-
-  // Submit ONE MASM tx to the public NoAuth controller, proved OFF the main
-  // thread. `submitNewTransactionWithProver` and `submitNewTransaction` are the
-  // SDK's WORKER-forwarded submit methods (execute→prove→submit→APPLY on the
-  // worker) — `submitNewTransactionBatch` is NOT worker-forwarded and proves on
-  // the main thread, freezing the tab ("Page Unresponsive"). The remote prover
-  // computes the STARK server-side (near-instant) and is safe here: these txs run
-  // as the PUBLIC controller, so the witness carries only public storage + the
-  // AES-encrypted backup bytes — nothing about the private DCC wallet (which
-  // keeps proving locally; NEVER route it through a remote prover). Local
-  // worker-proving fallback if the remote prover is unreachable. Only "neither
-  // changed the account state" (idempotent re-write) is swallowed.
-  const submitControllerTx = async (code: string) => {
-    const { AccountId, TransactionProver } = await import("@miden-sdk/miden-sdk");
-    const s = await compileTxScript({ code });
-    const req = new TransactionRequestBuilder().withCustomScript(s).build();
-    const accId = AccountId.fromHex(TRUSTLESS_CONTROLLER_HEX);
-    const cAny = client as unknown as {
-      submitNewTransactionWithProver: (id: unknown, r: unknown, p: unknown) => Promise<unknown>;
-      submitNewTransaction: (id: unknown, r: unknown) => Promise<unknown>;
-    };
-    const idempotent = (m: string) => /neither changed the account state/i.test(m);
-    try {
-      await cAny.submitNewTransactionWithProver(
-        accId,
-        req,
-        TransactionProver.newRemoteProver(CONTROLLER_PROVER_URL, 90_000n),
-      );
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (idempotent(msg)) return; // already-current write ⇒ success
-      // Remote prover failed/unreachable → prove locally on the worker.
-      try {
-        await cAny.submitNewTransaction(accId, req);
-      } catch (e2) {
-        const m2 = e2 instanceof Error ? e2.message : String(e2);
-        if (!idempotent(m2)) throw e2;
-      }
-    }
-  };
+  // NOTE: the backup WRITE goes through the Mac relay (writeOnchainBackupViaMac):
+  // the browser worker cannot apply/chain txs to the public NoAuth controller it
+  // doesn't track, and main-thread proving freezes the tab. The native client
+  // writes the (already-encrypted) ciphertext instead — fast, no freeze. See
+  // onBackup + /api/backup-write.
 
   async function onBackup() {
     if (!walletId || !evmAddress) return;
@@ -489,18 +429,18 @@ export function TrustlessRedeemPanel({
       const enc = await encryptBytes(key, await gzip(fileBytes));
       const { suffix, prefix } = evmToUserIdFelts(evmAddress);
       const nWords = Math.ceil(enc.length / 28);
-      setBackupMsg(`writing ${nWords} chunks on-chain (batched)… this takes a bit`);
-      // Track + refresh the controller first, else the first write conflicts.
-      await runExclusive(() => ensureControllerTracked());
-      await runExclusive(() =>
-        writeOnchainBackup({
-          suffix,
-          prefix,
-          encryptedBytes: enc,
-          submitOne: submitControllerTx,
-          onProgress: (d, t) => setBackupMsg(`writing on-chain… tx ${d}/${t}`),
-        }),
-      );
+      setBackupMsg(`writing ${nWords} chunks on-chain…`);
+      // Mac-relay write: send ONLY the ciphertext; the native client writes it to
+      // the public controller (fast, no browser freeze — the browser worker can't
+      // apply txs to the public controller it doesn't track). The server sees only
+      // opaque ciphertext + public ids; the key/wallet never leave the browser.
+      const res = await writeOnchainBackupViaMac({
+        suffix,
+        prefix,
+        controllerId: TRUSTLESS_CONTROLLER_HEX,
+        encryptedBytes: enc,
+      });
+      if (!res.ok) throw new Error(res.error || "on-chain write failed");
       // Verify the backup is really readable on-chain before declaring success —
       // the writes go through the mempool, so poll a few block-times for the
       // committed state to reflect them (warm forces a fresh server-side sync).
@@ -686,20 +626,20 @@ export function TrustlessRedeemPanel({
           r.mode = "full-file";
         }
         r.encBytes = enc.length;
-        log("ensureControllerTracked…");
-        await ensureControllerTracked();
-        log("writing on-chain (submitNewTransactionBatch)…");
+        log("writing on-chain (Mac relay)…");
         const t0 = performance.now();
-        await writeOnchainBackup({
+        const wres = await writeOnchainBackupViaMac({
           suffix,
           prefix,
+          controllerId: TRUSTLESS_CONTROLLER_HEX,
           encryptedBytes: enc,
-          submitOne: submitControllerTx,
-          onProgress: (d, t) => {
-            r.writeProgress = `${d}/${t}`;
-            log(`write ${d}/${t}`);
-          },
         });
+        r.writeRes = wres;
+        if (!wres.ok) {
+          r.error = wres.error;
+          r.ok = false;
+          return r;
+        }
         r.writeMs = Math.round(performance.now() - t0);
         log(`written in ${r.writeMs}ms; reading back (poll for commit)…`);
         // Poll a few block-times for the committed state to reflect the writes.

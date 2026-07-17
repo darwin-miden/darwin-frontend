@@ -231,6 +231,49 @@ export async function writeOnchainBackup(params: {
   return words.length;
 }
 
+/** Base64-encode bytes (browser-safe for small payloads like the ~4 KB backup). */
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+/**
+ * Mac-relay write: the browser encrypts locally and sends ONLY the ciphertext;
+ * the native miden-client writes it into the controller's slot-10 map (fast
+ * proving, no browser freeze, and it sidesteps the browser worker's inability to
+ * apply txs to the public controller). Confidentiality holds — the server sees
+ * only opaque ciphertext + public ids. Returns { ok, nWords } or { ok:false, error }.
+ */
+export async function writeOnchainBackupViaMac(params: {
+  suffix: bigint;
+  prefix: bigint;
+  controllerId: string;
+  encryptedBytes: Uint8Array;
+}): Promise<{ ok: boolean; nWords?: number; error?: string }> {
+  const { suffix, prefix, controllerId, encryptedBytes } = params;
+  try {
+    const r = await fetch("/api/backup-write", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        suffix: suffix.toString(),
+        prefix: prefix.toString(),
+        controllerId,
+        ciphertextB64: bytesToBase64(encryptedBytes),
+      }),
+    });
+    const j = (await r.json().catch(() => null)) as
+      | { ok?: boolean; nWords?: number; error?: string }
+      | null;
+    if (!r.ok || !j?.ok)
+      return { ok: false, error: j?.error || `write failed (${r.status})` };
+    return { ok: true, nWords: j.nWords };
+  } catch (e) {
+    return { ok: false, error: String(e).slice(0, 160) };
+  }
+}
+
 /**
  * Warm the backend store (fire-and-forget): triggers a sync now so a follow-up
  * readOnchainBackup skips its own ~400ms network sync. Call at the start of a
