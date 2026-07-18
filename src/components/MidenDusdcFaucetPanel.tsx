@@ -17,11 +17,46 @@ import { EPOCH_DUSDC_FAUCET_ID } from "../lib/midenConstants";
 export function MidenDusdcFaucetPanel() {
   const wallet = useMidenFiWallet();
   const { connected, address } = wallet;
+  // MidenFi hands us an Address bech32 (account id + interface suffix joined by
+  // a `_`) — the SDK's account hooks want a bare account id. Resolve it to a
+  // canonical id once and drive useAccount / importAccount off that, else
+  // getBalance never hydrates ("No account header record found") and the
+  // balance sticks at 0.
+  const [acctHex, setAcctHex] = useState<string | null>(null);
+  useEffect(() => {
+    if (!address) {
+      setAcctHex(null);
+      return;
+    }
+    if (/^0x[0-9a-fA-F]+$/.test(address)) {
+      setAcctHex(address);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { AccountId, Address } = await import("@miden-sdk/miden-sdk");
+        let id: string;
+        try {
+          id = AccountId.fromBech32(address).toString();
+        } catch {
+          id = Address.fromBech32(address).accountId().toString();
+        }
+        if (!cancelled) setAcctHex(id);
+      } catch {
+        if (!cancelled) setAcctHex(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [address]);
+
   const {
     account: walletAccount,
     isLoading: walletAccountLoading,
     getBalance,
-  } = useAccount(address ?? undefined);
+  } = useAccount(acctHex ?? undefined);
   const { importAccount, isImporting } = useImportAccount();
   const [importTriedFor, setImportTriedFor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -29,14 +64,15 @@ export function MidenDusdcFaucetPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
-  // Hydrate the local account record so getBalance works (same as the deposit panel).
+  // Hydrate the local account record so getBalance works (keyed off the
+  // resolved account id, not the raw MidenFi Address).
   useEffect(() => {
-    if (!address || walletAccountLoading || walletAccount) return;
-    if (importTriedFor === address || isImporting) return;
-    setImportTriedFor(address);
-    importAccount({ type: "id", accountId: address }).catch(() => {});
+    if (!acctHex || walletAccountLoading || walletAccount) return;
+    if (importTriedFor === acctHex || isImporting) return;
+    setImportTriedFor(acctHex);
+    importAccount({ type: "id", accountId: acctHex }).catch(() => {});
   }, [
-    address,
+    acctHex,
     walletAccount,
     walletAccountLoading,
     isImporting,
