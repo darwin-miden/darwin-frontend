@@ -70,10 +70,23 @@ export function MidenDusdcFaucetPanel() {
     setErr(null);
     setStage("Building request…");
     try {
+      // MidenFi hands us an Address bech32 (account id + interface suffix, with
+      // a `_`) — not a bare AccountId. Extract the account id the dispenser pays
+      // out to; send its canonical string (hex/clean-bech32) to the builder.
+      const { AccountId, Address } = await import("@miden-sdk/miden-sdk");
+      let requester = address;
+      if (!/^0x[0-9a-fA-F]+$/.test(address)) {
+        try {
+          requester = AccountId.fromBech32(address).toString();
+        } catch {
+          requester = Address.fromBech32(address).accountId().toString();
+        }
+      }
+
       const resp = await fetch("/api/drip-note", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ requester: address }),
+        body: JSON.stringify({ requester }),
       });
       const data = await resp.json();
       if (!resp.ok || !data.noteB64) {
