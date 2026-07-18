@@ -4,95 +4,57 @@
  * Miden dUSDC faucet — same clean interface as the Sepolia panel (balance + one
  * button), but dUSDC comes from the PERMISSIONLESS on-chain dispenser: the
  * button emits a drip request from the user's own MidenFi wallet, waits for the
- * network to pay out, and claims the private payout. Two MidenFi popups (emit +
- * claim) behind one button.
+ * network to pay out a private note, imports it into MidenFi and consumes it.
+ *
+ * The balance + claim both go through the MidenFi adapter (requestAssets /
+ * importPrivateNote / requestConsume), NOT the frontend web client: the wallet
+ * is a private account, so only MidenFi can read its assets or prove-consume its
+ * private notes. The web client's useAccount can't (it has no account header for
+ * a private id — "No account header record found" — and every balance read 0).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { Transaction } from "@miden-sdk/miden-wallet-adapter-base";
-import { useAccount, useImportAccount } from "@miden-sdk/react";
 
 import { EPOCH_DUSDC_FAUCET_ID } from "../lib/midenConstants";
+
+const DRIP_AMOUNT = 5_000_000; // 5 dUSDC (6-dec)
 
 export function MidenDusdcFaucetPanel() {
   const wallet = useMidenFiWallet();
   const { connected, address } = wallet;
-  // MidenFi hands us an Address bech32 (account id + interface suffix joined by
-  // a `_`) — the SDK's account hooks want a bare account id. Resolve it to a
-  // canonical id once and drive useAccount / importAccount off that, else
-  // getBalance never hydrates ("No account header record found") and the
-  // balance sticks at 0.
-  const [acctHex, setAcctHex] = useState<string | null>(null);
-  useEffect(() => {
-    if (!address) {
-      setAcctHex(null);
-      return;
-    }
-    if (/^0x[0-9a-fA-F]+$/.test(address)) {
-      setAcctHex(address);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const { AccountId, Address } = await import("@miden-sdk/miden-sdk");
-        let id: string;
-        try {
-          id = AccountId.fromBech32(address).toString();
-        } catch {
-          id = Address.fromBech32(address).accountId().toString();
-        }
-        if (!cancelled) setAcctHex(id);
-      } catch {
-        if (!cancelled) setAcctHex(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [address]);
-
-  const {
-    account: walletAccount,
-    isLoading: walletAccountLoading,
-    getBalance,
-  } = useAccount(acctHex ?? undefined);
-  const { importAccount, isImporting } = useImportAccount();
-  const [importTriedFor, setImportTriedFor] = useState<string | null>(null);
+  const [balance, setBalance] = useState<bigint>(0n);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
 
-  // Hydrate the local account record so getBalance works (keyed off the
-  // resolved account id, not the raw MidenFi Address).
-  useEffect(() => {
-    if (!acctHex || walletAccountLoading || walletAccount) return;
-    if (importTriedFor === acctHex || isImporting) return;
-    setImportTriedFor(acctHex);
-    importAccount({ type: "id", accountId: acctHex }).catch(() => {});
-  }, [
-    acctHex,
-    walletAccount,
-    walletAccountLoading,
-    isImporting,
-    importTriedFor,
-    importAccount,
-  ]);
-
-  // Return 0 (not null) when the account record isn't hydrated yet or the asset
-  // isn't in the vault — same as the deposit panel — so it reads "0 dUSDC"
-  // instead of a stuck "…". Updates once the account loads / after a drip.
-  const balance = useMemo(() => {
-    void nonce;
-    if (!walletAccount) return 0n;
+  // Read the balance straight from MidenFi (works for a private account; the
+  // web client can't). Match the dUSDC faucet id whether MidenFi returns it as
+  // hex or bech32 by canonicalising both sides through AccountId.
+  const refreshBalance = useCallback(async () => {
+    if (!wallet.requestAssets) return;
     try {
-      return getBalance(EPOCH_DUSDC_FAUCET_ID);
+      const assets = await wallet.requestAssets();
+      const { AccountId } = await import("@miden-sdk/miden-sdk");
+      const canon = (s: string) => {
+        if (/^0x[0-9a-fA-F]+$/.test(s)) return s.toLowerCase();
+        try {
+          return AccountId.fromBech32(s).toString().toLowerCase();
+        } catch {
+          return s.toLowerCase();
+        }
+      };
+      const want = canon(EPOCH_DUSDC_FAUCET_ID);
+      const hit = assets.find((a) => canon(a.faucetId) === want);
+      setBalance(hit ? BigInt(hit.amount) : 0n);
     } catch {
-      return 0n;
+      /* leave the last known balance in place */
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walletAccount, getBalance, nonce]);
+  }, [wallet]);
+
+  useEffect(() => {
+    if (connected) void refreshBalance();
+  }, [connected, refreshBalance]);
 
   const human = (Number(balance) / 1e6).toLocaleString(undefined, {
     maximumFractionDigits: 2,
@@ -106,7 +68,7 @@ export function MidenDusdcFaucetPanel() {
     try {
       // MidenFi hands us an Address bech32 (account id + interface suffix, with
       // a `_`) — not a bare AccountId. Extract the account id the dispenser pays
-      // out to; send its canonical string (hex/clean-bech32) to the builder.
+      // out to; send its canonical string to the builder.
       const { AccountId, Address } = await import("@miden-sdk/miden-sdk");
       let requester = address;
       if (!/^0x[0-9a-fA-F]+$/.test(address)) {
@@ -126,14 +88,11 @@ export function MidenDusdcFaucetPanel() {
       if (!resp.ok || !data.noteB64) {
         throw new Error(data.error ?? `HTTP ${resp.status}`);
       }
-      const b64ToBytes = (b: string) => Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
-      const {
-        Note,
-        NoteArray,
-        NoteAndArgs,
-        NoteAndArgsArray,
-        TransactionRequestBuilder,
-      } = await import("@miden-sdk/miden-sdk");
+      const b64ToBytes = (b: string) =>
+        Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+      const { Note, NoteArray, TransactionRequestBuilder } = await import(
+        "@miden-sdk/miden-sdk"
+      );
 
       // 1. Emit the drip request from the user's own wallet.
       setStage("Emitting — sign in MidenFi…");
@@ -145,36 +104,37 @@ export function MidenDusdcFaucetPanel() {
         Transaction.createCustomTransaction(address, data.dispenser, txReq),
       );
 
-      // 2. Wait for the network to run the drip + pay out.
+      // 2. Wait for the network to run the drip + create the payout note.
       setStage("Network paying out (~30s)…");
       await new Promise((r) => setTimeout(r, 30_000));
 
-      // 3. Claim the payout. It's a PRIVATE note the dispenser just created —
-      // MidenFi hasn't synced it, so requestConsume (which expects an
-      // already-authenticated note sitting in the store) can't prove it and
-      // silently re-prompts. Instead build a custom consume tx with the note as
-      // an UNAUTHENTICATED input note (the CLI's `input_notes([(note, None)])`
-      // equivalent): the network verifies the note exists on-chain at submission.
-      // Retry a few times to give the payout note a couple of blocks to commit.
+      // 3. Import the private payout into MidenFi, then consume it. Import is the
+      // step requestConsume alone was missing: a fresh private note isn't in
+      // MidenFi's store, so it can't fetch the inclusion proof to prove the
+      // consume (it silently re-prompted). importPrivateNote stores it + fetches
+      // the proof; then requestConsume can prove it. Retry for the payout to
+      // commit; waitForTransaction surfaces a real on-chain failure.
       setStage("Claiming — sign in MidenFi…");
-      const payoutBytes = b64ToBytes(data.payoutNoteB64);
-      const payoutNote = Note.deserialize(payoutBytes);
-      const consumeReq = new TransactionRequestBuilder()
-        .withInputNotes(new NoteAndArgsArray([new NoteAndArgs(payoutNote)]))
-        .build();
+      const payoutFileBytes = b64ToBytes(data.payoutFileB64);
       let claimed = false;
       let lastErr: unknown = null;
       for (let i = 0; i < 5 && !claimed; i++) {
         try {
-          await wallet.requestTransaction!(
-            Transaction.createCustomTransaction(
-              address,
-              address,
-              consumeReq,
-              [data.payoutId],
-              [payoutBytes],
-            ),
-          );
+          try {
+            await wallet.importPrivateNote!(payoutFileBytes);
+          } catch {
+            /* already imported on a prior attempt — fine */
+          }
+          const txId = await wallet.requestConsume!({
+            faucetId: EPOCH_DUSDC_FAUCET_ID,
+            noteId: data.payoutId,
+            noteType: "private",
+            amount: DRIP_AMOUNT,
+            noteBytes: data.payoutNoteB64,
+          });
+          if (wallet.waitForTransaction) {
+            await wallet.waitForTransaction(txId, 60_000).catch(() => {});
+          }
           claimed = true;
         } catch (e) {
           lastErr = e;
@@ -182,15 +142,17 @@ export function MidenDusdcFaucetPanel() {
         }
       }
       if (!claimed) throw lastErr ?? new Error("claim failed");
+
+      setStage("Refreshing balance…");
+      await refreshBalance();
       setStage(null);
-      setNonce((n) => n + 1);
     } catch (e) {
-      setErr(String((e as Error).message ?? e).slice(0, 180));
+      setErr(String((e as Error).message ?? e).slice(0, 200));
       setStage(null);
     } finally {
       setBusy(false);
     }
-  }, [address, busy, wallet]);
+  }, [address, busy, wallet, refreshBalance]);
 
   return (
     <section style={{ marginBottom: 40, maxWidth: 720 }}>
