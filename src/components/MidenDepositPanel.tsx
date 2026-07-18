@@ -19,12 +19,10 @@
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { Transaction } from "@miden-sdk/miden-wallet-adapter-base";
 import { AccountId } from "@miden-sdk/miden-sdk";
-import { useCompile, useSyncState } from "@miden-sdk/react";
+import { useSyncState } from "@miden-sdk/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Basket } from "../lib/baskets";
-import { buildDarwinNoteRequest } from "../lib/midenNote";
-import { basketNav, usePrices } from "../lib/prices";
 
 interface Props {
   basket: Basket;
@@ -184,8 +182,6 @@ export function MidenDepositPanel({ basket }: Props) {
   const wallet = useMidenFiWallet();
   const { connected, address } = wallet;
   const { syncHeight } = useSyncState();
-  const compile = useCompile();
-  const prices = usePrices();
   // useTransaction() drives the WebClient's transaction prover directly,
   // which raises `miden::protocol::auth::request` for the wallet to
   // sign — but the MidenFi extension hasn't wired its auth handler on
@@ -324,81 +320,124 @@ export function MidenDepositPanel({ basket }: Props) {
     );
   }
 
-  const controllerId = BASKET_CONTROLLER_ID[basket.symbol];
-
   async function handleSend() {
-    if (!asset || !controllerId || !address) return;
-    if (!wallet.requestTransaction) {
+    if (!asset || !address) return;
+    if (!wallet.requestTransaction || !wallet.requestConsume) {
       setTxState({
         isLoading: false,
         stage: null,
         txId: null,
-        error: "wallet.requestTransaction not available",
+        error: "wallet does not expose requestTransaction/requestConsume",
       });
       return;
     }
-    const base = 10n ** BigInt(asset.decimals);
-    const microHuman = BigInt(Math.floor(parseFloat(amount || "0") * 1_000_000));
-    const units = (microHuman * base) / 1_000_000n;
-    setTxState({ isLoading: true, stage: "building note", txId: null, error: null });
-    try {
-      // Resolve sender address to an AccountId (bech32 vs hex sniff)
-      // even though we don't pass it to the wallet — buildDarwinNote
-      // still needs the parsed form internally.
-      const senderAccountId = /^0x[0-9a-f]+$/i.test(address)
-        ? AccountId.fromHex(address)
-        : AccountId.fromBech32(address);
-      void senderAccountId;
-
-      setTxState((s) => ({ ...s, stage: "compiling MASM" }));
-      // Resolve basket NAV from the cached price feed; without it
-      // the script defaults to amount × 9970 / 10000 which conflates
-      // asset base units with basket base units and credits ~300×
-      // the actual USD value of the deposit on a $30k-NAV basket.
-      const basketNavUsd = basketNav(basket, prices.data) ?? null;
-      const priceUsd = ASSET_PRICE_USD[asset.id] ?? null;
-      const mathFelts =
-        basketNavUsd && priceUsd
-          ? computeStorageFelts(units, asset.decimals, priceUsd, basketNavUsd)
-          : undefined;
-
-      const txRequest = await buildDarwinNoteRequest(compile, {
-        // v2 calls set_user_position after receive_asset so the
-        // controller credits the user's slot-10 entry, which the
-        // portfolio panel reads to display a non-zero basket
-        // position. The 7-felt note storage (3 math + 2 user_id +
-        // 2 basket_id felts) is filled by buildDarwinNoteRequest
-        // automatically — basket_id ensures DCC/DAG/DCO deposits
-        // hit distinct slot-10 entries instead of sharing one.
-        kind: "atomic-deposit-v2",
-        sender: address,
-        controller: controllerId,
-        faucetId: asset.id,
-        amount: units,
-        basketFaucetId: BASKET_TOKEN_FAUCET[basket.symbol],
-        storageFelts: mathFelts,
+    // The confidential rail deposits dUSDC collateral and mints basket tokens
+    // 1:1 from the REAL drained collateral (audit-hardened) into a private note.
+    // Only dUSDC is supported for now.
+    if (asset.id !== EPOCH_DUSDC_FAUCET_ID) {
+      setTxState({
+        isLoading: false,
+        stage: null,
+        txId: null,
+        error: "Miden-wallet deposits take dUSDC — pick dUSDC (mint it on /faucet).",
       });
+      return;
+    }
+    const units = requestedUnits; // dUSDC base units
+    setTxState({ isLoading: true, stage: "building deposit", txId: null, error: null });
+    try {
+      const { AccountId, Address, Note, NoteArray, TransactionRequestBuilder } =
+        await import("@miden-sdk/miden-sdk");
+      // MidenFi hands a bech32 Address (account id + `_interface`); extract the
+      // bare account id hex the confidential builder expects.
+      let hexId = address;
+      if (!/^0x[0-9a-fA-F]+$/.test(address)) {
+        try {
+          hexId = AccountId.fromBech32(address).toString();
+        } catch {
+          hexId = Address.fromBech32(address).accountId().toString();
+        }
+      }
+      const b64ToBytes = (b: string) =>
+        Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
 
-      // Use the MidenFi extension's custom-transaction path. The
-      // extension renders its own popup which signs natively (handles
-      // miden::protocol::auth::request internally), bypassing the
-      // WebClient's prover-side auth chain that doesn't have a
-      // MidenFi handler bound to it.
-      setTxState((s) => ({ ...s, stage: "waiting for MidenFi popup" }));
-      // Transaction.createCustomTransaction returns a fully-shaped
-      // MidenTransaction ({type, payload}); pass it directly to
-      // requestTransaction without wrapping.
-      const midenTx = Transaction.createCustomTransaction(
-        address,
-        controllerId,
-        txRequest,
+      // 1. Build the confidential deposit note (drains dUSDC → mints basket
+      //    tokens into a PRIVATE payback note for the recipient).
+      const r = await fetch("/api/confidential-note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sender: hexId,
+          recipient: hexId,
+          basket: basket.symbol,
+          amount: units.toString(),
+        }),
+      });
+      const built = (await r.json()) as {
+        noteB64?: string;
+        paybackId?: string;
+        paybackFileB64?: string;
+        mintAmount?: string;
+        faucetId?: string;
+        error?: string;
+      };
+      if (!r.ok || !built.noteB64 || !built.paybackFileB64 || !built.paybackId) {
+        throw new Error(built.error ?? `confidential-note API ${r.status}`);
+      }
+
+      // 2. Emit the deposit note from the MidenFi wallet (it carries the dUSDC).
+      setTxState((s) => ({ ...s, stage: "sign deposit in MidenFi" }));
+      const depositNote = Note.deserialize(b64ToBytes(built.noteB64));
+      const emitReq = new TransactionRequestBuilder()
+        .withOwnOutputNotes(new NoteArray([depositNote]))
+        .build();
+      await wallet.requestTransaction!(
+        Transaction.createCustomTransaction(address, built.faucetId!, emitReq),
       );
-      const txId = await wallet.requestTransaction(midenTx);
+
+      // 3. Wait for the network to mint the basket-token payback, polling the
+      //    node for its id (a read, no wallet prompt) so we claim as soon as
+      //    it's committed instead of a blind wait.
+      setTxState((s) => ({ ...s, stage: "network minting your position…" }));
+      let ready = false;
+      for (let i = 0; i < 50 && !ready; i++) {
+        try {
+          const st = await fetch(`/api/note-status?id=${built.paybackId}`);
+          const j = await st.json();
+          if (j.committed) ready = true;
+        } catch {
+          /* not committed yet */
+        }
+        if (!ready) await new Promise((res) => setTimeout(res, 3_000));
+      }
+      if (!ready) {
+        throw new Error(
+          "the network hasn't minted your position yet — wait a few seconds and click again",
+        );
+      }
+
+      // 4. Import + consume the private minted-token note into your wallet.
+      setTxState((s) => ({ ...s, stage: "sign claim in MidenFi" }));
+      try {
+        await wallet.importPrivateNote?.(b64ToBytes(built.paybackFileB64));
+      } catch {
+        /* may already be imported */
+      }
+      const txId = await wallet.requestConsume!({
+        faucetId: built.faucetId!,
+        noteId: built.paybackId,
+        noteType: "private",
+        amount: Number(built.mintAmount ?? units),
+      });
+      if (wallet.waitForTransaction) {
+        await wallet.waitForTransaction(txId, 90_000).catch(() => {});
+      }
       setTxState({ isLoading: false, stage: null, txId, error: null });
+      void refreshBalance();
     } catch (e) {
       const msg = String((e as Error).message ?? e);
       setTxState({ isLoading: false, stage: null, txId: null, error: msg });
-      console.error("miden deposit failed", e);
+      console.error("miden confidential deposit failed", e);
     }
   }
 
@@ -427,11 +466,11 @@ export function MidenDepositPanel({ basket }: Props) {
           marginBottom: 8,
         }}
       >
-        Compile <code>atomic_deposit_note.masm</code> in your browser,
-        wrap your asset, and submit a STARK-proved transaction from your
-        Miden wallet (<code>{address.slice(0, 10)}…</code>) to the{" "}
-        {basket.symbol} controller (
-        <code>{controllerId?.slice(0, 14)}…</code>).
+        Deposit dUSDC from your MidenFi wallet (
+        <code>{address.slice(0, 10)}…</code>). The Miden network drains your
+        collateral and mints {basket.symbol} tokens 1:1 into a{" "}
+        <strong>private note</strong> you consume — confidential balance,
+        no server, no operator. Two signatures: deposit, then claim.
       </p>
       <p
         style={{
