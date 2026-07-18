@@ -69,8 +69,13 @@ export async function POST(req: Request) {
   }
 
   const requester = body.requester?.trim();
-  if (!requester || !/^(0x)?[0-9a-zA-Z]{6,120}$/.test(requester)) {
-    return NextResponse.json({ error: "invalid requester id" }, { status: 400 });
+  // Accept hex (0x…) or bech32 (mtst1…). Keep it to safe argv chars (no shell
+  // metacharacters) but let the builder do the real id validation.
+  if (!requester || !/^[0-9a-zA-Z]{6,200}$/.test(requester)) {
+    return NextResponse.json(
+      { error: `invalid requester id (got: ${JSON.stringify(requester)?.slice(0, 80)})` },
+      { status: 400 },
+    );
   }
   if (!DISPENSER_ID) {
     return NextResponse.json(
