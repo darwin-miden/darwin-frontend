@@ -33,7 +33,6 @@ export function MidenDusdcFaucetPanel() {
     if (!wallet.requestAssets) return;
     try {
       const assets = await wallet.requestAssets();
-      console.log("[faucet-debug] requestAssets ->", assets);
       const { AccountId } = await import("@miden-sdk/miden-sdk");
       const canon = (s: string) => {
         if (/^0x[0-9a-fA-F]+$/.test(s)) return s.toLowerCase();
