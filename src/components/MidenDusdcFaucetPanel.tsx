@@ -33,6 +33,7 @@ export function MidenDusdcFaucetPanel() {
     if (!wallet.requestAssets) return;
     try {
       const assets = await wallet.requestAssets();
+      console.log("[faucet-debug] requestAssets ->", assets);
       const { AccountId } = await import("@miden-sdk/miden-sdk");
       const canon = (s: string) => {
         if (/^0x[0-9a-fA-F]+$/.test(s)) return s.toLowerCase();
@@ -88,13 +89,9 @@ export function MidenDusdcFaucetPanel() {
       }
       const b64ToBytes = (b: string) =>
         Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
-      const {
-        Note,
-        NoteArray,
-        NoteAndArgs,
-        NoteAndArgsArray,
-        TransactionRequestBuilder,
-      } = await import("@miden-sdk/miden-sdk");
+      const { Note, NoteArray, TransactionRequestBuilder } = await import(
+        "@miden-sdk/miden-sdk"
+      );
 
       // 1. Emit the drip request from the user's own wallet.
       setStage("Emitting — sign in MidenFi…");
@@ -110,39 +107,60 @@ export function MidenDusdcFaucetPanel() {
       setStage("Network paying out (~30s)…");
       await new Promise((r) => setTimeout(r, 30_000));
 
-      // 3. Claim the payout. It's a PRIVATE note the dispenser just created —
-      // requestConsume expects an already-authenticated note in MidenFi's store
-      // and silently re-prompts on a fresh one. Consuming it as an
-      // UNAUTHENTICATED input note inside a custom tx works cleanly (the network
-      // verifies the note exists on-chain at submission — the CLI's
-      // `input_notes([(note, None)])` equivalent). Retry a couple times to give
-      // the payout note a block or two to commit.
+      // 3. Claim the private payout — DIAGNOSTIC BUILD. Log everything MidenFi
+      // sees so we can pinpoint why the consume doesn't land: does the payout
+      // show up as consumable? does import work? what does requestConsume /
+      // waitForTransaction actually return?
       setStage("Claiming — sign in MidenFi…");
-      const payoutBytes = b64ToBytes(data.payoutNoteB64);
-      const payoutNote = Note.deserialize(payoutBytes);
-      const consumeReq = new TransactionRequestBuilder()
-        .withInputNotes(new NoteAndArgsArray([new NoteAndArgs(payoutNote)]))
-        .build();
-      let claimed = false;
-      let lastErr: unknown = null;
-      for (let i = 0; i < 3 && !claimed; i++) {
+      const D = "[faucet-debug]";
+      console.log(D, "payoutId", data.payoutId, "dispenser", data.dispenser);
+
+      const dumpConsumable = async (when: string) => {
+        if (!wallet.requestConsumableNotes) return;
         try {
-          await wallet.requestTransaction!(
-            Transaction.createCustomTransaction(
-              address,
-              address,
-              consumeReq,
-              [data.payoutId],
-              [payoutBytes],
-            ),
-          );
-          claimed = true;
+          const notes = await wallet.requestConsumableNotes();
+          console.log(D, `consumable notes ${when}:`, notes);
         } catch (e) {
-          lastErr = e;
-          if (i < 2) await new Promise((x) => setTimeout(x, 6_000));
+          console.warn(D, `requestConsumableNotes ${when} threw`, e);
+        }
+      };
+
+      await dumpConsumable("before import");
+
+      const payoutFileBytes = b64ToBytes(data.payoutFileB64);
+      try {
+        const imp = await wallet.importPrivateNote!(payoutFileBytes);
+        console.log(D, "importPrivateNote OK ->", imp);
+      } catch (e) {
+        console.warn(D, "importPrivateNote FAILED", e);
+      }
+
+      await dumpConsumable("after import");
+
+      let txId: string | undefined;
+      try {
+        txId = await wallet.requestConsume!({
+          faucetId: EPOCH_DUSDC_FAUCET_ID,
+          noteId: data.payoutId,
+          noteType: "private",
+          amount: 5_000_000,
+          noteBytes: data.payoutNoteB64,
+        });
+        console.log(D, "requestConsume returned txId", txId);
+      } catch (e) {
+        console.error(D, "requestConsume THREW", e);
+        throw e;
+      }
+
+      if (txId && wallet.waitForTransaction) {
+        setStage("Confirming on-chain…");
+        try {
+          const r = await wallet.waitForTransaction(txId, 90_000);
+          console.log(D, "waitForTransaction result", r);
+        } catch (e) {
+          console.error(D, "waitForTransaction threw", e);
         }
       }
-      if (!claimed) throw lastErr ?? new Error("claim failed");
 
       setStage("Refreshing balance…");
       await refreshBalance();
