@@ -18,8 +18,6 @@ import { Transaction } from "@miden-sdk/miden-wallet-adapter-base";
 
 import { EPOCH_DUSDC_FAUCET_ID } from "../lib/midenConstants";
 
-const DRIP_AMOUNT = 5_000_000; // 5 dUSDC (6-dec)
-
 export function MidenDusdcFaucetPanel() {
   const wallet = useMidenFiWallet();
   const { connected, address } = wallet;
@@ -90,9 +88,13 @@ export function MidenDusdcFaucetPanel() {
       }
       const b64ToBytes = (b: string) =>
         Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
-      const { Note, NoteArray, TransactionRequestBuilder } = await import(
-        "@miden-sdk/miden-sdk"
-      );
+      const {
+        Note,
+        NoteArray,
+        NoteAndArgs,
+        NoteAndArgsArray,
+        TransactionRequestBuilder,
+      } = await import("@miden-sdk/miden-sdk");
 
       // 1. Emit the drip request from the user's own wallet.
       setStage("Emitting — sign in MidenFi…");
@@ -108,37 +110,36 @@ export function MidenDusdcFaucetPanel() {
       setStage("Network paying out (~30s)…");
       await new Promise((r) => setTimeout(r, 30_000));
 
-      // 3. Import the private payout into MidenFi, then consume it. Import is the
-      // step requestConsume alone was missing: a fresh private note isn't in
-      // MidenFi's store, so it can't fetch the inclusion proof to prove the
-      // consume (it silently re-prompted). importPrivateNote stores it + fetches
-      // the proof; then requestConsume can prove it. Retry for the payout to
-      // commit; waitForTransaction surfaces a real on-chain failure.
+      // 3. Claim the payout. It's a PRIVATE note the dispenser just created —
+      // requestConsume expects an already-authenticated note in MidenFi's store
+      // and silently re-prompts on a fresh one. Consuming it as an
+      // UNAUTHENTICATED input note inside a custom tx works cleanly (the network
+      // verifies the note exists on-chain at submission — the CLI's
+      // `input_notes([(note, None)])` equivalent). Retry a couple times to give
+      // the payout note a block or two to commit.
       setStage("Claiming — sign in MidenFi…");
-      const payoutFileBytes = b64ToBytes(data.payoutFileB64);
+      const payoutBytes = b64ToBytes(data.payoutNoteB64);
+      const payoutNote = Note.deserialize(payoutBytes);
+      const consumeReq = new TransactionRequestBuilder()
+        .withInputNotes(new NoteAndArgsArray([new NoteAndArgs(payoutNote)]))
+        .build();
       let claimed = false;
       let lastErr: unknown = null;
-      for (let i = 0; i < 5 && !claimed; i++) {
+      for (let i = 0; i < 3 && !claimed; i++) {
         try {
-          try {
-            await wallet.importPrivateNote!(payoutFileBytes);
-          } catch {
-            /* already imported on a prior attempt — fine */
-          }
-          const txId = await wallet.requestConsume!({
-            faucetId: EPOCH_DUSDC_FAUCET_ID,
-            noteId: data.payoutId,
-            noteType: "private",
-            amount: DRIP_AMOUNT,
-            noteBytes: data.payoutNoteB64,
-          });
-          if (wallet.waitForTransaction) {
-            await wallet.waitForTransaction(txId, 60_000).catch(() => {});
-          }
+          await wallet.requestTransaction!(
+            Transaction.createCustomTransaction(
+              address,
+              address,
+              consumeReq,
+              [data.payoutId],
+              [payoutBytes],
+            ),
+          );
           claimed = true;
         } catch (e) {
           lastErr = e;
-          if (i < 4) await new Promise((x) => setTimeout(x, 6_000));
+          if (i < 2) await new Promise((x) => setTimeout(x, 6_000));
         }
       }
       if (!claimed) throw lastErr ?? new Error("claim failed");
