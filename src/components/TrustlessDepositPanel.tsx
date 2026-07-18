@@ -59,7 +59,12 @@ import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
 // string "falcon" — the low-level path doesn't convert.
 // Force the numeric enum value directly (2 = AuthRpoFalcon512).
 const AUTH_SCHEME_FALCON_ENUM_VALUE = 2;
-import { useAccount, usePublicClient, useSignTypedData } from "wagmi";
+import {
+  useAccount,
+  usePublicClient,
+  useSignTypedData,
+  useWriteContract,
+} from "wagmi";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, keccak256, parseUnits, toBytes } from "viem";
 
@@ -99,6 +104,22 @@ const ERC20_BALANCE_ABI = [
     stateMutability: "view",
     inputs: [{ name: "account", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+// The test USDC exposes a permissionless public `mint`. The faucet button
+// calls it straight from the user's own wallet — no server, no reserve, they
+// just interact with the token contract (they hold Sepolia ETH for gas).
+const ERC20_MINT_ABI = [
+  {
+    name: "mint",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
   },
 ] as const;
 
@@ -229,6 +250,7 @@ export function TrustlessDepositPanel({
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
   const publicClient = usePublicClient();
+  const { writeContractAsync } = useWriteContract();
   const { switchChainAsync } = useSwitchChain();
 
   const { createWallet, wallet, isCreating, error: createErr, reset } =
@@ -344,13 +366,11 @@ export function TrustlessDepositPanel({
   // The connected wallet's Sepolia USDC balance (18-dec base units), so the
   // deposit input is bounded by real funds and a Max button can fill it in.
   const [usdcBalance, setUsdcBalance] = useState<bigint | null>(null);
-  // Testnet faucet plumbing: mint mock USDC to a new account so a first-time
-  // tester (e.g. the Miden team) never has to source it. `faucetNonce` forces a
-  // balance re-read after a mint; `autoFundedRef` guards the auto-mint to once
-  // per address so it can't loop while the mint is in flight.
+  // Testnet faucet plumbing: the "Get test USDC" button calls the token's
+  // public mint() from the user's own wallet. `faucetNonce` forces a balance
+  // re-read after the mint lands; `faucetBusy` disables the button meanwhile.
   const [faucetNonce, setFaucetNonce] = useState(0);
   const [faucetBusy, setFaucetBusy] = useState(false);
-  const autoFundedRef = useRef<Set<string>>(new Set());
 
   // Read (and refresh) the ETH-side USDC balance. Refreshes on every stage
   // change so it updates right after a deposit debits the wallet.
@@ -386,32 +406,30 @@ export function TrustlessDepositPanel({
     if (!evmAddress || faucetBusy) return;
     setFaucetBusy(true);
     try {
-      const r = await fetch("/api/faucet-usdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: evmAddress, token: "epoch-usdc" }),
+      // Permissionless client-side mint: the user calls the test USDC's public
+      // mint() from their OWN wallet (they hold Sepolia ETH for gas). No server,
+      // no reserve — they interact with the contract directly.
+      const hash = await writeContractAsync({
+        address: EPOCH_USDC_SEPOLIA.address,
+        abi: ERC20_MINT_ABI,
+        functionName: "mint",
+        args: [
+          evmAddress as `0x${string}`,
+          parseUnits("100", EPOCH_USDC_SEPOLIA.decimals),
+        ],
       });
-      if (r.ok) {
-        for (let i = 0; i < 8; i++) {
-          await new Promise((res) => setTimeout(res, 2_000));
-          setFaucetNonce((n) => n + 1);
-        }
+      if (publicClient) {
+        await publicClient
+          .waitForTransactionReceipt({ hash })
+          .catch(() => undefined);
       }
+      setFaucetNonce((n) => n + 1);
     } catch {
-      /* best-effort */
+      /* user rejected, or no gas — best-effort */
     } finally {
       setFaucetBusy(false);
     }
-  }, [evmAddress, faucetBusy]);
-
-  // Auto-fund a brand-new account: once its balance reads ~empty, mint once.
-  useEffect(() => {
-    if (!evmAddress || usdcBalance == null) return;
-    if (usdcBalance >= parseUnits("1", EPOCH_USDC_SEPOLIA.decimals)) return;
-    if (autoFundedRef.current.has(evmAddress)) return;
-    autoFundedRef.current.add(evmAddress);
-    void mintTestUsdc();
-  }, [evmAddress, usdcBalance, mintTestUsdc]);
+  }, [evmAddress, faucetBusy, writeContractAsync, publicClient]);
   const [sepoliaTx, setSepoliaTx] = useState<string | null>(null);
   const [midenNoteId, setMidenNoteId] = useState<string | null>(null);
   const [consumeTx, setConsumeTx] = useState<string | null>(null);
