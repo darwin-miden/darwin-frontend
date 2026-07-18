@@ -109,16 +109,14 @@ export function MidenDusdcFaucetPanel() {
       const payoutId = data.payoutId as string | undefined;
       if (!payoutId) throw new Error("builder did not return a payout id");
       setStage("Network paying out…");
-      const { NoteId, RpcClient, Endpoint } = await import("@miden-sdk/miden-sdk");
-      const rpc = new RpcClient(Endpoint.testnet());
-      const target = NoteId.fromHex(payoutId);
       let ready = false;
       for (let i = 0; i < 40 && !ready; i++) {
         try {
-          const found = await rpc.getNotesById([target]);
-          if (found && found.length > 0) ready = true;
+          const r = await fetch(`/api/note-status?id=${payoutId}`);
+          const j = await r.json();
+          if (j.committed) ready = true;
         } catch {
-          /* not committed on-chain yet */
+          /* node not reachable this tick — retry */
         }
         if (!ready) await new Promise((r) => setTimeout(r, 3_000));
       }
