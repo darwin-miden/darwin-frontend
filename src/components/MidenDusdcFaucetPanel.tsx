@@ -46,24 +46,23 @@ export function MidenDusdcFaucetPanel() {
     importAccount,
   ]);
 
+  // Return 0 (not null) when the account record isn't hydrated yet or the asset
+  // isn't in the vault — same as the deposit panel — so it reads "0 dUSDC"
+  // instead of a stuck "…". Updates once the account loads / after a drip.
   const balance = useMemo(() => {
-    if (!walletAccount) return null;
+    void nonce;
+    if (!walletAccount) return 0n;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-      nonce;
       return getBalance(EPOCH_DUSDC_FAUCET_ID);
     } catch {
-      return null;
+      return 0n;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletAccount, getBalance, nonce]);
 
-  const human =
-    balance != null
-      ? (Number(balance) / 1e6).toLocaleString(undefined, {
-          maximumFractionDigits: 2,
-        })
-      : null;
+  const human = (Number(balance) / 1e6).toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  });
 
   const getDusdc = useCallback(async () => {
     if (!address || busy) return;
@@ -173,8 +172,7 @@ export function MidenDusdcFaucetPanel() {
           }}
         >
           <div style={{ fontFamily: "var(--font-mono-stack)", fontSize: 14 }}>
-            dUSDC balance:{" "}
-            <strong>{human == null ? "…" : `${human} dUSDC`}</strong>
+            dUSDC balance: <strong>{human} dUSDC</strong>
           </div>
           <button
             type="button"
