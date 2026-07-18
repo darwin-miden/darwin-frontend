@@ -27,6 +27,7 @@
  */
 
 import type { InputNoteDetails } from "@miden-sdk/miden-wallet-adapter-base";
+import { Transaction } from "@miden-sdk/miden-wallet-adapter-base";
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { useState } from "react";
 
@@ -85,7 +86,7 @@ const ASSETS: AssetSpec[] = [
 type DripStatus =
   | { kind: "idle" }
   | { kind: "minting" }
-  | { kind: "minted"; txId: string; noteId: string }
+  | { kind: "minted"; txId: string; noteId: string; noteBytes?: string }
   | { kind: "claiming"; noteId: string }
   | { kind: "claimed"; noteId: string }
   | { kind: "err"; message: string };
@@ -150,6 +151,55 @@ export function FaucetPanel() {
 
   async function drip(asset: AssetSpec) {
     setDrips((s) => ({ ...s, [asset.symbol]: { kind: "minting" } }));
+
+    // dUSDC → PERMISSIONLESS dispenser: the user emits a drip request from their
+    // OWN wallet; the network's NTX builder runs it against the on-chain
+    // dispenser, which pays out 5 dUSDC. No server-side signing (unlike the mint
+    // path below). The payout is a private note → claimed with its bytes.
+    if (asset.faucetId === EPOCH_DUSDC_FAUCET_ID) {
+      if (!address) return;
+      try {
+        const resp = await fetch("/api/drip-note", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ requester: address }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.noteB64) {
+          setDrips((s) => ({
+            ...s,
+            [asset.symbol]: { kind: "err", message: data.error ?? `HTTP ${resp.status}` },
+          }));
+          return;
+        }
+        const b64ToBytes = (b: string) => Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+        const { Note, NoteArray, TransactionRequestBuilder } = await import(
+          "@miden-sdk/miden-sdk"
+        );
+        const dripNote = Note.deserialize(b64ToBytes(data.noteB64));
+        const txReq = new TransactionRequestBuilder()
+          .withOwnOutputNotes(new NoteArray([dripNote]))
+          .build();
+        const midenTx = Transaction.createCustomTransaction(address, data.dispenser, txReq);
+        await wallet.requestTransaction!(midenTx);
+        setDrips((s) => ({
+          ...s,
+          [asset.symbol]: {
+            kind: "minted",
+            txId: data.noteId,
+            noteId: data.payoutId,
+            noteBytes: data.payoutNoteB64,
+          },
+        }));
+      } catch (e) {
+        setDrips((s) => ({
+          ...s,
+          [asset.symbol]: { kind: "err", message: String((e as Error).message ?? e) },
+        }));
+      }
+      return;
+    }
+
     try {
       const resp = await fetch("/api/faucet/mint", {
         method: "POST",
@@ -180,7 +230,7 @@ export function FaucetPanel() {
     }
   }
 
-  async function claimDrip(asset: AssetSpec, noteId: string) {
+  async function claimDrip(asset: AssetSpec, noteId: string, noteBytes?: string) {
     if (!wallet.requestConsume) {
       setDrips((s) => ({
         ...s,
@@ -213,8 +263,11 @@ export function FaucetPanel() {
       wallet.requestConsume!({
         faucetId: asset.faucetId,
         noteId,
-        noteType: "public",
+        // dUSDC dispenser pays out a PRIVATE note → hand its bytes so MidenFi
+        // imports it before consuming (public assets are discovered by sync).
+        noteType: asset.faucetId === EPOCH_DUSDC_FAUCET_ID ? "private" : "public",
         amount: Number(asset.dripBase),
+        ...(noteBytes ? { noteBytes } : {}),
       })
         .then(() => ({ ok: true as const }))
         .catch((err: unknown) => ({ ok: false as const, err }));
@@ -387,7 +440,11 @@ export function FaucetPanel() {
               {isMinted ? (
                 <button
                   onClick={() =>
-                    claimDrip(a, s.kind === "minted" ? s.noteId : (s as { noteId: string }).noteId)
+                    claimDrip(
+                      a,
+                      s.kind === "minted" ? s.noteId : (s as { noteId: string }).noteId,
+                      s.kind === "minted" ? s.noteBytes : undefined,
+                    )
                   }
                   disabled={isWorking}
                   style={{
