@@ -14,8 +14,6 @@ import { useAccount, useImportAccount } from "@miden-sdk/react";
 
 import { EPOCH_DUSDC_FAUCET_ID } from "../lib/midenConstants";
 
-const DRIP_AMOUNT = 5_000_000; // 5 dUSDC (6-dec)
-
 export function MidenDusdcFaucetPanel() {
   const wallet = useMidenFiWallet();
   const { connected, address } = wallet;
@@ -93,9 +91,13 @@ export function MidenDusdcFaucetPanel() {
         throw new Error(data.error ?? `HTTP ${resp.status}`);
       }
       const b64ToBytes = (b: string) => Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
-      const { Note, NoteArray, TransactionRequestBuilder } = await import(
-        "@miden-sdk/miden-sdk"
-      );
+      const {
+        Note,
+        NoteArray,
+        NoteAndArgs,
+        NoteAndArgsArray,
+        TransactionRequestBuilder,
+      } = await import("@miden-sdk/miden-sdk");
 
       // 1. Emit the drip request from the user's own wallet.
       setStage("Emitting — sign in MidenFi…");
@@ -111,25 +113,36 @@ export function MidenDusdcFaucetPanel() {
       setStage("Network paying out (~30s)…");
       await new Promise((r) => setTimeout(r, 30_000));
 
-      // 3. Claim the private payout (retry — the note needs a few sync ticks).
+      // 3. Claim the payout. It's a PRIVATE note the dispenser just created —
+      // MidenFi hasn't synced it, so requestConsume (which expects an
+      // already-authenticated note sitting in the store) can't prove it and
+      // silently re-prompts. Instead build a custom consume tx with the note as
+      // an UNAUTHENTICATED input note (the CLI's `input_notes([(note, None)])`
+      // equivalent): the network verifies the note exists on-chain at submission.
+      // Retry a few times to give the payout note a couple of blocks to commit.
       setStage("Claiming — sign in MidenFi…");
+      const payoutBytes = b64ToBytes(data.payoutNoteB64);
+      const payoutNote = Note.deserialize(payoutBytes);
+      const consumeReq = new TransactionRequestBuilder()
+        .withInputNotes(new NoteAndArgsArray([new NoteAndArgs(payoutNote)]))
+        .build();
       let claimed = false;
       let lastErr: unknown = null;
-      for (let i = 0; i < 8 && !claimed; i++) {
-        const r = await wallet
-          .requestConsume!({
-            faucetId: EPOCH_DUSDC_FAUCET_ID,
-            noteId: data.payoutId,
-            noteType: "private",
-            amount: DRIP_AMOUNT,
-            noteBytes: data.payoutNoteB64,
-          })
-          .then(() => ({ ok: true as const }))
-          .catch((e: unknown) => ({ ok: false as const, e }));
-        if (r.ok) claimed = true;
-        else {
-          lastErr = r.e;
-          if (i < 7) await new Promise((x) => setTimeout(x, 5_000));
+      for (let i = 0; i < 5 && !claimed; i++) {
+        try {
+          await wallet.requestTransaction!(
+            Transaction.createCustomTransaction(
+              address,
+              address,
+              consumeReq,
+              [data.payoutId],
+              [payoutBytes],
+            ),
+          );
+          claimed = true;
+        } catch (e) {
+          lastErr = e;
+          if (i < 4) await new Promise((x) => setTimeout(x, 6_000));
         }
       }
       if (!claimed) throw lastErr ?? new Error("claim failed");
