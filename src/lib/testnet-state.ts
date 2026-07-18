@@ -12,15 +12,14 @@
 
 export const TESTNET_SNAPSHOT_TAKEN_AT = "2026-05-17";
 
-// Network-aware URLs — flip via NEXT_PUBLIC_MIDEN_V015=1 to point
-// reviewers at the Devnet explorer + RPC during the v0.15 migration.
-const _USE_V015 = process.env.NEXT_PUBLIC_MIDEN_V015 === "1";
-export const MIDENSCAN_BASE = _USE_V015
-  ? "https://explorer.devnet.miden.io"
-  : "https://testnet.midenscan.com";
-export const MIDEN_RPC = _USE_V015
-  ? "https://rpc.devnet.miden.io"
-  : "https://rpc.testnet.miden.io";
+// The v0.15 stack now lives on TESTNET. It was originally migrated onto
+// Devnet (June), but the redeploy of the asset faucets + controller moved
+// it to testnet (the .v015-asset-faucets store points at rpc.testnet, the
+// controller/dispenser/dUSDC faucet + MidenFi accounts are all `mtst1…`).
+// So both explorer + RPC are testnet; NEXT_PUBLIC_MIDEN_V015 now only
+// selects the v0.15 account ids, not the network.
+export const MIDENSCAN_BASE = "https://testnet.midenscan.com";
+export const MIDEN_RPC = "https://rpc.testnet.miden.io";
 
 export interface DeployedAccount {
   label: string;

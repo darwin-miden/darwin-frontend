@@ -39,10 +39,12 @@ const SELF_CUSTODY =
 // AccountId hexes and MAST roots come from `midenConstants.ts` and
 // `midenController.ts` which read the same flag. Default stays
 // "testnet" so production deploys are unaffected.
-const MIDEN_RPC_URL: "testnet" | "devnet" =
-  typeof process !== "undefined" && process.env.NEXT_PUBLIC_MIDEN_V015 === "1"
-    ? "devnet"
-    : "testnet";
+// The v0.15 stack now lives on TESTNET (the June Devnet migration was moved
+// to testnet when the asset faucets + controller were redeployed — the CLI
+// store points at rpc.testnet, and every account id is `mtst1…`). Using
+// "devnet" here booted the web client onto the wrong network (MidenClientDB_mdev)
+// so it could never sync the accounts and every balance read 0. Always testnet.
+const MIDEN_RPC_URL: "testnet" | "devnet" = "testnet";
 
 export function MidenDynamicProviders({ children }: { children: ReactNode }) {
   const pathname = usePathname();
