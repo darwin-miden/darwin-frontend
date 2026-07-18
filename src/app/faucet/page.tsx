@@ -34,25 +34,7 @@ export default function FaucetPage() {
         {/* Sepolia rail — MetaMask, public mint */}
         <SepoliaFaucetPanel />
 
-        {/* Miden rail — MidenFi drip/claim (dUSDC = permissionless dispenser) */}
-        <h2 style={{ fontSize: 18, fontWeight: 500, marginBottom: 6 }}>
-          Miden — Miden-wallet rail (MidenFi)
-        </h2>
-        <p
-          style={{
-            color: "var(--ink-2)",
-            fontSize: 14,
-            lineHeight: 1.6,
-            marginBottom: 16,
-            maxWidth: 720,
-          }}
-        >
-          Connect your Miden wallet, click <em>Drip</em> on an asset row, then{" "}
-          <em>Claim</em> when the row swaps — that consumes the note into your
-          vault via a single MidenFi popup. <strong>dUSDC</strong> is dispensed
-          by the permissionless on-chain dispenser (you emit the request, the
-          network pays out).
-        </p>
+        {/* Miden rail — permissionless dUSDC dispenser (its own heading) */}
         <FaucetPanelClient />
       </main>
     </>
