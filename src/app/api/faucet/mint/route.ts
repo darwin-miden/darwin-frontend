@@ -10,7 +10,7 @@ import {
   redact,
   releaseSlot,
 } from "../../../../lib/apiGuard";
-import { ASSET_FAUCETS } from "../../../../lib/midenConstants";
+import { ASSET_FAUCETS, EPOCH_DUSDC_FAUCET_ID } from "../../../../lib/midenConstants";
 
 /**
  * POST /api/faucet/mint
@@ -43,15 +43,21 @@ const MIDEN_CLIENT =
   process.env.DARWIN_MIDEN_CLIENT_BIN ||
   "/Users/eden/Library/Application Support/midenup/toolchains/0.15.0/bin/miden-client";
 
-// Allowlist of faucet IDs we'll mint from. Anything else → 400. Avoids
-// the panel being repurposed to mint from arbitrary user-supplied
-// faucets that happen to be in the operator's store. Derived from the
-// ACTIVE asset set (ASSET_FAUCETS follows NEXT_PUBLIC_MIDEN_V015) so it
-// can't drift from the ids the frontend actually drips — a hardcoded
-// V014 list silently rejected every V015 drip ("faucetId not in allowlist").
-const ALLOWED_FAUCETS = new Set(
-  Object.values(ASSET_FAUCETS).map((f) => f.id),
-);
+// Wallet that holds a reserve of real (bridged) Epoch dUSDC. A dUSDC drip is a
+// TRANSFER from this wallet (`send`), not a mint — we don't own Epoch's faucet
+// key, so this is how both rails end up sharing the exact same dUSDC token.
+const DUSDC_DISPENSER_ID = process.env.DARWIN_DUSDC_DISPENSER_ID;
+
+// Allowlist of faucet IDs we'll dispense. Anything else → 400. Avoids the panel
+// being repurposed to drain arbitrary faucets in the operator's store. Derived
+// from the ACTIVE asset set (ASSET_FAUCETS follows NEXT_PUBLIC_MIDEN_V015) so it
+// can't drift from the ids the frontend actually drips — a hardcoded V014 list
+// silently rejected every V015 drip ("faucetId not in allowlist"). Plus Epoch's
+// dUSDC, which is dispensed by transfer from DUSDC_DISPENSER_ID rather than minted.
+const ALLOWED_FAUCETS = new Set([
+  ...Object.values(ASSET_FAUCETS).map((f) => f.id),
+  EPOCH_DUSDC_FAUCET_ID,
+]);
 
 // 1e18 = enough for one 1.0 unit drip of an 18-decimal asset (dETH/dDAI).
 // 6-/8-decimal faucets (dUSDT/dWBTC) request much smaller numbers so the
@@ -175,6 +181,16 @@ export async function POST(req: Request) {
 
   const targetHex = decodeBech32ToHex(target);
 
+  // Epoch dUSDC is dispensed by TRANSFER from the reserve wallet, not minted
+  // (we don't own Epoch's faucet key). Everything else is a faucet mint.
+  const isDusdc = faucetId === EPOCH_DUSDC_FAUCET_ID;
+  if (isDusdc && !DUSDC_DISPENSER_ID) {
+    return NextResponse.json(
+      { error: "dUSDC dispenser not configured (DARWIN_DUSDC_DISPENSER_ID)" },
+      { status: 503 },
+    );
+  }
+
   if (!acquireSlot()) return busySlot();
   let stdout: string, stderr: string, code: number | null;
   try {
@@ -182,13 +198,24 @@ export async function POST(req: Request) {
     // tx-input fetch ("block N not found"). Incremental after the first sync,
     // so this is fast. Best-effort: the mint itself surfaces real errors.
     await runMint(["sync"]);
-    ({ stdout, stderr, code } = await runMint([
-      "mint",
-      "-t", targetHex,
-      "-a", `${amount.toString()}::${faucetId}`,
-      "-n", "public",
-      "--force",
-    ]));
+    ({ stdout, stderr, code } = await runMint(
+      isDusdc
+        ? [
+            "send",
+            "-s", DUSDC_DISPENSER_ID!,
+            "-t", targetHex,
+            "-a", `${amount.toString()}::${faucetId}`,
+            "-n", "public",
+            "--force",
+          ]
+        : [
+            "mint",
+            "-t", targetHex,
+            "-a", `${amount.toString()}::${faucetId}`,
+            "-n", "public",
+            "--force",
+          ],
+    ));
   } finally {
     releaseSlot();
   }

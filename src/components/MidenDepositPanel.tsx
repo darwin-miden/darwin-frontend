@@ -38,6 +38,7 @@ interface Props {
 import {
   ASSET_FAUCETS as ASSET_FAUCET_CATALOGUE,
   BASKET_TOKEN_FAUCETS,
+  EPOCH_DUSDC_FAUCET_ID,
   FEE_ROUTING_CONTROLLER_ID,
   type BasketSymbol as MidenBasketSymbol,
 } from "../lib/midenConstants";
@@ -101,6 +102,13 @@ function defaultAmountFor(asset: { id: string }): string {
 const MIN_AMOUNT_HUMAN: Record<string, string> = Object.fromEntries(
   Object.values(ASSET_FAUCET_CATALOGUE).map((a) => [a.id, a.minAmountHuman]),
 );
+
+// dUSDC (Epoch's — the SAME token the Sepolia rail delivers). Not a basket
+// constituent; offered as a stable collateral so both rails share one token.
+// It's a $1 stable, so the deposit math values it 1:1 with USD. 6-dec.
+const DUSDC_OPTION = { label: "dUSDC", id: EPOCH_DUSDC_FAUCET_ID, decimals: 6 };
+ASSET_PRICE_USD[DUSDC_OPTION.id] = 1;
+MIN_AMOUNT_HUMAN[DUSDC_OPTION.id] = "1";
 
 function minAmountUnitsFor(asset: { id: string; decimals: number }): bigint {
   const human = MIN_AMOUNT_HUMAN[asset.id] ?? "0";
@@ -226,12 +234,16 @@ export function MidenDepositPanel({ basket }: Props) {
   ]);
 
   const assetOptions = useMemo(
-    () =>
-      basket.constituents
+    () => [
+      // dUSDC first — the shared, bridge-identical collateral. Deposit the
+      // dUSDC you already hold (from the faucet), no per-constituent picking.
+      DUSDC_OPTION,
+      ...basket.constituents
         .map((c) => ASSET_FAUCETS[c.faucetAlias])
         .filter((a): a is { label: string; id: string; decimals: number } =>
           Boolean(a),
         ),
+    ],
     [basket],
   );
 

@@ -30,7 +30,10 @@ import type { InputNoteDetails } from "@miden-sdk/miden-wallet-adapter-base";
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { useState } from "react";
 
-import { ASSET_FAUCETS as ASSET_FAUCET_CATALOGUE } from "../lib/midenConstants";
+import {
+  ASSET_FAUCETS as ASSET_FAUCET_CATALOGUE,
+  EPOCH_DUSDC_FAUCET_ID,
+} from "../lib/midenConstants";
 
 interface AssetSpec {
   symbol: string;
@@ -60,12 +63,24 @@ const DRIPS: Record<string, { dripBase: bigint; dripHuman: string }> = {
   dUSDT: { dripBase: 1_000_000_000n,  dripHuman: "1000" }, // 1e9 = 1000 dUSDT
   dDAI:  { dripBase: 1_000_000_000n,  dripHuman: "1000" }, // 1e9 = 1000 dDAI
 };
-const ASSETS: AssetSpec[] = Object.values(ASSET_FAUCET_CATALOGUE).map((a) => ({
-  symbol: a.symbol,
-  faucetId: a.id,
-  decimals: a.decimals,
-  ...DRIPS[a.symbol],
-}));
+const ASSETS: AssetSpec[] = [
+  // dUSDC first — the SAME Epoch token the Sepolia rail delivers, so both
+  // rails share one collateral. It isn't minted (we don't own Epoch's faucet
+  // key): the server dispenses it by transfer from a bridged reserve wallet.
+  {
+    symbol: "dUSDC",
+    faucetId: EPOCH_DUSDC_FAUCET_ID,
+    decimals: 6,
+    dripBase: 5_000_000n, // 5 dUSDC
+    dripHuman: "5",
+  },
+  ...Object.values(ASSET_FAUCET_CATALOGUE).map((a) => ({
+    symbol: a.symbol,
+    faucetId: a.id,
+    decimals: a.decimals,
+    ...DRIPS[a.symbol],
+  })),
+];
 
 type DripStatus =
   | { kind: "idle" }
