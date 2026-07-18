@@ -19,13 +19,8 @@
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { Transaction } from "@miden-sdk/miden-wallet-adapter-base";
 import { AccountId } from "@miden-sdk/miden-sdk";
-import {
-  useAccount,
-  useCompile,
-  useImportAccount,
-  useSyncState,
-} from "@miden-sdk/react";
-import { useEffect, useMemo, useState } from "react";
+import { useCompile, useSyncState } from "@miden-sdk/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Basket } from "../lib/baskets";
 import { buildDarwinNoteRequest } from "../lib/midenNote";
@@ -203,35 +198,11 @@ export function MidenDepositPanel({ basket }: Props) {
     error: string | null;
   }>({ isLoading: false, stage: null, txId: null, error: null });
 
-  // The MidenFi extension only hands us the wallet address; it doesn't
-  // hydrate the WebClient's local account store. tx.execute() needs
-  // an account record in that store to sign + prove, otherwise it
-  // fails with "account data wasn't found for account id 0x…". The
-  // pattern: query useAccount(address) to see if the record is already
-  // local; if not, importAccount({type: "id", accountId}) fetches it
-  // from the network and stores it. Runs once per wallet connection.
-  const {
-    account: walletAccount,
-    isLoading: walletAccountLoading,
-    getBalance,
-  } = useAccount(address ?? undefined);
-  const { importAccount, isImporting, error: importError } = useImportAccount();
-  const [importTriedFor, setImportTriedFor] = useState<string | null>(null);
-  useEffect(() => {
-    if (!address || walletAccountLoading || walletAccount) return;
-    if (importTriedFor === address || isImporting) return;
-    setImportTriedFor(address);
-    importAccount({ type: "id", accountId: address }).catch((e) => {
-      console.warn("[MidenDepositPanel] importAccount failed", e);
-    });
-  }, [
-    address,
-    walletAccount,
-    walletAccountLoading,
-    isImporting,
-    importTriedFor,
-    importAccount,
-  ]);
+  // The deposit is signed + proved by MidenFi (wallet.requestTransaction), so we
+  // do NOT hydrate the WebClient's account store — for a private MidenFi wallet
+  // that import fails ("account is private, details cannot be retrieved") and
+  // used to jam the panel on "loading balance…" with a 0 balance. Read
+  // the balance straight from MidenFi instead (below), exactly like the faucet.
 
   const assetOptions = useMemo(
     () => [
@@ -265,18 +236,36 @@ export function MidenDepositPanel({ basket }: Props) {
     setLastDefaultAssetId(asset.id);
   }, [asset, lastDefaultAssetId]);
 
-  // Per-asset wallet balance (base units, asset-decimal scaled). Falls
-  // back to 0 when the account record isn't loaded yet — the deposit
-  // button validation below treats 0 the same as "not loaded" so a
-  // mid-import click doesn't fire a doomed transaction.
-  const assetBalance: bigint = useMemo(() => {
-    if (!asset || !walletAccount) return 0n;
+  // Per-asset wallet balance, read straight from MidenFi (requestAssets) — the
+  // wallet is a private account the web client can't read. Match the selected
+  // asset's faucet id, canonicalising hex/bech32 on both sides. `balanceLoaded`
+  // gates the button so a click before the balance is known can't fire a doomed
+  // tx (and so the button doesn't jam on a never-loading web-client account).
+  const [assetBalance, setAssetBalance] = useState<bigint>(0n);
+  const [balanceLoaded, setBalanceLoaded] = useState(false);
+  const refreshBalance = useCallback(async () => {
+    if (!wallet.requestAssets || !asset) return;
     try {
-      return getBalance(asset.id);
+      const assets = await wallet.requestAssets();
+      const canon = (s: string) => {
+        if (/^0x[0-9a-fA-F]+$/.test(s)) return s.toLowerCase();
+        try {
+          return AccountId.fromBech32(s).toString().toLowerCase();
+        } catch {
+          return s.toLowerCase();
+        }
+      };
+      const want = canon(asset.id);
+      const hit = assets.find((a) => canon(a.faucetId) === want);
+      setAssetBalance(hit ? BigInt(hit.amount) : 0n);
+      setBalanceLoaded(true);
     } catch {
-      return 0n;
+      /* keep last known balance */
     }
-  }, [asset, walletAccount, getBalance]);
+  }, [wallet, asset]);
+  useEffect(() => {
+    if (connected) void refreshBalance();
+  }, [connected, refreshBalance]);
 
   const balanceHuman = useMemo(() => {
     if (!asset) return "0";
@@ -540,19 +529,19 @@ export function MidenDepositPanel({ basket }: Props) {
       <button
         onClick={handleSend}
         disabled={
-          isLoading || !asset || insufficient || belowMin || !walletAccount
+          isLoading || !asset || insufficient || belowMin || !balanceLoaded
         }
         style={{
           width: "100%",
           padding: "12px 16px",
           background:
-            isLoading || insufficient || belowMin || !walletAccount
+            isLoading || insufficient || belowMin || !balanceLoaded
               ? "var(--ink-3)"
               : "var(--ink)",
           color: "var(--paper)",
           border: 0,
           cursor:
-            isLoading || insufficient || belowMin || !walletAccount
+            isLoading || insufficient || belowMin || !balanceLoaded
               ? "not-allowed"
               : "pointer",
           fontSize: 14,
@@ -561,8 +550,8 @@ export function MidenDepositPanel({ basket }: Props) {
       >
         {isLoading
           ? `${stage ?? "Working"}…`
-          : !walletAccount
-          ? "loading wallet account…"
+          : !balanceLoaded
+          ? "loading balance…"
           : insufficient
           ? `Insufficient ${asset?.label ?? ""} — mint from faucet first`
           : belowMin
@@ -570,7 +559,7 @@ export function MidenDepositPanel({ basket }: Props) {
           : `Deposit ${amount} ${asset?.label ?? ""} → ${basket.symbol}`}
       </button>
 
-      {insufficient && walletAccount && (
+      {insufficient && balanceLoaded && (
         <a
           href="/faucet"
           className="nav-cta"
@@ -604,21 +593,6 @@ export function MidenDepositPanel({ basket }: Props) {
         >
           {String(error.message ?? error)}
         </pre>
-      )}
-
-      {(isImporting || importError) && (
-        <p
-          style={{
-            marginTop: 8,
-            fontSize: 11,
-            color: importError ? "#a01a1a" : "var(--ink-3)",
-            fontFamily: "var(--font-mono-stack)",
-          }}
-        >
-          {isImporting
-            ? "importing wallet account into local store…"
-            : `import warning: ${String(importError?.message ?? importError)}`}
-        </p>
       )}
 
       <p
