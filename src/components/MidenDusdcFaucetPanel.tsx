@@ -3,14 +3,15 @@
 /**
  * Miden dUSDC faucet — same clean interface as the Sepolia panel (balance + one
  * button), but dUSDC comes from the PERMISSIONLESS on-chain dispenser: the
- * button emits a drip request from the user's own MidenFi wallet, waits for the
- * network to pay out a private note, imports it into MidenFi and consumes it.
+ * button emits a drip request from the user's own MidenFi wallet; the network
+ * pays out a PUBLIC P2ID note tagged for the requester, which the wallet then
+ * consumes. Two wallet prompts: emit, then claim.
  *
- * The balance + claim both go through the MidenFi adapter (requestAssets /
- * importPrivateNote / requestConsume), NOT the frontend web client: the wallet
- * is a private account, so only MidenFi can read its assets or prove-consume its
- * private notes. The web client's useAccount can't (it has no account header for
- * a private id — "No account header record found" — and every balance read 0).
+ * Balance is read from MidenFi (requestAssets) — the wallet is a private account
+ * the web client can't read. The payout's readiness is polled on the NODE via
+ * the web client's getNotesById (a read, no prompt) so we claim as soon as the
+ * network commits it, and the payout id is precomputed by the builder so the
+ * claim consumes by id directly — no "read consumable notes" prompt.
  */
 import { useCallback, useEffect, useState } from "react";
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
@@ -102,69 +103,44 @@ export function MidenDusdcFaucetPanel() {
         Transaction.createCustomTransaction(address, data.dispenser, txReq),
       );
 
-      // 2. Wait for the network to run the drip + create the payout note.
-      setStage("Network paying out (~30s)…");
-      await new Promise((r) => setTimeout(r, 30_000));
-
-      // 3. Consume the payout by its REAL note id. Our reconstructed payout id
-      // (build_drip_note) does NOT match the on-chain note the dispenser created
-      // — its metadata differs — so consuming by that id fails "note not found".
-      // MidenFi already discovers the dispenser's payouts as consumable notes;
-      // read them and consume the dUSDC ones by the ids MidenFi actually holds.
-      setStage("Claiming — sign in MidenFi…");
-      const canon = (s: string) => {
-        if (/^0x[0-9a-fA-F]+$/.test(s)) return s.toLowerCase();
+      // 2. Wait for the network to create the PUBLIC payout, polling the NODE
+      //    directly for its (known) id — a read, NO wallet prompt — so we claim
+      //    the moment it's committed instead of a blind fixed wait.
+      const payoutId = data.payoutId as string | undefined;
+      if (!payoutId) throw new Error("builder did not return a payout id");
+      setStage("Network paying out…");
+      const { NoteId, RpcClient, Endpoint } = await import("@miden-sdk/miden-sdk");
+      const rpc = new RpcClient(Endpoint.testnet());
+      const target = NoteId.fromHex(payoutId);
+      let ready = false;
+      for (let i = 0; i < 40 && !ready; i++) {
         try {
-          return AccountId.fromBech32(s).toString().toLowerCase();
+          const found = await rpc.getNotesById([target]);
+          if (found && found.length > 0) ready = true;
         } catch {
-          return s.toLowerCase();
+          /* not committed on-chain yet */
         }
-      };
-      const dusdcId = canon(EPOCH_DUSDC_FAUCET_ID);
-      type ConsNote = {
-        noteId: string;
-        assets?: { amount: string; faucetId: string }[];
-      };
-      const dusdcAmt = (n: ConsNote) =>
-        n.assets?.find((a) => canon(a.faucetId) === dusdcId)?.amount;
-
-      // Poll for a consumable dUSDC payout (the fresh one takes a few blocks).
-      let payouts: ConsNote[] = [];
-      for (let i = 0; i < 5 && payouts.length === 0; i++) {
-        const consumable =
-          ((await wallet.requestConsumableNotes?.()) as ConsNote[]) ?? [];
-        payouts = consumable.filter((n) => dusdcAmt(n) !== undefined);
-        console.log("[faucet] consumable dUSDC payouts:", payouts.length);
-        if (payouts.length === 0) await new Promise((x) => setTimeout(x, 6_000));
+        if (!ready) await new Promise((r) => setTimeout(r, 3_000));
       }
-      if (payouts.length === 0) {
+      if (!ready) {
         throw new Error(
-          "no dUSDC payout is consumable yet — wait a few seconds and click again",
+          "the network hasn't paid out yet — wait a few seconds and click again",
         );
       }
 
-      let consumedAny = false;
-      let lastErr: unknown = null;
-      for (let i = 0; i < payouts.length; i++) {
-        const note = payouts[i];
-        setStage(`Claiming payout ${i + 1}/${payouts.length} — sign in MidenFi…`);
-        try {
-          const txId = await wallet.requestConsume!({
-            faucetId: EPOCH_DUSDC_FAUCET_ID,
-            noteId: note.noteId,
-            noteType: "private",
-            amount: Number(dusdcAmt(note) ?? 5_000_000),
-          });
-          if (wallet.waitForTransaction) {
-            await wallet.waitForTransaction(txId, 90_000).catch(() => {});
-          }
-          consumedAny = true;
-        } catch (e) {
-          lastErr = e;
-          console.error("[faucet] consume", note.noteId, "failed", e);
-        }
+      // 3. Consume the PUBLIC payout by its node-verified id. One signature —
+      //    the note is public, so MidenFi resolves it from the chain by id (no
+      //    "read consumable notes" prompt needed).
+      setStage("Claiming — sign in MidenFi…");
+      const txId = await wallet.requestConsume!({
+        faucetId: EPOCH_DUSDC_FAUCET_ID,
+        noteId: payoutId,
+        noteType: "public",
+        amount: 5_000_000,
+      });
+      if (wallet.waitForTransaction) {
+        await wallet.waitForTransaction(txId, 90_000).catch(() => {});
       }
-      if (!consumedAny) throw lastErr ?? new Error("claim failed");
 
       setStage("Refreshing balance…");
       await refreshBalance();
