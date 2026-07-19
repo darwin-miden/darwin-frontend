@@ -5,8 +5,10 @@ import { LogoMark } from "../components/Logo";
 /**
  * Darwin Protocol — landing page.
  *
- * Editorial paper/ink aesthetic from globals.css. Targets users
- * arriving from socials who want to try a deposit on Sepolia.
+ * Editorial paper/ink aesthetic from globals.css. Targets users arriving
+ * from socials who want to try a confidential deposit on testnet. Copy is
+ * kept honest to the live rail: keys stay in the browser, the Miden network
+ * executes the deposit, and the basket position is minted into a private note.
  */
 export default function Page() {
   return (
@@ -28,7 +30,7 @@ export default function Page() {
                 className="eyebrow"
                 style={{ marginBottom: 16, color: "var(--orange)" }}
               >
-                Live on testnet + Sepolia
+                Live on Miden testnet · Sepolia bridge
               </div>
               <h1
                 style={{
@@ -60,12 +62,11 @@ export default function Page() {
                   margin: "0 0 32px",
                 }}
               >
-                Hold a STARK-proven basket position privately, on-chain.
-                    One MetaMask signature derives a wallet in your
-                    browser; Epoch bridges Sepolia USDC and the network
-                    itself executes your deposit — self-custody end to end.
-                    Wallet holders prove + submit directly in their
-                    browser via the Web SDK.
+                Hold a STARK-proven basket position privately on Miden. One
+                signature derives a wallet in your browser — your key never
+                leaves it. Epoch bridges your Sepolia USDC, the network itself
+                executes your deposit, and your basket tokens are minted into a
+                private note only you can open.
               </p>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                 <Link
@@ -80,8 +81,7 @@ export default function Page() {
                     gap: 10,
                   }}
                 >
-                  Try a deposit{" "}
-                  <span className="arrow">→</span>
+                  Try a deposit <span className="arrow">→</span>
                 </Link>
                 <Link
                   href="/portfolio"
@@ -109,7 +109,7 @@ export default function Page() {
           </div>
         </section>
 
-        {/* stat strip — updated for M1 + M2 */}
+        {/* fact strip — honest, product-level (no infra vanity) */}
         <section
           style={{
             borderTop: "1px solid var(--ink)",
@@ -121,15 +121,14 @@ export default function Page() {
             className="container"
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(5, 1fr)",
+              gridTemplateColumns: "repeat(4, 1fr)",
               padding: 0,
             }}
           >
-            <Stat n="19" label="on-chain accounts live" />
-            <Stat n="6" label="Sepolia contracts" />
-            <Stat n="3" label="atomic flows on-chain" />
-            <Stat n="290" label="green tests" />
-            <Stat n="40s" label="ETH → basket" />
+            <Stat n="3" label="confidential baskets" />
+            <Stat n="Private" label="positions on Miden" />
+            <Stat n="Self-custody" label="no operator wallet" />
+            <Stat n="~40s" label="USDC → basket" last />
           </div>
         </section>
 
@@ -158,8 +157,8 @@ export default function Page() {
               lineHeight: 1.55,
             }}
           >
-            Pick the rail that matches your wallet. Both land in the same
-            on-chain controller on testnet.
+            Pick the rail that matches your wallet. Both mint the same
+            confidential basket position on Miden testnet.
           </p>
           <div
             style={{
@@ -173,23 +172,23 @@ export default function Page() {
             <Step
               num="1"
               title="Connect a wallet"
-              body="ETH wallet (MetaMask / WalletConnect / Coinbase) via Connect ETH, or a native wallet (browser extension, Para, Turnkey) via Connect. Both buttons are in the nav."
+              body="ETH wallet (MetaMask / WalletConnect / Coinbase) via Connect ETH, or a native Miden wallet (browser extension, Para, Turnkey) via Connect. Both buttons are in the nav."
             />
             <Step
               num="2"
               title="Pick a basket"
-              body="DCC / DAG / DCO each show target weights, live NAV computed in your browser, on-chain contracts, and a tabbed deposit panel."
+              body="DCC, DAG and DCO each show their target weights, live NAV, the on-chain faucet, and a deposit panel."
             />
             <Step
               num="3"
               title="Deposit"
-              body="Self-custody: one MetaMask signature derives a wallet in your browser, Epoch bridges Sepolia USDC, then the network itself executes your deposit against the controller — no server, no extension. Native wallet: sign an atomic deposit note straight to the controller, browser proves the STARK in <1 s."
+              body="Self-custody: one signature derives your wallet, Epoch bridges your Sepolia USDC, and the Miden network executes the deposit — minting basket tokens into a private note. Native Miden wallet: sign a deposit note directly and your browser proves the STARK in under a second."
               last
             />
           </div>
         </section>
 
-        {/* How it works — 3 flows */}
+        {/* How it works — the confidential flows */}
         <section className="container" style={{ padding: "40px 0 80px" }}>
           <div className="section-tag">
             <span className="tag-num">02</span>How it works
@@ -204,37 +203,41 @@ export default function Page() {
               fontWeight: 500,
             }}
           >
-            Three atomic flows, all live on testnet.
+            Two confidential flows, live on testnet.
           </h2>
+          <p
+            style={{
+              color: "var(--ink-2)",
+              maxWidth: 720,
+              fontSize: 16,
+              lineHeight: 1.55,
+            }}
+          >
+            Each basket is a network account on Miden. Notes are consumed and
+            executed by the network itself — never a custodian.
+          </p>
           <div
             style={{
               marginTop: 32,
               display: "grid",
-              gridTemplateColumns: "repeat(3, 1fr)",
+              gridTemplateColumns: "repeat(2, 1fr)",
               gap: 0,
               borderTop: "1px solid var(--ink)",
               borderBottom: "1px solid var(--ink)",
             }}
           >
             <FlowCard
-              tag="Flow A"
-              title="Atomic deposit"
-              body="Note carries the asset + math + drain-into-controller loop. Consumed in one tx by the v2 controller's receive_asset proc."
-              proofTx="0x2e211adf · block 703322"
+              tag="Deposit"
+              title="Collateral in, private tokens out"
+              body="Your dUSDC funds a deposit note the network consumes. It drains the collateral into the basket faucet and mints basket tokens — bound 1:1 to the real collateral — into a private note only you can open."
+              foot="network-executed · Miden testnet"
               link="/flows"
             />
             <FlowCard
-              tag="Flow B"
-              title="Rebalance trigger"
-              body="Zero-asset note calls execute_rebalance_step on the v4 controller. Off-chain rebalance_bot reads live Pragma + decides when to fire."
-              proofTx="0xaf8521f2 · block 782152"
-              link="/flows"
-            />
-            <FlowCard
-              tag="Flow C"
-              title="Atomic redeem"
-              body="Symmetric of Flow A. User attaches DCC, the redeem note runs felt_div on-chain and drains the basket tokens into the controller."
-              proofTx="0x005c4eec · block 777149"
+              tag="Redeem"
+              title="Burn tokens, get assets back"
+              body="Burn your basket tokens back to the faucet; the network releases the underlying dUSDC into a private note, bridged back to your Sepolia wallet via Epoch."
+              foot="network-executed · Miden testnet"
               link="/flows"
               last
             />
@@ -242,12 +245,7 @@ export default function Page() {
         </section>
 
         {/* What's live — navigation */}
-        <section
-          className="container"
-          style={{
-            padding: "40px 0 80px",
-          }}
-        >
+        <section className="container" style={{ padding: "40px 0 80px" }}>
           <div className="section-tag">
             <span className="tag-num">03</span>What&apos;s live to browse
           </div>
@@ -261,7 +259,7 @@ export default function Page() {
               fontWeight: 500,
             }}
           >
-            Five pages, every claim cross-referenced to an on-chain artefact.
+            Browse the live testnet deployment.
           </h2>
           <div
             style={{
@@ -276,25 +274,25 @@ export default function Page() {
               num="01"
               href="/baskets"
               title="Basket browser"
-              body="DCC, DAG, DCO — target weights, live drift planner with skew slider, links to per-basket detail pages with deposit panels."
+              body="DCC, DAG and DCO — target weights, live NAV, and a deposit panel on each per-basket page."
             />
             <PokeCard
               num="02"
               href="/portfolio"
               title="Your portfolio"
-              body="Live ERC20 balances of your wDCC/wDAG/wDCO on Sepolia. Polls every 8 s. Total USD value at the top."
+              body="Your confidential DCC / DAG / DCO positions, read live from your private Miden vault in the browser."
             />
             <PokeCard
               num="03"
               href="/accounts"
-              title="Deployed accounts"
-              body="19 testnet accounts + 6 Sepolia contracts, each grouped by role and linked to the explorer."
+              title="On-chain deployment"
+              body="The live basket faucets, controller and bridge — grouped by role and linked to the explorer."
             />
             <PokeCard
               num="04"
               href="/flows"
-              title="Flow A · B · C runs"
-              body="Real testnet tx hashes proving the three atomic flows ran end-to-end inside the controller's tx context."
+              title="Deposit & redeem runs"
+              body="Real testnet transactions showing the confidential deposit and redeem flows executed end to end by the network."
               spansBoth
             />
           </div>
@@ -328,7 +326,7 @@ export default function Page() {
                   marginTop: 8,
                 }}
               >
-                Every contract, every controller, every Rust crate is{" "}
+                Every note script, every controller, every Rust crate is{" "}
                 <a
                   href="https://github.com/darwin-miden"
                   target="_blank"
@@ -351,21 +349,22 @@ export default function Page() {
                   textTransform: "uppercase",
                 }}
               >
-                Sepolia
+                Where it runs
               </h4>
               <ul style={{ paddingLeft: 0, listStyle: "none", marginTop: 10 }}>
-                <FootLink
-                  href="https://sepolia.etherscan.io/address/0x7e5279AD0d9F7fB8884562C336Fa6d78DCbf7c93"
-                  label="DarwinRelayDeposit"
-                />
-                <FootLink
-                  href="https://sepolia.etherscan.io/address/0x1EB7Bd808402824232853e66DF6843D68462B7A4"
-                  label="DCC token"
-                />
-                <FootLink
-                  href="https://sepolia.etherscan.io/address/0x6dAb940a4E1d434965E22e9F6d624fF68F6922a0"
-                  label="MockUSDC (faucet)"
-                />
+                <li style={{ marginTop: 6, fontSize: 14, color: "var(--ink-2)" }}>
+                  Miden testnet — 3 confidential basket faucets
+                </li>
+                <li style={{ marginTop: 6, fontSize: 14 }}>
+                  <a
+                    href="https://sepolia.etherscan.io/address/0x2BB4FfD7E2c6D432b697554Efd77fA13bdbefd69"
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ borderBottom: "1px dotted var(--rule)" }}
+                  >
+                    Sepolia — USDC bridged via Epoch
+                  </a>
+                </li>
               </ul>
             </div>
           </div>
@@ -375,12 +374,20 @@ export default function Page() {
   );
 }
 
-function Stat({ n, label }: { n: string; label: string }) {
+function Stat({
+  n,
+  label,
+  last,
+}: {
+  n: string;
+  label: string;
+  last?: boolean;
+}) {
   return (
     <div
       style={{
         padding: "32px 24px",
-        borderRight: "1px solid var(--rule)",
+        borderRight: last ? "0" : "1px solid var(--rule)",
       }}
     >
       <div
@@ -397,10 +404,10 @@ function Stat({ n, label }: { n: string; label: string }) {
       <div
         style={{
           marginTop: 10,
-          fontSize: "clamp(1.6rem, 3vw, 2.6rem)",
+          fontSize: "clamp(1.4rem, 2.4vw, 2.2rem)",
           fontWeight: 500,
           letterSpacing: "-0.02em",
-          lineHeight: 1,
+          lineHeight: 1.05,
         }}
       >
         {n}
@@ -466,14 +473,14 @@ function FlowCard({
   tag,
   title,
   body,
-  proofTx,
+  foot,
   link,
   last,
 }: {
   tag: string;
   title: string;
   body: string;
-  proofTx: string;
+  foot?: string;
   link: string;
   last?: boolean;
 }) {
@@ -518,16 +525,18 @@ function FlowCard({
       >
         {body}
       </p>
-      <div
-        style={{
-          marginTop: 12,
-          fontFamily: "var(--font-mono-stack)",
-          fontSize: 11.5,
-          color: "var(--ink-3)",
-        }}
-      >
-        proof · {proofTx}
-      </div>
+      {foot ? (
+        <div
+          style={{
+            marginTop: 12,
+            fontFamily: "var(--font-mono-stack)",
+            fontSize: 11.5,
+            color: "var(--ink-3)",
+          }}
+        >
+          {foot}
+        </div>
+      ) : null}
     </Link>
   );
 }
@@ -602,20 +611,5 @@ function PokeCard({
         open →
       </span>
     </Link>
-  );
-}
-
-function FootLink({ href, label }: { href: string; label: string }) {
-  return (
-    <li style={{ marginTop: 6, fontSize: 14 }}>
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        style={{ borderBottom: "1px dotted var(--rule)" }}
-      >
-        {label}
-      </a>
-    </li>
   );
 }
