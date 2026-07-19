@@ -14,13 +14,6 @@ const PortfolioConnectionBanner = dynamic(
     ),
   { ssr: false },
 );
-const MidenPortfolioSection = dynamic(
-  () =>
-    import("../../components/MidenPortfolioSection").then(
-      (m) => m.MidenPortfolioSection,
-    ),
-  { ssr: false },
-);
 const SelfCustodyWalletPanel = dynamic(
   () =>
     import("../../components/SelfCustodyWalletPanel").then(
@@ -69,10 +62,6 @@ export default function PortfolioPage() {
         <PortfolioConnectionBanner />
 
         {isConnected && <SelfCustodyPositionsSection />}
-
-        {/* Miden-side positions — always rendered; the component itself
-            handles the 'connect a Miden wallet' fallback. */}
-        <MidenPortfolioSection />
 
         <SelfCustodyWalletPanel />
       </main>
