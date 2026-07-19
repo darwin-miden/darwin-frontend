@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useAccount } from "wagmi";
 
 import { NavBar } from "../../components/NavBar";
 
@@ -21,17 +20,12 @@ const SelfCustodyWalletPanel = dynamic(
     ),
   { ssr: false },
 );
-const SelfCustodyPositionsSection = dynamic(
-  () =>
-    import("../../components/SelfCustodyPositionsSection").then(
-      (m) => m.SelfCustodyPositionsSection,
-    ),
+const PortfolioView = dynamic(
+  () => import("../../components/PortfolioView").then((m) => m.PortfolioView),
   { ssr: false },
 );
 
 export default function PortfolioPage() {
-  const { isConnected } = useAccount();
-
   return (
     <>
       <NavBar active="portfolio" />
@@ -61,7 +55,7 @@ export default function PortfolioPage() {
 
         <PortfolioConnectionBanner />
 
-        {isConnected && <SelfCustodyPositionsSection />}
+        <PortfolioView />
 
         <SelfCustodyWalletPanel />
       </main>

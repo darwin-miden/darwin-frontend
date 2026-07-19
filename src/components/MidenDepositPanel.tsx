@@ -23,6 +23,7 @@ import { useSyncState } from "@miden-sdk/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Basket } from "../lib/baskets";
+import { logActivity } from "../lib/activityLog";
 
 interface Props {
   basket: Basket;
@@ -439,6 +440,11 @@ export function MidenDepositPanel({ basket }: Props) {
         await wallet.waitForTransaction(txId, 90_000).catch(() => {});
       }
       setTxState({ isLoading: false, stage: null, txId, error: null });
+      logActivity(address, {
+        type: "deposit",
+        basket: basket.symbol,
+        amount,
+      });
       void refreshBalance();
     } catch (e) {
       const msg = String((e as Error).message ?? e);
