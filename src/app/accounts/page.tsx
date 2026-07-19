@@ -155,11 +155,10 @@ export default function AccountsPage() {
             margin: "8px 0 24px",
           }}
         >
-          Snapshot of <code>darwin-baskets/state/testnet.toml</code> as of{" "}
-          <strong>{TESTNET_SNAPSHOT_TAKEN_AT}</strong>. The same registry the{" "}
-          <code>darwin_doctor</code> binary pings. <strong>{totalCount}</strong>{" "}
-          accounts — <strong>{publicCount}</strong> public (fetched live from
-          the RPC), the rest private by design (controllers, wallets).
+          The live testnet deployment as of{" "}
+          <strong>{TESTNET_SNAPSHOT_TAKEN_AT}</strong>. <strong>{totalCount}</strong>{" "}
+          accounts — <strong>{publicCount}</strong> public, the rest private by
+          design (controllers, wallets).
         </p>
         <p style={{ fontSize: 12.5, color: "var(--ink-3)" }}>
           RPC: <code>{MIDEN_RPC}</code> · Explorer:{" "}

@@ -10,7 +10,7 @@
  *   3. bump TESTNET_SNAPSHOT_TAKEN_AT
  */
 
-export const TESTNET_SNAPSHOT_TAKEN_AT = "2026-05-17";
+export const TESTNET_SNAPSHOT_TAKEN_AT = "2026-07-19";
 
 // The v0.15 stack now lives on TESTNET. It was originally migrated onto
 // Devnet (June), but the redeploy of the asset faucets + controller moved
@@ -71,30 +71,41 @@ export const DEPLOYED_ACCOUNTS: DeployedAccount[] = [
     storageMode: "public",
     deployTx: "0x2d534d2aecc7bded638610b4456780e8bd43c6954b086e7aa0ed4ef0f7c8dfd0",
   },
-  // Basket-token faucets
+  // Confidential basket faucets (network accounts) — the live rail. Each
+  // consumes a deposit note, drains the dUSDC collateral, and mints basket
+  // tokens 1:1 into a PRIVATE note only the depositor can open.
   {
-    label: "DCC basket-token faucet",
+    label: "DCC confidential faucet",
     role: "basket-faucet",
     symbol: "DCC",
-    accountId: "0x2066f2da1f91ba202af5251d39101c",
+    accountId: "0x9463767a994d6f9178fce256261430",
     storageMode: "public",
-    deployTx: "0x8da73c534cf5802b7a0b30815492d74daab4a14f1ec967b37911c7ed94843e15",
+    notes: "Network-account faucet — mints DCC into a private note.",
   },
   {
-    label: "DAG basket-token faucet",
+    label: "DAG confidential faucet",
     role: "basket-faucet",
     symbol: "DAG",
-    accountId: "0xfb6811fd6399df206d44f62800620d",
+    accountId: "0x2fe3469cccf61a710d321df38c4ca1",
     storageMode: "public",
-    deployTx: "0x420d8bda3a81ca39d767fe858e8bb662d7ef8852d11fd7c5f0934319367fbf5d",
+    notes: "Network-account faucet — mints DAG into a private note.",
   },
   {
-    label: "DCO basket-token faucet",
+    label: "DCO confidential faucet",
     role: "basket-faucet",
     symbol: "DCO",
-    accountId: "0xbe4efc6729eb3220423b7d6d6a0942",
+    accountId: "0xf1a4752b3689beb110eebec647df20",
     storageMode: "public",
-    deployTx: "0x9f2cfef38b0a8a29732ce5caf190e578b707e294d611e6f3f8919f50d7747906",
+    notes: "Network-account faucet — mints DCO into a private note.",
+  },
+  // Bridged collateral
+  {
+    label: "dUSDC faucet (Epoch-bridged)",
+    role: "asset-faucet",
+    symbol: "DUSDC",
+    accountId: "0xfc90f0f4da30e51168453b60eafed7",
+    storageMode: "public",
+    notes: "Miden-side representation of Epoch-bridged Sepolia USDC (6-dec).",
   },
   // Controllers (v1 stubs + v2 real-bodies + v3 storage-aware)
   {
@@ -243,42 +254,10 @@ export interface SepoliaContract {
 
 export const SEPOLIA_CONTRACTS: SepoliaContract[] = [
   {
-    label: "DarwinRelayDeposit",
-    role: "relay",
-    address: "0x7e5279AD0d9F7fB8884562C336Fa6d78DCbf7c93",
-    notes:
-      "ETH-side escrow. User deposits, relay claims + bridges + confirms.",
-  },
-  {
-    label: "MockUSDC",
+    label: "USDC (Epoch-bridged)",
     role: "stablecoin",
-    address: "0x6dAb940a4E1d434965E22e9F6d624fF68F6922a0",
+    address: "0x2BB4FfD7E2c6D432b697554Efd77fA13bdbefd69",
     notes:
-      "6-decimal stable mirror for the deposit currency. Permissionless mint via .mint(to, amount).",
-  },
-  {
-    label: "DarwinStrategy",
-    role: "strategy",
-    address: "0x635E19c61CD09d145D57A88cE8185Ddf27fA356F",
-    notes:
-      "Per-basket strategy registry: token list, target weights (bps), fees, drift threshold.",
-  },
-  {
-    label: "DarwinBasketToken DCC",
-    role: "basket-token",
-    address: "0x1EB7Bd808402824232853e66DF6843D68462B7A4",
-    notes: "ERC20 minted by the relay on a successful deposit into DCC.",
-  },
-  {
-    label: "DarwinBasketToken DAG",
-    role: "basket-token",
-    address: "0x73F18087dd45d180e75cADcD383479624326E336",
-    notes: "ERC20 minted by the relay on a successful deposit into DAG.",
-  },
-  {
-    label: "DarwinBasketToken DCO",
-    role: "basket-token",
-    address: "0x6344469eB35Ff00d5892fD368727ad3C9E45677c",
-    notes: "ERC20 minted by the relay on a successful deposit into DCO.",
+      "The Sepolia USDC users bridge to Miden via Epoch. Only the collateral crosses the bridge — basket tokens stay confidential on Miden.",
   },
 ];
