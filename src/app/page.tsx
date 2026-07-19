@@ -284,12 +284,6 @@ export default function Page() {
             />
             <PokeCard
               num="03"
-              href="/accounts"
-              title="On-chain deployment"
-              body="The live basket faucets, controller and bridge — grouped by role and linked to the explorer."
-            />
-            <PokeCard
-              num="04"
               href="/flows"
               title="Deposit & redeem runs"
               body="Real testnet transactions showing the confidential deposit and redeem flows executed end to end by the network."

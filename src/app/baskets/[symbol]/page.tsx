@@ -374,20 +374,6 @@ export default async function BasketDetailPage({
               </tbody>
             </table>
 
-            <p
-              style={{
-                marginTop: 16,
-                fontSize: 12,
-                color: "var(--ink-3)",
-                lineHeight: 1.55,
-              }}
-            >
-              Every deployed Miden + Sepolia account at{" "}
-              <Link href="/accounts" style={{ borderBottom: "1px dotted var(--rule)" }}>
-                /accounts
-              </Link>
-              .
-            </p>
           </div>
         </details>
       </main>

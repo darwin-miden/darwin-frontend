@@ -33,7 +33,6 @@ const MidenConnectButton = dynamic(
 export type NavKey =
   | "home"
   | "baskets"
-  | "accounts"
   | "faucet"
   | "portfolio";
 
@@ -77,7 +76,6 @@ export function NavBar({ active }: { active?: NavKey }) {
         <nav className="nav-links">
           {link("baskets", "/baskets", "Baskets")}
           {link("portfolio", "/portfolio", "Portfolio")}
-          {link("accounts", "/accounts", "Accounts")}
           {link("faucet", "/faucet", "Faucet")}
         </nav>
         <div style={{ display: "flex", gap: 8 }}>
