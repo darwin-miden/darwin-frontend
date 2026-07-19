@@ -41,6 +41,18 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const ZERO_HASH =
   "0x0000000000000000000000000000000000000000000000000000000000000000";
 
+// Canonical Epoch witness extra-typestrings — must match the allocator's
+// typehash EXACTLY (it hashes these fields into the compact). These mirror the
+// SDK's own EVM_TO_MIDEN_EXTRA_TYPESTRING / MIDEN_TO_EVM_EXTRA_TYPESTRING (which
+// aren't re-exported at the package root) and the working reference example. Do
+// NOT append fields: we used to add `midenNoteType` (deposit) and
+// `midenNoteType`/`midenReclaimHeight` (redeem), which changed the typehash and
+// made `POST /compact` reject the registration with "A quote isn't available".
+const EVM_TO_MIDEN_EXTRA_TYPESTRING =
+  "string midenRecipientAccount,string midenFaucetId";
+const MIDEN_TO_EVM_EXTRA_TYPESTRING =
+  "string midenSourceAccount,string midenFaucetId,string midenNoteId";
+
 // Epoch's test USDC on Sepolia — same address the bridging-app uses.
 // EVM side is 18-decimal (NOT the canonical 6-dec USDC); Miden side is
 // 6-decimal (verified live 2026-07-04 with the fresh Epoch faucet table:
@@ -112,15 +124,12 @@ function buildTaskData(params: EpochQuoteParams) {
       protocolHashIdentifier: ZERO_HASH,
       recipient: params.evmSourceAddress,
     },
-    extraDataTypestring:
-      "string midenRecipientAccount,string midenFaucetId,string midenNoteType",
+    // Match the reference example exactly: no midenNoteType (the solver picks
+    // the delivery note type). Adding it broke the /compact registration.
+    extraDataTypestring: EVM_TO_MIDEN_EXTRA_TYPESTRING,
     extraData: {
       midenRecipientAccount: params.midenRecipientId,
       midenFaucetId: EPOCH_USDC_SEPOLIA.midenFaucetId,
-      // Public: the note is written to the note tree so anyone (including
-      // our relay worker's brute-force scan) can consume it. Validated
-      // E2E 2026-07-04 with the fresh Epoch dUSDC faucet.
-      midenNoteType: "P2ID",
     },
   };
 }
@@ -208,8 +217,11 @@ function buildRedeemTaskData(params: EpochRedeemParams) {
       protocolHashIdentifier: ZERO_HASH,
       recipient: params.evmRecipient,
     },
-    extraDataTypestring:
-      "string midenSourceAccount,string midenFaucetId,string midenNoteType,string midenNoteId,uint256 midenReclaimHeight",
+    // Canonical typestring (only midenNoteId is hashed). midenNoteType /
+    // midenReclaimHeight ride in extraData for the solver but are NOT declared
+    // here, exactly like the reference example — declaring them changed the
+    // typehash and broke /compact.
+    extraDataTypestring: MIDEN_TO_EVM_EXTRA_TYPESTRING,
     extraData: {
       midenSourceAccount: params.midenSourceId,
       midenFaucetId: EPOCH_USDC_SEPOLIA.midenFaucetId,
