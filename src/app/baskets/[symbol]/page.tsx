@@ -12,14 +12,9 @@ import {
   formatWeight,
   type BasketSymbol,
 } from "../../../lib/baskets";
-import {
-  DEPLOYED_ACCOUNTS,
-  MIDENSCAN_BASE,
-} from "../../../lib/testnet-state";
-import {
-  basketBySymbolUpper,
-  sepoliaAddressUrl,
-} from "../../../lib/contracts";
+import { MIDENSCAN_BASE } from "../../../lib/testnet-state";
+import { basketBySymbolUpper } from "../../../lib/contracts";
+import { CONFIDENTIAL_FAUCETS } from "../../../lib/confidentialFaucets";
 
 export function generateStaticParams() {
   return BASKETS.map((b) => ({ symbol: b.symbol.toLowerCase() }));
@@ -84,13 +79,6 @@ export default async function BasketDetailPage({
   const basket = basketBySymbol(symU as BasketSymbol);
   const flavour = FLAVOUR[basket.symbol];
   const ethBasket = basketBySymbolUpper(basket.symbol);
-
-  const v2Controller = DEPLOYED_ACCOUNTS.find((a) =>
-    a.label.includes("v2 controller"),
-  );
-  const v4Controller = DEPLOYED_ACCOUNTS.find((a) =>
-    a.label.includes("v4 controller"),
-  );
 
   return (
     <>
@@ -326,28 +314,12 @@ export default async function BasketDetailPage({
                 gap: 16,
               }}
             >
-              {ethBasket && (
+              {CONFIDENTIAL_FAUCETS[basket.symbol] && (
                 <ContractCard
-                  title="Sepolia ERC20"
-                  subtitle={`${basket.symbol} (the token your wallet sees)`}
-                  address={ethBasket.tokenAddress}
-                  href={sepoliaAddressUrl(ethBasket.tokenAddress)}
-                />
-              )}
-              {v2Controller && (
-                <ContractCard
-                  title="Miden v2 controller"
-                  subtitle="Real-bodies controller (Flow A receive_asset)"
-                  address={v2Controller.accountId}
-                  href={`${MIDENSCAN_BASE}/account/${v2Controller.accountId}`}
-                />
-              )}
-              {v4Controller && (
-                <ContractCard
-                  title="Miden v4 controller"
-                  subtitle="Rebalance-aware (Flow B execute_rebalance_step)"
-                  address={v4Controller.accountId}
-                  href={`${MIDENSCAN_BASE}/account/${v4Controller.accountId}`}
+                  title="Miden confidential faucet"
+                  subtitle={`Network account — mints ${basket.symbol} into a private note`}
+                  address={CONFIDENTIAL_FAUCETS[basket.symbol] as string}
+                  href={`${MIDENSCAN_BASE}/account/${CONFIDENTIAL_FAUCETS[basket.symbol]}`}
                 />
               )}
             </div>
