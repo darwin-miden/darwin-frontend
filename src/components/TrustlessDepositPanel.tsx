@@ -93,6 +93,7 @@ import { createWalletClient, custom } from "viem";
 import { sepolia } from "viem/chains";
 import { useSwitchChain } from "wagmi";
 import { stashDccBalance } from "../lib/dccBalance";
+import { logActivity } from "../lib/activityLog";
 import { autoBackupWallet, restoreFromBackup } from "../lib/walletBackup";
 
 // Minimal ERC-20 balanceOf — used to read the user's Sepolia USDC so the
@@ -858,6 +859,12 @@ export function TrustlessDepositPanel({
           evmAddress: evmAddress!,
           signTypedData: (td) => signTypedDataAsync(td as any),
           force: true,
+        });
+        logActivity(evmAddress, {
+          type: "deposit",
+          basket: basket?.symbol ?? "DCC",
+          amount: humanAmount,
+          tx: sepoliaTx ?? undefined,
         });
         setStage("done");
         return;

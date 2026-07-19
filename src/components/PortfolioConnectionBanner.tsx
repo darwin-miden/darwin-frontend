@@ -53,10 +53,10 @@ export function PortfolioConnectionBanner() {
             maxWidth: 620,
           }}
         >
-          Darwin is multi-chain — Sepolia for basket-token ERC20 positions
-          and the Bali bridge, Miden testnet for native deposits / redeems
-          / faucet balances. Connect either one (or both) to see what
-          applies.
+          Connect your ETH wallet to see your confidential basket positions
+          and activity (the self-custody rail derives a Miden wallet from your
+          signature). A Miden wallet is for the native, extension-based deposit
+          path.
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <MidenConnectInline />
@@ -97,8 +97,8 @@ export function PortfolioConnectionBanner() {
   // One connected, suggest the other
   const missing = ethConnected ? "Miden" : "ETH";
   const explanation = ethConnected
-    ? "Add a Miden wallet to see native positions, faucet balances, and the deposit flow without the relay hop."
-    : "Add an ETH wallet to see your basket-token ERC20 balances on Sepolia and use the Bali bridge.";
+    ? "Your confidential positions and activity are below. Add a Miden wallet for the native, extension-based deposit path."
+    : "Your confidential positions live on the ETH-derived self-custody rail. Connect your ETH wallet to see them and your activity.";
 
   return (
     <div

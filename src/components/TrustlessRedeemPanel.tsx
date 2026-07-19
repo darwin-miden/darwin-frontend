@@ -81,6 +81,7 @@ import {
   writeOnchainBackupViaMac,
 } from "../lib/onchainBackup";
 import { backupAuthTypedData } from "../lib/backupAuthMessage";
+import { logActivity } from "../lib/activityLog";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
@@ -941,6 +942,12 @@ export function TrustlessRedeemPanel({
         }
         trace.fillTx = fillTx;
         setSepoliaTxHint(fillTx ?? null);
+        logActivity(evmAddress, {
+          type: "withdraw",
+          basket: basket?.symbol ?? "DCC",
+          amount: humanAmount,
+          tx: fillTx ?? undefined,
+        });
         setStage("done");
         trace.finishedAt = Date.now();
         trace.wallClockMs =

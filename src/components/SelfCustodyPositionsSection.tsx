@@ -1,14 +1,15 @@
 "use client";
 
 /**
- * Self-custody positions — the trustless controller's slot-10 entries
- * for the connected EVM address, one row per basket plus the legacy
- * flat slot. Pure HTTP reads (/api/position with the trustless
- * controllerId): no Miden hooks, no WASM client contention — safe to
- * mount next to any other portfolio section.
+ * Self-custody portfolio — the connected wallet's confidential basket positions
+ * plus an activity timeline.
  *
- * Withdraw links hand off to /trustless/redeem?basket=SYM, which debits
- * the same (user, basket) key it displays here.
+ * Positions are the controller's slot-10 entries for the connected EVM address
+ * (one row per basket), read over plain HTTP (/api/position) — no Miden hooks,
+ * no WASM contention. The mint is 1:1 with the dUSDC collateral, so a position's
+ * value in USD is just its size. The activity timeline is the local deposit/
+ * withdraw log (see activityLog.ts) so a wallet that has netted back to zero
+ * still shows its history.
  */
 
 import Link from "next/link";
@@ -16,39 +17,31 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAccount } from "wagmi";
 import { AccountId } from "@miden-sdk/miden-sdk";
 
-import {
-  BASKET_TOKEN_FAUCETS,
-  type BasketSymbol,
-} from "../lib/midenConstants";
+import { BASKET_TOKEN_FAUCETS, type BasketSymbol } from "../lib/midenConstants";
 import {
   TRUSTLESS_CONTROLLER_HEX,
   evmToUserIdFelts,
 } from "../lib/trustlessController";
+import { readActivity, timeAgo, type Activity } from "../lib/activityLog";
 
 const DUSDC_DECIMALS = 6;
 
-function formatDusdc(v: bigint): string {
+function fmt(v: bigint): string {
   const whole = v / 10n ** BigInt(DUSDC_DECIMALS);
   const frac = (v % 10n ** BigInt(DUSDC_DECIMALS))
     .toString()
     .padStart(DUSDC_DECIMALS, "0")
     .slice(0, 2);
-  return `${whole.toString()}.${frac}`;
+  return `${whole.toLocaleString()}.${frac}`;
 }
 
-type Row = {
-  key: string;
-  label: string;
-  symbol: BasketSymbol | null;
-  position: bigint;
-  /** Credited by the NTX builder on the network controller. */
-  network?: boolean;
-};
+type Row = { symbol: BasketSymbol; position: bigint };
 
 export function SelfCustodyPositionsSection() {
   const { address, isConnected } = useAccount();
   const [rows, setRows] = useState<Row[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [activity, setActivity] = useState<Activity[]>([]);
+  const [now, setNow] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const inFlight = useRef(false);
 
@@ -56,94 +49,40 @@ export function SelfCustodyPositionsSection() {
     if (!address || inFlight.current) return;
     inFlight.current = true;
     setLoading(true);
+    setActivity(readActivity(address));
+    setNow(Date.now());
     try {
       const { suffix, prefix } = evmToUserIdFelts(address);
-      const targets: Array<{
-        key: string;
-        label: string;
-        symbol: BasketSymbol | null;
-        basketSuffix: string;
-        basketPrefix: string;
-      }> = Object.values(BASKET_TOKEN_FAUCETS).map((b) => {
+      const targets = Object.values(BASKET_TOKEN_FAUCETS).map((b) => {
         const id = AccountId.fromHex(b.id);
         return {
-          key: b.symbol,
-          label: b.symbol,
           symbol: b.symbol,
           basketSuffix: id.suffix().asInt().toString(),
           basketPrefix: id.prefix().asInt().toString(),
         };
       });
-      targets.push({
-        key: "flat",
-        label: "Unallocated (demo slot)",
-        symbol: null,
-        basketSuffix: "0",
-        basketPrefix: "0",
-      });
-
       const results = await Promise.all(
-        targets.map(async (t) => {
-          const r = await fetch("/api/position", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              suffix: suffix.toString(),
-              prefix: prefix.toString(),
-              basketSuffix: t.basketSuffix,
-              basketPrefix: t.basketPrefix,
-              controllerId: TRUSTLESS_CONTROLLER_HEX,
-            }),
-          });
-          if (!r.ok) throw new Error(`${t.label}: HTTP ${r.status}`);
-          const j = (await r.json()) as { position?: string };
-          return {
-            key: t.key,
-            label: t.label,
-            symbol: t.symbol,
-            position: j.position ? BigInt(j.position) : 0n,
-          } satisfies Row;
+        targets.map(async (t): Promise<Row> => {
+          try {
+            const r = await fetch("/api/position", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                suffix: suffix.toString(),
+                prefix: prefix.toString(),
+                basketSuffix: t.basketSuffix,
+                basketPrefix: t.basketPrefix,
+                controllerId: TRUSTLESS_CONTROLLER_HEX,
+              }),
+            });
+            const j = r.ok ? ((await r.json()) as { position?: string }) : {};
+            return { symbol: t.symbol, position: j.position ? BigInt(j.position) : 0n };
+          } catch {
+            return { symbol: t.symbol, position: 0n };
+          }
         }),
       );
-      // Network-rail positions (credited by the NTX builder on the
-      // network controller) — separate read path; a failure here never
-      // hides the NoAuth rows.
-      const networkResults: Array<Row | null> = await Promise.all(
-        targets
-          .filter((t) => t.symbol !== null)
-          .map(async (t): Promise<Row | null> => {
-            try {
-              const r = await fetch("/api/network-position", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  suffix: suffix.toString(),
-                  prefix: prefix.toString(),
-                  basketSuffix: t.basketSuffix,
-                  basketPrefix: t.basketPrefix,
-                }),
-              });
-              if (!r.ok) return null;
-              const j = (await r.json()) as { position?: string };
-              return {
-                key: `${t.key}-network`,
-                label: `${t.label} · network rail`,
-                symbol: t.symbol,
-                position: j.position ? BigInt(j.position) : 0n,
-                network: true,
-              } satisfies Row;
-            } catch {
-              return null;
-            }
-          }),
-      );
-      setRows([
-        ...results,
-        ...networkResults.filter((r): r is Row => r !== null),
-      ]);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setRows(results);
     } finally {
       setLoading(false);
       inFlight.current = false;
@@ -157,121 +96,172 @@ export function SelfCustodyPositionsSection() {
 
   if (!isConnected) return null;
 
-  const nonZero = rows?.filter((r) => r.position > 0n) ?? [];
-  const zeroCount = (rows?.length ?? 0) - nonZero.length;
+  const open = rows?.filter((r) => r.position > 0n) ?? [];
+  const total = open.reduce((s, r) => s + r.position, 0n);
+
+  const HEAD: React.CSSProperties = {
+    fontSize: 12,
+    fontFamily: "var(--font-mono-stack)",
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
+    color: "var(--ink-3)",
+  };
 
   return (
-    <section style={{ marginTop: 48 }}>
-      <h2
+    <section style={{ marginTop: 40 }}>
+      {/* value summary */}
+      <div
         style={{
-          fontSize: 14,
-          fontFamily: "var(--font-mono-stack)",
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          borderBottom: "1px solid var(--ink)",
-          paddingBottom: 8,
-          marginBottom: 12,
+          border: "1px solid var(--ink)",
+          background: "var(--paper-2)",
+          padding: "22px 24px",
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 20,
+          flexWrap: "wrap",
         }}
       >
-        Self-custody positions
-      </h2>
-      <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 14 }}>
-        Written by your own browser against the <code>NoAuth</code>{" "}
-        controller — or, for network-rail rows, credited by the Miden
-        network itself (NTX builder). No Darwin server holds these.
-        Withdraw bridges back to Sepolia USDC via Epoch.
-      </p>
-
-      {error && (
-        <p style={{ fontSize: 12.5, color: "crimson", marginBottom: 10 }}>
-          read failed: {error}
-        </p>
-      )}
-
-      {rows === null && !error ? (
-        <p style={{ fontSize: 13, color: "var(--ink-3)" }}>
-          {loading ? "reading controller slot-10…" : "—"}
-        </p>
-      ) : (
-        <div
-          style={{
-            fontSize: 13,
-            fontFamily: "var(--font-mono-stack)",
-            border: "1px solid var(--rule)",
-            background: "var(--paper-2)",
-          }}
-        >
-          {nonZero.length === 0 && (
-            <div style={{ padding: "10px 14px", color: "var(--ink-3)" }}>
-              No self-custody position yet — use the Self-custody tab on a
-              basket page to open one.
-            </div>
-          )}
-          {nonZero.map((r) => (
-            <div
-              key={r.key}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr auto auto auto",
-                gap: 14,
-                alignItems: "center",
-                padding: "10px 14px",
-                borderBottom: "1px dashed var(--rule)",
-              }}
-            >
-              <span>{r.label}</span>
-              <span>{formatDusdc(r.position)} dUSDC</span>
-              <Link
-                href={
-                  r.symbol
-                    ? `/baskets/${r.symbol.toLowerCase()}#selfcustody`
-                    : "/baskets"
-                }
-                style={{ textDecoration: "underline", color: "var(--ink-2)", fontSize: 12 }}
-              >
-                deposit
-              </Link>
-              <Link
-                href={
-                  r.symbol
-                    ? `/baskets/${r.symbol.toLowerCase()}#selfcustody`
-                    : "/baskets"
-                }
-                style={{ textDecoration: "underline", color: "var(--ink)", fontSize: 12 }}
-              >
-                withdraw →
-              </Link>
-            </div>
-          ))}
+        <div>
+          <div style={HEAD}>Total value</div>
           <div
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              padding: "8px 14px",
-              color: "var(--ink-3)",
-              fontSize: 12,
+              fontSize: "clamp(2rem, 4vw, 2.8rem)",
+              fontWeight: 500,
+              letterSpacing: "-0.02em",
+              lineHeight: 1,
+              marginTop: 8,
+              fontFamily: "var(--font-mono-stack)",
             }}
           >
-            <span>
-              {zeroCount > 0 ? `${zeroCount} empty slot(s) hidden` : ""}
-            </span>
-            <button
-              onClick={() => void refresh()}
-              disabled={loading}
-              style={{
-                background: "transparent",
-                border: 0,
-                cursor: "pointer",
-                textDecoration: "underline",
-                color: "var(--ink-2)",
-                fontSize: 12,
-              }}
-            >
-              {loading ? "reading…" : "refresh"}
-            </button>
+            ${rows === null ? "—" : fmt(total)}
+          </div>
+          <div style={{ fontSize: 12.5, color: "var(--ink-3)", marginTop: 6 }}>
+            {open.length === 0
+              ? "No open position"
+              : `${open.length} basket${open.length > 1 ? "s" : ""} · confidential, on Miden`}
+          </div>
+        </div>
+        <button
+          onClick={() => void refresh()}
+          disabled={loading}
+          style={{
+            background: "transparent",
+            border: "1px solid var(--rule)",
+            padding: "6px 12px",
+            cursor: loading ? "default" : "pointer",
+            fontFamily: "var(--font-mono-stack)",
+            fontSize: 12,
+            color: "var(--ink-2)",
+          }}
+        >
+          {loading ? "reading…" : "refresh"}
+        </button>
+      </div>
+
+      {/* open positions */}
+      {open.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <div style={{ ...HEAD, marginBottom: 10 }}>Open positions</div>
+          <div style={{ border: "1px solid var(--rule)", background: "var(--paper-2)" }}>
+            {open.map((r) => (
+              <div
+                key={r.symbol}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto auto",
+                  gap: 16,
+                  alignItems: "center",
+                  padding: "12px 16px",
+                  borderBottom: "1px dashed var(--rule)",
+                }}
+              >
+                <span style={{ fontWeight: 600 }}>{r.symbol}</span>
+                <span style={{ fontFamily: "var(--font-mono-stack)", fontSize: 14 }}>
+                  {fmt(r.position)}{" "}
+                  <span style={{ color: "var(--ink-3)" }}>≈ ${fmt(r.position)}</span>
+                </span>
+                <Link
+                  href={`/baskets/${r.symbol.toLowerCase()}#selfcustody`}
+                  style={{ fontSize: 12.5, color: "var(--ink)", textDecoration: "underline" }}
+                >
+                  withdraw →
+                </Link>
+              </div>
+            ))}
           </div>
         </div>
       )}
+
+      {/* activity timeline */}
+      <div style={{ marginTop: 28 }}>
+        <div style={{ ...HEAD, marginBottom: 10 }}>Activity</div>
+        {activity.length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--ink-3)" }}>
+            No activity yet — open a position from the{" "}
+            <Link href="/baskets" style={{ borderBottom: "1px dotted var(--rule)" }}>
+              baskets page
+            </Link>
+            .
+          </p>
+        ) : (
+          <div style={{ border: "1px solid var(--rule)", background: "var(--paper-2)" }}>
+            {activity.map((a, i) => (
+              <div
+                key={`${a.ts}-${i}`}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "auto 1fr auto",
+                  gap: 14,
+                  alignItems: "center",
+                  padding: "11px 16px",
+                  borderBottom:
+                    i < activity.length - 1 ? "1px dashed var(--rule)" : "none",
+                  fontSize: 13.5,
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    fontFamily: "var(--font-mono-stack)",
+                    color: a.type === "deposit" ? "var(--orange)" : "var(--ink-2)",
+                    fontWeight: 600,
+                  }}
+                >
+                  {a.type === "deposit" ? "↓" : "↑"}
+                </span>
+                <span>
+                  {a.type === "deposit" ? "Deposited" : "Withdrew"}{" "}
+                  <strong style={{ fontFamily: "var(--font-mono-stack)" }}>
+                    {a.amount}
+                  </strong>{" "}
+                  {a.type === "deposit" ? "USDC → " : ""}
+                  {a.basket}
+                  {a.type === "withdraw" ? " → USDC" : ""}
+                  <span style={{ color: "var(--ink-3)" }}> · {timeAgo(a.ts, now)}</span>
+                </span>
+                {a.tx ? (
+                  <a
+                    href={`https://sepolia.etherscan.io/tx/${a.tx}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      fontFamily: "var(--font-mono-stack)",
+                      fontSize: 12,
+                      color: "var(--ink-2)",
+                      borderBottom: "1px dotted var(--rule)",
+                    }}
+                  >
+                    tx ↗
+                  </a>
+                ) : (
+                  <span />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

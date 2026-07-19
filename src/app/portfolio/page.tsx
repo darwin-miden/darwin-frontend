@@ -50,9 +50,9 @@ export default function PortfolioPage() {
           Your Darwin positions.
         </h1>
         <p style={{ color: "var(--ink-2)", maxWidth: 720, fontSize: 16, lineHeight: 1.55 }}>
-          Self-custody positions held directly on the Darwin controller —
-          written by your own browser or executed by the Miden network
-          itself. Open a position from the{" "}
+          Your confidential basket positions, minted into your private Miden
+          wallet — self-custodial, no server holds them. Open a position from
+          the{" "}
           <Link href="/baskets" style={{ borderBottom: "1px dotted var(--rule)" }}>
             baskets page
           </Link>
