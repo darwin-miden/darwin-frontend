@@ -17,7 +17,8 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAccount } from "wagmi";
+import { useAccount, usePublicClient } from "wagmi";
+import { formatUnits } from "viem";
 import { useMidenFiWallet } from "@miden-sdk/miden-wallet-adapter-react";
 import { AccountId } from "@miden-sdk/miden-sdk";
 import {
@@ -29,12 +30,28 @@ import {
   YAxis,
 } from "recharts";
 
-import { BASKET_TOKEN_FAUCETS, type BasketSymbol } from "../lib/midenConstants";
+import {
+  BASKET_TOKEN_FAUCETS,
+  EPOCH_DUSDC_FAUCET_ID,
+  type BasketSymbol,
+} from "../lib/midenConstants";
+import { EPOCH_USDC_SEPOLIA } from "../lib/epoch";
 import {
   TRUSTLESS_CONTROLLER_HEX,
   evmToUserIdFelts,
 } from "../lib/trustlessController";
 import { readActivity, timeAgo, type Activity } from "../lib/activityLog";
+
+// Minimal ERC-20 balanceOf — reads the connected wallet's Sepolia USDC.
+const ERC20_BALANCE_ABI = [
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
 
 const DUSDC_DECIMALS = 6;
 const RANGES = [
@@ -59,8 +76,9 @@ type Slot = { symbol: BasketSymbol; position: bigint };
 
 export function PortfolioView() {
   const { address: evmAddress, isConnected: ethConnected } = useAccount();
-  const { connected: midenConnected, address: midenAddress } =
-    useMidenFiWallet();
+  const publicClient = usePublicClient();
+  const miden = useMidenFiWallet();
+  const { connected: midenConnected, address: midenAddress } = miden;
 
   // Identity that owns the positions we display. The confidential position
   // lives on whichever rail the deposit was made from.
@@ -70,6 +88,7 @@ export function PortfolioView() {
 
   const [activity, setActivity] = useState<Activity[]>([]);
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  const [usdc, setUsdc] = useState<number | null>(null);
   const [now, setNow] = useState<number>(0);
   const [range, setRange] = useState<RangeKey>("ALL");
   const [tab, setTab] = useState<"positions" | "activity">("positions");
@@ -82,14 +101,47 @@ export function PortfolioView() {
     setLoading(true);
     setNow(Date.now());
     setActivity(readActivity(identity));
-    // Live slot-10 read only makes sense for the ETH-derived rail.
-    if (!ethConnected || !evmAddress) {
-      setSlots(null);
-      setLoading(false);
-      inFlight.current = false;
-      return;
-    }
     try {
+      // USDC — the loose stablecoin held outside any basket. On the ETH rail
+      // that's Sepolia USDC; on the MidenFi rail it's the dUSDC in the wallet.
+      if (ethConnected && evmAddress && publicClient) {
+        try {
+          const bal = (await publicClient.readContract({
+            address: EPOCH_USDC_SEPOLIA.address,
+            abi: ERC20_BALANCE_ABI,
+            functionName: "balanceOf",
+            args: [evmAddress as `0x${string}`],
+          })) as bigint;
+          setUsdc(Number(formatUnits(bal, EPOCH_USDC_SEPOLIA.decimals)));
+        } catch {
+          setUsdc(null);
+        }
+      } else if (midenConnected && miden.requestAssets) {
+        try {
+          const assets = await miden.requestAssets();
+          const canon = (s: string) => {
+            if (/^0x[0-9a-fA-F]+$/.test(s)) return s.toLowerCase();
+            try {
+              return AccountId.fromBech32(s).toString().toLowerCase();
+            } catch {
+              return s.toLowerCase();
+            }
+          };
+          const want = canon(EPOCH_DUSDC_FAUCET_ID);
+          const hit = assets.find((a) => canon(a.faucetId) === want);
+          setUsdc(hit ? Number(hit.amount) / 10 ** DUSDC_DECIMALS : 0);
+        } catch {
+          setUsdc(null);
+        }
+      } else {
+        setUsdc(null);
+      }
+
+      // Live slot-10 positions read only makes sense on the ETH-derived rail.
+      if (!ethConnected || !evmAddress) {
+        setSlots(null);
+        return;
+      }
       const { suffix, prefix } = evmToUserIdFelts(evmAddress);
       const targets = Object.values(BASKET_TOKEN_FAUCETS).map((b) => {
         const id = AccountId.fromHex(b.id);
@@ -128,7 +180,8 @@ export function PortfolioView() {
       setLoading(false);
       inFlight.current = false;
     }
-  }, [identity, ethConnected, evmAddress]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity, ethConnected, evmAddress, midenConnected, publicClient]);
 
   useEffect(() => {
     if (identity) void refresh();
@@ -222,10 +275,6 @@ export function PortfolioView() {
               }}
             >
               ${usd(totalValue)}
-            </div>
-            <div style={{ fontSize: 12.5, color: "var(--ink-3)", marginTop: 8 }}>
-              {ethConnected ? "ETH-derived self-custody" : "MidenFi wallet"} ·
-              confidential on Miden
             </div>
           </div>
           <button
@@ -333,56 +382,97 @@ export function PortfolioView() {
       </div>
 
       {tab === "positions" ? (
-        positions.length === 0 ? (
-          <p style={{ fontSize: 13.5, color: "var(--ink-3)" }}>
-            No open position — deposit from a{" "}
-            <Link href="/baskets" style={{ borderBottom: "1px dotted var(--rule)" }}>
-              basket page
-            </Link>{" "}
-            to open one.
-          </p>
-        ) : (
-          <div style={{ border: "1px solid var(--rule)", background: "var(--paper-2)" }}>
+        <>
+          {/* basket positions */}
+          {positions.length === 0 ? (
+            <p style={{ fontSize: 13.5, color: "var(--ink-3)" }}>
+              No open position — deposit from a{" "}
+              <Link href="/baskets" style={{ borderBottom: "1px dotted var(--rule)" }}>
+                basket page
+              </Link>{" "}
+              to open one.
+            </p>
+          ) : (
+            <div style={{ border: "1px solid var(--rule)", background: "var(--paper-2)" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto",
+                  gap: 16,
+                  padding: "9px 16px",
+                  borderBottom: "1px solid var(--rule)",
+                  ...HEAD,
+                }}
+              >
+                <span>Basket</span>
+                <span>Value</span>
+              </div>
+              {positions.map((p) => (
+                <div
+                  key={p.symbol}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto",
+                    gap: 16,
+                    alignItems: "center",
+                    padding: "13px 16px",
+                    borderBottom: "1px dashed var(--rule)",
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>{p.symbol}</span>
+                  <span style={{ fontFamily: "var(--font-mono-stack)", fontSize: 14 }}>
+                    ${usd(p.value)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* USDC — loose stablecoin held outside baskets */}
+          <div
+            style={{
+              marginTop: 20,
+              border: "1px solid var(--rule)",
+              background: "var(--paper-2)",
+            }}
+          >
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr auto auto",
+                gridTemplateColumns: "1fr auto",
                 gap: 16,
                 padding: "9px 16px",
                 borderBottom: "1px solid var(--rule)",
                 ...HEAD,
               }}
             >
-              <span>Basket</span>
-              <span>Value</span>
-              <span />
+              <span>Stablecoin</span>
+              <span>Balance</span>
             </div>
-            {positions.map((p) => (
-              <div
-                key={p.symbol}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto auto",
-                  gap: 16,
-                  alignItems: "center",
-                  padding: "13px 16px",
-                  borderBottom: "1px dashed var(--rule)",
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>{p.symbol}</span>
-                <span style={{ fontFamily: "var(--font-mono-stack)", fontSize: 14 }}>
-                  ${usd(p.value)}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto",
+                gap: 16,
+                alignItems: "center",
+                padding: "13px 16px",
+              }}
+            >
+              <span>
+                <span style={{ fontWeight: 600 }}>
+                  {ethConnected ? "USDC" : "dUSDC"}
                 </span>
-                <Link
-                  href={`/baskets/${p.symbol.toLowerCase()}#selfcustody`}
-                  style={{ fontSize: 12.5, color: "var(--ink)", textDecoration: "underline" }}
-                >
-                  withdraw →
-                </Link>
-              </div>
-            ))}
+                <span style={{ color: "var(--ink-3)", fontSize: 12.5 }}>
+                  {" "}
+                  · {ethConnected ? "Sepolia" : "in your Miden wallet"}
+                </span>
+              </span>
+              <span style={{ fontFamily: "var(--font-mono-stack)", fontSize: 14 }}>
+                {usdc == null ? "—" : usd(usdc)}
+              </span>
+            </div>
           </div>
-        )
+        </>
       ) : activity.length === 0 ? (
         <p style={{ fontSize: 13.5, color: "var(--ink-3)" }}>
           No activity yet — your deposits and withdraws will show up here.
