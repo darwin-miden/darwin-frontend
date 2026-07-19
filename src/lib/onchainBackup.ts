@@ -250,8 +250,14 @@ export async function writeOnchainBackupViaMac(params: {
   prefix: bigint;
   controllerId: string;
   encryptedBytes: Uint8Array;
+  // Ownership proof: the EVM address that owns this slot + its EIP-712 auth
+  // signature (see backupAuth.ts). The route recovers the signer and rejects
+  // the write unless it maps to (suffix, prefix) — so a caller can only
+  // overwrite their OWN backup.
+  evmAddress: `0x${string}`;
+  authSig: string;
 }): Promise<{ ok: boolean; nWords?: number; error?: string }> {
-  const { suffix, prefix, controllerId, encryptedBytes } = params;
+  const { suffix, prefix, controllerId, encryptedBytes, evmAddress, authSig } = params;
   try {
     const r = await fetch("/api/backup-write", {
       method: "POST",
@@ -261,6 +267,8 @@ export async function writeOnchainBackupViaMac(params: {
         prefix: prefix.toString(),
         controllerId,
         ciphertextB64: bytesToBase64(encryptedBytes),
+        evmAddress,
+        authSig,
       }),
     });
     const j = (await r.json().catch(() => null)) as

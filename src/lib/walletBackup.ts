@@ -27,10 +27,13 @@ import {
   writeOnchainBackupViaMac,
 } from "./onchainBackup";
 import { evmToUserIdFelts, TRUSTLESS_CONTROLLER_HEX } from "./trustlessController";
+import { cachedBackupAuthSig, getBackupAuthSig } from "./backupAuth";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Client = any;
 type RunExclusive = <T>(fn: () => Promise<T>) => Promise<T>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SignTypedData = (td: any) => Promise<`0x${string}`>;
 
 /**
  * Import the on-chain backup into the store and return the restored wallet id.
@@ -82,13 +85,25 @@ export async function autoBackupWallet(params: {
   runExclusive: RunExclusive;
   walletId: string;
   evmAddress: `0x${string}`;
+  // Signs the one-time ownership proof the write route requires. Optional: when
+  // absent we use a previously-cached signature; if none exists the backup is
+  // skipped (best-effort) rather than sent unauthenticated.
+  signTypedData?: SignTypedData;
   force?: boolean;
 }): Promise<void> {
-  const { client, runExclusive, walletId, evmAddress, force } = params;
+  const { client, runExclusive, walletId, evmAddress, signTypedData, force } = params;
   const key = cachedBackupKey(evmAddress);
   if (!key || !walletId) return;
   if (backingUp) return;
   if (!force && Date.now() - lastBackupAt < 15_000) return;
+  // Ownership proof for the write. Cached in localStorage → at most one prompt
+  // per device. Without a signer and no cached proof, skip: the route rejects
+  // unauthenticated writes, so there's nothing to gain by calling it.
+  let authSig = cachedBackupAuthSig(evmAddress);
+  if (!authSig && signTypedData) {
+    authSig = await getBackupAuthSig(evmAddress, signTypedData).catch(() => null);
+  }
+  if (!authSig) return;
   backingUp = true;
   try {
     const { AccountId } = await import("@miden-sdk/miden-sdk");
@@ -104,6 +119,8 @@ export async function autoBackupWallet(params: {
       prefix,
       controllerId: TRUSTLESS_CONTROLLER_HEX,
       encryptedBytes: enc,
+      evmAddress,
+      authSig,
     });
     if (res.ok) lastBackupAt = Date.now();
   } catch {

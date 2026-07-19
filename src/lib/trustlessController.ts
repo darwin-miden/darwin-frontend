@@ -10,33 +10,19 @@
  */
 
 import { TRUSTLESS_CONTROLLER_HEX } from "./midenConstants";
+// EVM address → (user_id_suffix, user_id_prefix). Imported from the isomorphic
+// source of truth (also used here in fetchTrustlessPosition) and re-exported so
+// the server-side backup-write auth check keys the slot with the exact same
+// encoding as this client path (and the worker).
+import { evmToUserIdFelts } from "./userIdFelts";
 
-export { TRUSTLESS_CONTROLLER_HEX };
+export { TRUSTLESS_CONTROLLER_HEX, evmToUserIdFelts };
 
 // MAST root of `set_user_position` on the v6/v7/v8 controller. Same MASM
 // deployed under all three; the root is stable across auth-component
 // variants (v7 SingleSig, v8 NoAuth, v8-network).
 export const SET_USER_POSITION_MAST =
   "0xea652ac9aa1b6ee468da0845b52008ffa4639d112f356534ba608bc00d7b6f5f";
-
-// EVM address → (user_id_suffix, user_id_prefix) — same encoding the
-// worker uses (bytes 12..20 = suffix, bytes 4..12 = prefix, both LE u64
-// masked to 63 bits so they fit inside a Miden Felt).
-export function evmToUserIdFelts(evmAddr: string): {
-  suffix: bigint;
-  prefix: bigint;
-} {
-  const hex = evmAddr.replace(/^0x/, "").toLowerCase();
-  const bytes = new Uint8Array(
-    hex.match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-  );
-  const readLE = (start: number) => {
-    let v = 0n;
-    for (let i = 0; i < 8; i++) v |= BigInt(bytes[start + i]) << BigInt(8 * i);
-    return v & ((1n << 63n) - 1n);
-  };
-  return { suffix: readLE(12), prefix: readLE(4) };
-}
 
 // The tx script that runs against v8-noauth to write slot-10 for a
 // specific (user_id, amount). Direct `set_user_position` call — the

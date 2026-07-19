@@ -80,6 +80,7 @@ import {
   warmOnchainBackup,
   writeOnchainBackupViaMac,
 } from "../lib/onchainBackup";
+import { backupAuthTypedData } from "../lib/backupAuthMessage";
 
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
@@ -488,9 +489,17 @@ export function TrustlessRedeemPanel({
           exportAccountFile: (id: unknown) => Promise<{ serialize: () => Uint8Array }>;
           importAccountFile: (file: unknown) => Promise<string>;
         };
-        // Fixed test namespace (never a real user).
-        const { suffix, prefix } = evmToUserIdFelts(
-          "0x000000000000000000000000000000000000ba5e",
+        // Fixed test IDENTITY (a well-known throwaway test key, never a real
+        // user) — so the self-test also exercises the write route's real
+        // ownership auth: sign the proof with the test key, write to its slot.
+        const { privateKeyToAccount } = await import("viem/accounts");
+        const testAccount = privateKeyToAccount(
+          "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+        );
+        const testEvmAddress = testAccount.address;
+        const { suffix, prefix } = evmToUserIdFelts(testEvmAddress);
+        const testAuthSig = await testAccount.signTypedData(
+          backupAuthTypedData(testEvmAddress) as never,
         );
         let enc: Uint8Array;
         let key: CryptoKey | null = null;
@@ -530,6 +539,8 @@ export function TrustlessRedeemPanel({
           prefix,
           controllerId: TRUSTLESS_CONTROLLER_HEX,
           encryptedBytes: enc,
+          evmAddress: testEvmAddress,
+          authSig: testAuthSig,
         });
         r.writeRes = wres;
         if (!wres.ok) {
@@ -2067,6 +2078,7 @@ export function TrustlessRedeemPanel({
           runExclusive,
           walletId,
           evmAddress: evmAddress as `0x${string}`,
+          signTypedData: (td) => signTypedDataAsync(td as any),
           force: true,
         });
 

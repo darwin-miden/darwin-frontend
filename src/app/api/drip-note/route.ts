@@ -12,6 +12,14 @@
  */
 import { spawn } from "node:child_process";
 import { NextResponse } from "next/server";
+import {
+  acquireSlot,
+  busySlot,
+  keyLimit,
+  rateLimit,
+  rateLimited,
+  releaseSlot,
+} from "../../../lib/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +55,11 @@ function runBuilder(
 }
 
 export async function POST(req: Request) {
+  // Unauthenticated + reachable over the public tunnel; it spawns a ~30s native
+  // builder and drives a payout that drains the shared dispenser. Throttle per
+  // IP before doing any work.
+  if (!rateLimit(req)) return rateLimited();
+
   let body: { requester?: string };
   try {
     body = (await req.json()) as { requester?: string };
@@ -83,8 +96,21 @@ export async function POST(req: Request) {
       { status: 503 },
     );
   }
+  // Per-wallet cap: one requester can only pull a few drips per minute (rotating
+  // requesters is still bounded by the per-IP limit above and the subprocess
+  // semaphore below).
+  if (!keyLimit(`drip:${requester}`, 3)) return rateLimited();
 
-  const { stdout, stderr, code } = await runBuilder([requester, DISPENSER_ID]);
+  // Bound concurrency: the builder is a ~30s subprocess — share the global spawn
+  // semaphore so a flood can't fork-bomb the host.
+  if (!acquireSlot()) return busySlot();
+  let out: { stdout: string; stderr: string; code: number | null };
+  try {
+    out = await runBuilder([requester, DISPENSER_ID]);
+  } finally {
+    releaseSlot();
+  }
+  const { stdout, stderr, code } = out;
   if (code !== 0) {
     return NextResponse.json(
       { error: `build_drip_note exit ${code}: ${(stderr || stdout).slice(0, 300)}` },

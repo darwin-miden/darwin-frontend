@@ -785,6 +785,7 @@ export function TrustlessDepositPanel({
           runExclusive,
           walletId,
           evmAddress: evmAddress!,
+          signTypedData: (td) => signTypedDataAsync(td as any),
           force: true,
         });
         setStage("done");

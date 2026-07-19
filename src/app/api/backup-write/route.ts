@@ -16,6 +16,16 @@
  */
 
 import { spawn } from "node:child_process";
+import { recoverTypedDataAddress } from "viem";
+import {
+  acquireSlot,
+  busySlot,
+  rateLimit,
+  rateLimited,
+  releaseSlot,
+} from "../../../lib/apiGuard";
+import { backupAuthTypedData } from "../../../lib/backupAuthMessage";
+import { evmToUserIdFelts } from "../../../lib/userIdFelts";
 
 export const runtime = "nodejs";
 
@@ -68,14 +78,58 @@ function runWrite(
 }
 
 export async function POST(req: Request) {
+  if (!rateLimit(req)) return rateLimited();
+
   const body = (await req.json().catch(() => null)) as
-    | { suffix?: string; prefix?: string; controllerId?: string; ciphertextB64?: string }
+    | {
+        suffix?: string;
+        prefix?: string;
+        controllerId?: string;
+        ciphertextB64?: string;
+        evmAddress?: string;
+        authSig?: string;
+      }
     | null;
   if (!body?.suffix || !body?.prefix) return jsonError("missing suffix/prefix");
   if (!body?.ciphertextB64) return jsonError("missing ciphertextB64");
   const controllerId = body.controllerId ?? "";
   if (!/^0x[0-9a-fA-F]{30}$/.test(controllerId))
     return jsonError("controllerId must be a Miden account hex");
+
+  // ── Ownership auth ──────────────────────────────────────────────────────
+  // Anyone can reach this endpoint over the public tunnel, and the slot is keyed
+  // by (suffix, prefix) = evmToUserIdFelts(EVM address) — a public, guessable
+  // mapping. Without a check, a stranger could overwrite a victim's backup with
+  // garbage and permanently freeze their private wallet. Require an EIP-712
+  // signature proving control of the EVM address that owns this slot: recover
+  // the signer and confirm it hashes to the exact (suffix, prefix) being
+  // written. A caller can therefore only ever overwrite their OWN backup.
+  const evmAddress = body.evmAddress ?? "";
+  const authSig = body.authSig ?? "";
+  if (!/^0x[0-9a-fA-F]{40}$/.test(evmAddress))
+    return jsonError("missing/invalid evmAddress", 401);
+  if (!/^0x[0-9a-fA-F]{2,}$/.test(authSig))
+    return jsonError("missing/invalid authSig", 401);
+  let suffixField: bigint, prefixField: bigint;
+  try {
+    suffixField = BigInt(body.suffix);
+    prefixField = BigInt(body.prefix);
+  } catch {
+    return jsonError("suffix/prefix must be base-10 bigints");
+  }
+  try {
+    const recovered = await recoverTypedDataAddress({
+      ...backupAuthTypedData(evmAddress as `0x${string}`),
+      signature: authSig as `0x${string}`,
+    });
+    if (recovered.toLowerCase() !== evmAddress.toLowerCase())
+      return jsonError("auth signature does not match evmAddress", 401);
+  } catch {
+    return jsonError("auth signature invalid", 401);
+  }
+  const owner = evmToUserIdFelts(evmAddress);
+  if (owner.suffix !== suffixField || owner.prefix !== prefixField)
+    return jsonError("evmAddress does not own this backup slot", 401);
 
   if (MAC_API_BASE) {
     const r = await fetch(`${MAC_API_BASE}/api/backup-write`, {
@@ -89,14 +143,7 @@ export async function POST(req: Request) {
     });
   }
 
-  let suffix: bigint, prefix: bigint;
-  try {
-    suffix = BigInt(body.suffix);
-    prefix = BigInt(body.prefix);
-  } catch {
-    return jsonError("suffix/prefix must be base-10 bigints");
-  }
-  if ([suffix, prefix].some((f) => f < 0n || f >= FELT_MAX))
+  if ([suffixField, prefixField].some((f) => f < 0n || f >= FELT_MAX))
     return jsonError("suffix/prefix out of field range");
 
   let ciphertext: Buffer;
@@ -108,14 +155,22 @@ export async function POST(req: Request) {
   if (ciphertext.length === 0) return jsonError("empty ciphertext");
   if (ciphertext.length > 1_000_000) return jsonError("ciphertext too large");
 
-  const midenHome = process.env.DARWIN_MIDEN_HOME;
-  const env = midenHome ? { ...process.env, HOME: midenHome } : process.env;
-  const result = await runWrite(controllerId, body.suffix, body.prefix, ciphertext, env).catch(
-    (e) => ({ ok: false, error: String(e) }),
-  );
-  const status = result?.ok ? 200 : 500;
-  return new Response(JSON.stringify(result), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
+  // Backup writes are several native proofs (30–60s each). Bound concurrency so
+  // a burst can't fork-bomb the operator's machine — shares the process-global
+  // semaphore with the other spawn routes.
+  if (!acquireSlot()) return busySlot();
+  try {
+    const midenHome = process.env.DARWIN_MIDEN_HOME;
+    const env = midenHome ? { ...process.env, HOME: midenHome } : process.env;
+    const result = await runWrite(controllerId, body.suffix, body.prefix, ciphertext, env).catch(
+      (e) => ({ ok: false, error: String(e) }),
+    );
+    const status = result?.ok ? 200 : 500;
+    return new Response(JSON.stringify(result), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  } finally {
+    releaseSlot();
+  }
 }
