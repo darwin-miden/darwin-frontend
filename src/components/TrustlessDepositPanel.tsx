@@ -129,6 +129,7 @@ type Stage =
   | "deriving"
   | "ready"
   | "quoting"
+  | "quoted"
   | "signing-sepolia"
   | "awaiting-delivery"
   | "consuming"
@@ -137,6 +138,17 @@ type Stage =
   | "error";
 
 const HUMAN_AMOUNT_DEFAULT = "";
+
+// Format a base-unit amount string (e.g. a quote's tokenIn/tokenOut) for display.
+function fmtBase(base: string, decimals: number): string {
+  try {
+    return Number(
+      formatUnits(BigInt(base || "0"), decimals),
+    ).toLocaleString(undefined, { maximumFractionDigits: 4 });
+  } catch {
+    return base;
+  }
+}
 
 type StageState = "idle" | "running" | "done";
 
@@ -430,6 +442,14 @@ export function TrustlessDepositPanel({
       setFaucetBusy(false);
     }
   }, [evmAddress, faucetBusy, writeContractAsync, publicClient]);
+  // Quote preview (Get quote → show the exact debit before confirming).
+  const [quoteInfo, setQuoteInfo] = useState<{
+    tokenIn: string;
+    tokenOut: string;
+  } | null>(null);
+  const pendingQuoteRef = useRef<Awaited<ReturnType<typeof fetchQuote>> | null>(
+    null,
+  );
   const [sepoliaTx, setSepoliaTx] = useState<string | null>(null);
   const [midenNoteId, setMidenNoteId] = useState<string | null>(null);
   const [consumeTx, setConsumeTx] = useState<string | null>(null);
@@ -487,22 +507,20 @@ export function TrustlessDepositPanel({
     }
   }
 
-  async function onDeposit() {
+  // Build the SDK + fetch the Epoch quote, WITHOUT committing — so the user
+  // sees the exact debit (you pay X USDC → receive ~Y dUSDC) before confirming,
+  // like the Epoch reference example. The quote is stashed for onDeposit to reuse.
+  async function onGetQuote() {
     if (!walletId || !evmAddress) return;
-    // Same reasoning as onDerive — pause the SDK's auto-sync so it
-    // doesn't race the consume / executeTx futures on the WASM RefCell.
     pauseSync();
     try {
       setErrorMsg(null);
+      setQuoteInfo(null);
+      pendingQuoteRef.current = null;
       setStage("quoting");
-
-      // Ensure user is on Sepolia for the Compact deposit tx.
       try {
         await switchChainAsync({ chainId: SEPOLIA_CHAIN_ID });
       } catch (_) {}
-
-      // Build the Epoch SDK on top of the injected provider so the
-      // user's own MetaMask signs the Sepolia deposit tx.
       const eth = (window as unknown as { ethereum?: unknown }).ethereum;
       if (!eth) throw new Error("No injected ETH provider (MetaMask?)");
       const walletClient = createWalletClient({
@@ -514,18 +532,13 @@ export function TrustlessDepositPanel({
         apiBaseUrl: ALLOCATOR_URL,
         walletClient,
       });
-
-      // FORWARD quote: send EXACTLY the USDC the user typed (Sepolia 18-dec), so
-      // "deposit 7" sends 7 and Max = full balance always fits. The dUSDC output
-      // is solver-priced; protect it with a generous floor (the testnet solver's
-      // spread varies — don't fail an otherwise-good deposit).
       const tokenInAmount = parseUnits(
         humanAmount,
         EPOCH_USDC_SEPOLIA.decimals,
       ).toString();
       const minTokenOut = applySlippageBps(
         dusdcMidenBaseUnits(humanAmount),
-        1000, // accept ≥90% out (was a tight reverse-quote guarantee)
+        1000,
       );
       const quote = await fetchQuote(sdkRef.current, {
         evmSourceAddress: evmAddress as `0x${string}`,
@@ -533,6 +546,64 @@ export function TrustlessDepositPanel({
         tokenInAmount,
         minTokenOut,
       });
+      pendingQuoteRef.current = quote;
+      const qr = (quote as { quoteResult?: { tokenIn?: string; tokenOut?: string } })
+        .quoteResult;
+      setQuoteInfo({
+        tokenIn: qr?.tokenIn ?? tokenInAmount,
+        tokenOut: qr?.tokenOut ?? "0",
+      });
+      setStage("quoted");
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+      setStage("error");
+    } finally {
+      resumeSync();
+    }
+  }
+
+  async function onDeposit() {
+    if (!walletId || !evmAddress) return;
+    // Same reasoning as onDerive — pause the SDK's auto-sync so it
+    // doesn't race the consume / executeTx futures on the WASM RefCell.
+    pauseSync();
+    try {
+      setErrorMsg(null);
+
+      // Reuse the quote from "Get quote"; fall back to a fresh fetch.
+      let quote = pendingQuoteRef.current;
+      if (!quote || !sdkRef.current) {
+        setStage("quoting");
+        try {
+          await switchChainAsync({ chainId: SEPOLIA_CHAIN_ID });
+        } catch (_) {}
+        const eth = (window as unknown as { ethereum?: unknown }).ethereum;
+        if (!eth) throw new Error("No injected ETH provider (MetaMask?)");
+        const walletClient = createWalletClient({
+          account: evmAddress as `0x${string}`,
+          chain: sepolia,
+          transport: custom(eth as never),
+        });
+        sdkRef.current = new EpochIntentSDK({
+          apiBaseUrl: ALLOCATOR_URL,
+          walletClient,
+        });
+        const tokenInAmount = parseUnits(
+          humanAmount,
+          EPOCH_USDC_SEPOLIA.decimals,
+        ).toString();
+        const minTokenOut = applySlippageBps(
+          dusdcMidenBaseUnits(humanAmount),
+          1000,
+        );
+        quote = await fetchQuote(sdkRef.current, {
+          evmSourceAddress: evmAddress as `0x${string}`,
+          midenRecipientId: walletId,
+          tokenInAmount,
+          minTokenOut,
+        });
+      }
+      pendingQuoteRef.current = null;
       setStage("signing-sepolia");
       const submit = await submitIntent(sdkRef.current, quote);
       // The Sepolia deposit hash lives on depositResult (depositToCompact's
@@ -927,10 +998,9 @@ export function TrustlessDepositPanel({
 
       {compact ? (
         <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
-          Self-custody rail{basket ? ` for ${basket.symbol}` : ""} — your
-          browser derives a Miden key from one MetaMask signature, bridges
-          via Epoch, and writes your position itself. No Darwin server
-          ever touches your funds.
+          Self-custody{basket ? ` · ${basket.symbol}` : ""}. One signature
+          derives your Miden wallet in-browser; Epoch bridges your USDC and
+          the network executes the deposit.
         </p>
       ) : (
         <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
@@ -985,9 +1055,7 @@ export function TrustlessDepositPanel({
             <strong>Derived Miden wallet</strong>: <code>{walletId}</code>
           </div>
           <div style={{ marginTop: 4, color: "var(--ink-3)" }}>
-            The signing seed derived from your signature stays in this
-            browser session only — it is never displayed, stored on a
-            server, or sent anywhere.
+            Key stays in this browser — never sent anywhere.
           </div>
           {/*
             No "fund with MIDEN" step: Miden testnet fees are currently 0,
@@ -1002,7 +1070,7 @@ export function TrustlessDepositPanel({
         </div>
       )}
 
-      {walletId && stage !== "done" && stage !== "quoting" && stage !== "signing-sepolia" && stage !== "awaiting-delivery" && stage !== "consuming" && (
+      {walletId && !quoteInfo && stage !== "done" && stage !== "quoting" && stage !== "signing-sepolia" && stage !== "awaiting-delivery" && stage !== "consuming" && stage !== "crediting" && (
         <div style={{ marginTop: 16 }}>
           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
             <label style={{ fontSize: 13 }}>Amount (USDC):</label>
@@ -1012,7 +1080,11 @@ export function TrustlessDepositPanel({
               min="0.01"
               max={usdcBalance != null ? formatUnits(usdcBalance, usdcDecimals) : undefined}
               value={humanAmount}
-              onChange={(e) => setHumanAmount(e.target.value)}
+              onChange={(e) => {
+                setHumanAmount(e.target.value);
+                setQuoteInfo(null);
+                pendingQuoteRef.current = null;
+              }}
               style={{
                 fontFamily: "var(--font-mono-stack)",
                 padding: "4px 8px",
@@ -1035,12 +1107,12 @@ export function TrustlessDepositPanel({
               Max
             </button>
             <button
-              onClick={onDeposit}
+              onClick={onGetQuote}
               disabled={!amountValid}
               className="nav-cta"
-              style={{ minWidth: 220, opacity: amountValid ? 1 : 0.5 }}
+              style={{ minWidth: 150, opacity: amountValid ? 1 : 0.5 }}
             >
-              Step 2 · Deposit via Epoch
+              Get quote
             </button>
             <button
               type="button"
@@ -1072,6 +1144,70 @@ export function TrustlessDepositPanel({
                 : insufficient
                   ? `Insufficient — you hold ${fmtUsdc(usdcBalance)} USDC. Click “Get test USDC”, Max, or lower the amount.`
                   : `Balance: ${fmtUsdc(usdcBalance)} USDC`}
+          </div>
+        </div>
+      )}
+
+      {quoteInfo && stage === "quoted" && (
+        <div style={{ marginTop: 16 }}>
+          <div
+            style={{
+              border: "1px solid var(--ink)",
+              background: "var(--paper-2)",
+              padding: 14,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 16,
+                fontSize: 14,
+              }}
+            >
+              <span style={{ color: "var(--ink-3)" }}>You pay</span>
+              <strong style={{ fontFamily: "var(--font-mono-stack)" }}>
+                {fmtBase(quoteInfo.tokenIn, EPOCH_USDC_SEPOLIA.decimals)} USDC
+              </strong>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 16,
+                fontSize: 14,
+                marginTop: 8,
+              }}
+            >
+              <span style={{ color: "var(--ink-3)" }}>You receive</span>
+              <strong style={{ fontFamily: "var(--font-mono-stack)" }}>
+                ~{fmtBase(quoteInfo.tokenOut, EPOCH_USDC_SEPOLIA.midenDecimals)}{" "}
+                dUSDC
+              </strong>
+            </div>
+          </div>
+          <div
+            style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}
+          >
+            <button
+              onClick={onDeposit}
+              className="nav-cta"
+              style={{ minWidth: 200 }}
+            >
+              Confirm deposit
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setQuoteInfo(null);
+                pendingQuoteRef.current = null;
+                setStage("ready");
+              }}
+              className="nav-cta"
+              style={{ padding: "4px 12px", fontSize: 12 }}
+            >
+              ← Change amount
+            </button>
           </div>
         </div>
       )}
