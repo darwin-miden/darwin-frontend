@@ -1114,20 +1114,22 @@ export function TrustlessDepositPanel({
             >
               Get quote
             </button>
-            <button
-              type="button"
-              onClick={mintTestUsdc}
-              disabled={faucetBusy}
-              className="nav-cta"
-              style={{
-                padding: "4px 12px",
-                fontSize: 12,
-                opacity: faucetBusy ? 0.5 : 1,
-              }}
-              title="Mint 100 test USDC to your wallet — testnet faucet, no gas needed"
-            >
-              {faucetBusy ? "Minting…" : "Get test USDC"}
-            </button>
+            {!compact && (
+              <button
+                type="button"
+                onClick={mintTestUsdc}
+                disabled={faucetBusy}
+                className="nav-cta"
+                style={{
+                  padding: "4px 12px",
+                  fontSize: 12,
+                  opacity: faucetBusy ? 0.5 : 1,
+                }}
+                title="Mint 100 test USDC to your wallet — testnet faucet, no gas needed"
+              >
+                {faucetBusy ? "Minting…" : "Get test USDC"}
+              </button>
+            )}
           </div>
           <div
             style={{

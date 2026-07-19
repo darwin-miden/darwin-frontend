@@ -2,6 +2,11 @@
 const nextConfig = {
   reactStrictMode: true,
 
+  // Optional separate build/dev output dir so `next dev` doesn't clobber the
+  // live prod `.next` that launchd's `next start :3010` is serving. Unset in
+  // prod (Vercel/launchd) → default `.next`.
+  ...(process.env.DARWIN_BUILD_DISTDIR ? { distDir: process.env.DARWIN_BUILD_DISTDIR } : {}),
+
   // The @miden-sdk/miden-sdk package ships large WASM blobs and
   // requires SharedArrayBuffer + Atomics for its multi-threaded prover.
   // We tell Next.js to load .wasm via async imports and set the
@@ -84,7 +89,17 @@ const nextConfig = {
         source: "/(.*)",
         headers: [
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+          {
+            key: "Cross-Origin-Embedder-Policy",
+            // `require-corp` (prod) is broadest for SharedArrayBuffer, but it
+            // blocks the cross-origin dev runtime (`next dev` HMR/react-refresh)
+            // → blank page in dev. `credentialless` still enables SAB in
+            // Chromium while letting the dev runtime load. Prod stays require-corp.
+            value:
+              process.env.NODE_ENV === "development"
+                ? "credentialless"
+                : "require-corp",
+          },
           { key: "Content-Security-Policy", value: csp },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

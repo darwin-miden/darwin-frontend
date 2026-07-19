@@ -10,12 +10,25 @@
 
 import { getDefaultConfig } from "connectkit";
 import { createConfig, http } from "wagmi";
-import { mainnet, sepolia } from "wagmi/chains";
+import { mainnet, sepolia as sepoliaBase } from "wagmi/chains";
 import { injected, walletConnect } from "wagmi/connectors";
 
 const SEPOLIA_RPC =
   process.env.NEXT_PUBLIC_SEPOLIA_RPC_HTTP ||
   "https://ethereum-sepolia-rpc.publicnode.com";
+
+// Sepolia with its default RPC overridden to a reliable one (publicnode).
+// viem's built-in sepolia points `rpcUrls.default` at the flaky rpc.sepolia.org;
+// when a wallet adds Sepolia as a custom network from this config it inherits
+// that RPC, then reads a 0 ETH balance and refuses the deposit tx with "gas
+// balance not enough" even when the account is funded. Pinning a working RPC
+// here fixes the balance read.
+const sepolia = {
+  ...sepoliaBase,
+  rpcUrls: {
+    default: { http: [SEPOLIA_RPC] as readonly string[] },
+  },
+} as const;
 
 // Mainnet is used exclusively for ENS resolution by ConnectKit; the
 // Darwin protocol itself never reads or writes there.
