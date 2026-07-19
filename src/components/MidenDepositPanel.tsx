@@ -417,36 +417,24 @@ export function MidenDepositPanel({ basket }: Props) {
         );
       }
 
-      // 4. Claim the private minted-token note. Try a SINGLE prompt first by
-      //    handing the note bytes to requestConsume (import + consume in one
-      //    popup). If the wallet won't consume an unstaged private note this
-      //    way, fall back to import-then-consume (two popups) so the DCC is
-      //    always claimed — never left minted-but-unclaimed.
+      // 4. Claim the private minted-token note: import its details into the
+      //    wallet (a private/confidential note can't be discovered on-chain, so
+      //    MidenFi needs the note staged), then consume it. Two prompts — the
+      //    unavoidable cost of a CONFIDENTIAL balance (a public payout, like the
+      //    faucet, skips the import; but that would expose the balance).
+      setTxState((s) => ({ ...s, stage: "sign import in MidenFi" }));
+      try {
+        await wallet.importPrivateNote?.(b64ToBytes(built.paybackFileB64));
+      } catch {
+        /* may already be imported */
+      }
       setTxState((s) => ({ ...s, stage: "sign claim in MidenFi" }));
-      const consumeArgs = {
+      const txId = await wallet.requestConsume!({
         faucetId: built.faucetId!,
         noteId: built.paybackId,
-        noteType: "private" as const,
+        noteType: "private",
         amount: Number(built.mintAmount ?? units),
-      };
-      let txId: string;
-      try {
-        txId = await wallet.requestConsume!({
-          ...consumeArgs,
-          noteBytes: built.paybackNoteB64,
-        });
-      } catch (e) {
-        console.warn(
-          "[deposit] one-shot consume failed — staging note then consuming",
-          e,
-        );
-        try {
-          await wallet.importPrivateNote?.(b64ToBytes(built.paybackFileB64));
-        } catch {
-          /* may already be imported */
-        }
-        txId = await wallet.requestConsume!(consumeArgs);
-      }
+      });
       if (wallet.waitForTransaction) {
         await wallet.waitForTransaction(txId, 90_000).catch(() => {});
       }
@@ -488,7 +476,8 @@ export function MidenDepositPanel({ basket }: Props) {
         <code>{address.slice(0, 10)}…</code>). The Miden network drains your
         collateral and mints {basket.symbol} tokens 1:1 into a{" "}
         <strong>private note</strong> you consume — confidential balance,
-        no server, no operator. Two signatures: deposit, then claim.
+        no server, no operator. Because the balance is private, claiming it
+        takes two prompts (import + consume) after the deposit.
       </p>
       <p
         style={{
