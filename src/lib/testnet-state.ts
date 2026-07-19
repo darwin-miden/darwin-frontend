@@ -133,15 +133,7 @@ export const DEPLOYED_ACCOUNTS: DeployedAccount[] = [
     accountId: "0xcc33bbfe063efb806141336e041b01",
     storageMode: "private",
     notes:
-      "adds read_pool_position via active_account::get_map_item on slot 2. M1→M2 hand-off.",
-  },
-  {
-    label: "v4 controller (rebalance-aware)",
-    role: "controller",
-    accountId: "0x1975a9aa8572f8804fb38bee09fbdf",
-    storageMode: "private",
-    notes:
-      "M2 Track 3. Adds execute_rebalance_step (MAST root 0xddff122f…84c53), the entry point a Flow B trigger note calls into. End-to-end on testnet via flow_b_demo.",
+      "adds read_pool_position via active_account::get_map_item on slot 2.",
   },
   // Wallets
   {
@@ -199,23 +191,6 @@ export const FLOW_A_EVENTS: FlowEvent[] = [
     block: 703322,
     detail:
       "Note script runs darwin::math::felt_div on-chain, then drains 100 dETH into the controller's vault via call.receive_asset.",
-  },
-];
-
-export const FLOW_B_EVENTS: FlowEvent[] = [
-  {
-    label: "User wallet emits Flow B trigger note",
-    txId: "0xdd1a97b9170623463e642dfbce86abc94be6315d3755c3c033fe51ca373b037d",
-    block: 782141,
-    note: "0x6d77db31a501b4ff1a6807953858038d7d4c83c6beb7aece19d5f80ca11e27fe",
-    detail: "Zero-asset trigger note carrying [basket_id=1, ts] on its script stack. Calls into the v4 controller's execute_rebalance_step MAST root.",
-  },
-  {
-    label: "v4 controller consumes the trigger note",
-    txId: "0xaf8521f24c2a06f05b0512f632e64843e2b9399ad23a6e6c3cce4434c0b402f8",
-    block: 782152,
-    detail:
-      "execute_rebalance_step runs inside the controller's tx context. M2 follow-up adds per-asset swap-note emission targeting a mock DEX account.",
   },
 ];
 

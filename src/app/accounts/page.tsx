@@ -12,7 +12,7 @@ import {
 export const metadata: Metadata = {
   title: "Accounts",
   description:
-    "Every Miden testnet account that backs Darwin Protocol's Milestone 1: faucets, controllers, oracles, wallets.",
+    "Every Miden testnet account that backs Darwin Protocol: faucets, controllers, oracles, wallets.",
 };
 
 const ROLE_LABEL: Record<DeployedAccount["role"], string> = {

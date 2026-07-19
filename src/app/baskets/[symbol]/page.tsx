@@ -410,14 +410,7 @@ export default async function BasketDetailPage({
                 lineHeight: 1.55,
               }}
             >
-              Operator drift dashboard + rebalance trigger live at{" "}
-              <Link
-                href="/admin/drift"
-                style={{ borderBottom: "1px dotted var(--rule)" }}
-              >
-                /admin/drift
-              </Link>
-              . Every Sepolia + Miden account at{" "}
+              Every deployed Miden + Sepolia account at{" "}
               <Link href="/accounts" style={{ borderBottom: "1px dotted var(--rule)" }}>
                 /accounts
               </Link>

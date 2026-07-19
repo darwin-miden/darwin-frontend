@@ -42,13 +42,6 @@ const SCRIPTS: ScriptDef[] = [
     blurb:
       "Symmetric to atomic_deposit — user attaches basket-token assets, controller absorbs them, supply ticks down.",
   },
-  {
-    id: "rebalance-trigger",
-    label: "rebalance_trigger_note.masm",
-    url: "/notes/rebalance_trigger_note.masm",
-    blurb:
-      "Flow B trigger — assetless note that calls into the v4 controller's execute_rebalance_step proc.",
-  },
 ];
 
 interface CompiledRow {
