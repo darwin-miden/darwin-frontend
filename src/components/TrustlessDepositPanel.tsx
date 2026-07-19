@@ -1006,8 +1006,10 @@ export function TrustlessDepositPanel({
       {compact ? (
         <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
           Self-custody{basket ? ` · ${basket.symbol}` : ""}. One signature
-          derives your Miden wallet in-browser; Epoch bridges your USDC and
-          the network executes the deposit.
+          derives your Miden wallet in-browser; Epoch bridges your USDC, then
+          the Miden network mints your {basket?.symbol ?? "basket"} position —
+          confidential, valued 1:1 with your collateral. A single “Confirm
+          deposit” does the whole thing; no separate buy step.
         </p>
       ) : (
         <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 16 }}>
@@ -1188,12 +1190,31 @@ export function TrustlessDepositPanel({
                 marginTop: 8,
               }}
             >
-              <span style={{ color: "var(--ink-3)" }}>You receive</span>
+              <span style={{ color: "var(--ink-3)" }}>
+                {network ? "You buy" : "You receive"}
+              </span>
               <strong style={{ fontFamily: "var(--font-mono-stack)" }}>
-                ~{fmtBase(quoteInfo.tokenOut, EPOCH_USDC_SEPOLIA.midenDecimals)}{" "}
-                dUSDC
+                {network
+                  ? `~$${fmtBase(quoteInfo.tokenOut, EPOCH_USDC_SEPOLIA.midenDecimals)} ${basket?.symbol ?? "DCC"}`
+                  : `~${fmtBase(quoteInfo.tokenOut, EPOCH_USDC_SEPOLIA.midenDecimals)} dUSDC`}
               </strong>
             </div>
+            {network && (
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: "var(--ink-3)",
+                  lineHeight: 1.5,
+                  marginTop: 10,
+                  borderTop: "1px solid var(--rule)",
+                  paddingTop: 10,
+                }}
+              >
+                Your USDC is bridged to dUSDC and immediately minted into a
+                confidential {basket?.symbol ?? "DCC"} position — one signature,
+                no extra step.
+              </div>
+            )}
           </div>
           <div
             style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}
