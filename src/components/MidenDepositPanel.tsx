@@ -377,6 +377,7 @@ export function MidenDepositPanel({ basket }: Props) {
         noteB64?: string;
         paybackId?: string;
         paybackFileB64?: string;
+        paybackNoteB64?: string;
         mintAmount?: string;
         faucetId?: string;
         error?: string;
@@ -416,19 +417,36 @@ export function MidenDepositPanel({ basket }: Props) {
         );
       }
 
-      // 4. Import + consume the private minted-token note into your wallet.
+      // 4. Claim the private minted-token note. Try a SINGLE prompt first by
+      //    handing the note bytes to requestConsume (import + consume in one
+      //    popup). If the wallet won't consume an unstaged private note this
+      //    way, fall back to import-then-consume (two popups) so the DCC is
+      //    always claimed — never left minted-but-unclaimed.
       setTxState((s) => ({ ...s, stage: "sign claim in MidenFi" }));
-      try {
-        await wallet.importPrivateNote?.(b64ToBytes(built.paybackFileB64));
-      } catch {
-        /* may already be imported */
-      }
-      const txId = await wallet.requestConsume!({
+      const consumeArgs = {
         faucetId: built.faucetId!,
         noteId: built.paybackId,
-        noteType: "private",
+        noteType: "private" as const,
         amount: Number(built.mintAmount ?? units),
-      });
+      };
+      let txId: string;
+      try {
+        txId = await wallet.requestConsume!({
+          ...consumeArgs,
+          noteBytes: built.paybackNoteB64,
+        });
+      } catch (e) {
+        console.warn(
+          "[deposit] one-shot consume failed — staging note then consuming",
+          e,
+        );
+        try {
+          await wallet.importPrivateNote?.(b64ToBytes(built.paybackFileB64));
+        } catch {
+          /* may already be imported */
+        }
+        txId = await wallet.requestConsume!(consumeArgs);
+      }
       if (wallet.waitForTransaction) {
         await wallet.waitForTransaction(txId, 90_000).catch(() => {});
       }
