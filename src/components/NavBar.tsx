@@ -25,6 +25,13 @@ const MidenConnectButton = dynamic(
   },
 );
 
+// Enforces one-wallet-at-a-time. Client-only + only mounted in the non-bare
+// provider, where useMidenFiWallet is available.
+const WalletExclusivity = dynamic(
+  () => import("./WalletExclusivity").then((m) => m.WalletExclusivity),
+  { ssr: false },
+);
+
 /**
  * Shared top nav. Uses globals.css design tokens (.nav, .nav-inner,
  * .nav-logo, .nav-links, .nav-cta). The active page is passed in so
@@ -95,7 +102,10 @@ export function NavBar({ active }: { active?: NavKey }) {
               Connect Wallet
             </button>
           ) : (
-            <MidenConnectButton />
+            <>
+              <WalletExclusivity />
+              <MidenConnectButton />
+            </>
           )}
           <ConnectKitButton.Custom>
             {({ isConnected, isConnecting, show, address, ensName }) => (
