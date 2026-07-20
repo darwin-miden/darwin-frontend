@@ -26,10 +26,12 @@ export type BasketFaucet = {
 };
 
 export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
-  // NAV rail — real constituents, shares priced at live NAV. See darwin-relay
-  // send_nav_deposit + the v11 nav faucet (deploy_v11_nav_faucet).
+  // NAV rail — real constituents, shares priced at live NAV. Deposit AND
+  // redeem: the v12 nav faucet (deploy_v12_nav_faucet) allowlists both the
+  // nav_deposit and nav_redeem notes. See darwin-relay send_nav_deposit /
+  // send_nav_redeem.
   DCC: {
-    id: "0xbec8f5463aa439d170eca2bb648ac1",
+    id: "0xfa0b9c953ad920d14758177924d99c",
     decimals: 8,
     nav: true,
   },

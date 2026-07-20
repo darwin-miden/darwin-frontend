@@ -38,6 +38,13 @@ const BUILDER_BIN =
   process.env.DARWIN_CONFIDENTIAL_REDEEM_BIN ||
   "/Users/eden/data/darwin/repos/darwin-relay/target/release/send_confidential_redeem";
 
+// NAV redeem builder: burns shares and releases dUSDC at the live NAV
+// (release = shares × V / S / 100). Reads supply + vault value on-chain, so it
+// needs a longer timeout than the flat 1:1 builder.
+const NAV_REDEEM_BIN =
+  process.env.DARWIN_NAV_REDEEM_BIN ||
+  "/Users/eden/data/darwin/repos/darwin-relay/target/release/send_nav_redeem";
+
 interface Body {
   sender?: string;
   recipient?: string;
@@ -45,12 +52,16 @@ interface Body {
   amount?: string;
 }
 
-function runBuilder(args: string[]): Promise<{ stdout: string; stderr: string; code: number | null }> {
+function runBuilder(
+  bin: string,
+  args: string[],
+  timeoutMs = 30_000,
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
-    const child = spawn(BUILDER_BIN, args);
+    const child = spawn(bin, args);
     let stdout = "";
     let stderr = "";
-    const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
     // Without this, a missing/non-exec binary emits an unhandled 'error'
@@ -95,15 +106,7 @@ export async function POST(req: Request) {
   if (!Object.prototype.hasOwnProperty.call(BASKET_FAUCETS, basket)) {
     return NextResponse.json({ error: "basket must be DCC, DAG or DCO" }, { status: 400 });
   }
-  // NAV baskets have no on-chain redeem note yet (the NAV faucet allowlists
-  // deposit/seed/set_feed only). Reject cleanly instead of emitting a redeem
-  // note the faucet-network account would reject.
-  if (isNavBasket(basket)) {
-    return NextResponse.json(
-      { error: "withdraw for NAV baskets is not available yet (redeem note pending)" },
-      { status: 501 },
-    );
-  }
+  const isNav = isNavBasket(basket);
   const faucetId = basketFaucetId(basket)!;
   let amountBig: bigint;
   try {
@@ -116,19 +119,24 @@ export async function POST(req: Request) {
   }
 
   if (!acquireSlot()) return busySlot();
+  const args = [
+    "--emit-json",
+    "--faucet",
+    faucetId,
+    "--sender",
+    sender,
+    "--recipient",
+    recipient,
+    "--amount",
+    amountBig.toString(),
+  ];
   let stdout: string, stderr: string, code: number | null;
   try {
-    ({ stdout, stderr, code } = await runBuilder([
-      "--emit-json",
-      "--faucet",
-      faucetId,
-      "--sender",
-      sender,
-      "--recipient",
-      recipient,
-      "--amount",
-      amountBig.toString(),
-    ]));
+    // NAV baskets burn shares → dUSDC at the live NAV (reads on-chain, 90s).
+    // Others use the flat 1:1 confidential redeem.
+    ({ stdout, stderr, code } = isNav
+      ? await runBuilder(NAV_REDEEM_BIN, args, 90_000)
+      : await runBuilder(BUILDER_BIN, args));
   } finally {
     releaseSlot();
   }

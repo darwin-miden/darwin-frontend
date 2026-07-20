@@ -639,6 +639,25 @@ export function TrustlessRedeemPanel({
     if (v != null) setPositionBase(v);
   }, [walletId, stage]);
 
+  // NAV baskets: the on-chain USD value of one share. Used to turn the typed
+  // "USDC to receive" into the number of shares to burn (the redeem note prices
+  // the payout at the live NAV). null until fetched / for non-NAV baskets.
+  const [navPerShare, setNavPerShare] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isNavBasket(basket?.symbol ?? "DCC")) return;
+    let cancelled = false;
+    fetch(`/api/nav-status?basket=${basket?.symbol ?? "DCC"}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const n = d && Number(d.navPerShareUsd);
+        if (!cancelled && n && n > 0) setNavPerShare(n);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [basket?.symbol]);
+
   // Live-refresh the confidential balance from the OWNED vault whenever the
   // wallet changes (getAccount → vault().getBalance — reliable for a private
   // account we own). Fixes "Balance: —" on a fresh load / after a restore, where
@@ -1760,7 +1779,18 @@ export function TrustlessRedeemPanel({
         // unauthenticated drain. The confidential redeem burns the REAL
         // basket tokens the user holds (must own them to fund the note)
         // and the on-chain note pays out exactly that burned amount.
-        const amountBase = parseUnits(humanAmount, 6); // 1:1 with dUSDC
+        // NAV baskets: burn SHARES (8-dec) priced at the live NAV to release
+        // ~humanAmount dUSDC. shares = usdc / navPerShare, +2% buffer so the
+        // released dUSDC covers the reverse-quote's tokenIn (Epoch fee). The
+        // redeem note computes the exact release on-chain. Non-NAV: 1:1 dUSDC.
+        const isNav = isNavBasket(basket?.symbol ?? "DCC");
+        const amountBase = isNav
+          ? BigInt(
+              Math.ceil(
+                (parseFloat(humanAmount || "0") / (navPerShare || 1)) * 1e8 * 1.02,
+              ),
+            )
+          : parseUnits(humanAmount, 6);
         setStage("quoting");
         const r = await fetch("/api/confidential-redeem", {
           method: "POST",
@@ -2108,8 +2138,14 @@ export function TrustlessRedeemPanel({
   } catch {
     redeemBase = null; // mid-typing
   }
+  // Soft over-balance warning (non-NAV only — there redeemBase and positionBase
+  // are both 6-dec dUSDC). For NAV the input is USDC and positionBase is 8-dec
+  // shares, so the comparison is meaningless; an over-redeem reverts safely.
   const overPosition =
-    positionBase != null && redeemBase != null && redeemBase > positionBase;
+    !isNavBasket(basket?.symbol ?? "DCC") &&
+    positionBase != null &&
+    redeemBase != null &&
+    redeemBase > positionBase;
   // The balance/Max are a best-effort helper (the confidential balance is a
   // slow in-browser read that can lag behind the mutex). They must NEVER gate
   // the withdraw — the button stays usable the instant an amount is typed,
@@ -2137,7 +2173,13 @@ export function TrustlessRedeemPanel({
   // withdraws — symmetric with the deposit Max.
   function setMaxRedeem() {
     if (positionBase == null || positionBase === 0n) return;
-    const human = Math.floor(parseFloat(formatUnits(positionBase, 6)) * 1e4) / 1e4;
+    // The input is "USDC to receive". NAV: the full DCC balance is worth
+    // (shares × navPerShare) USD — floor a hair so rounding never asks for
+    // more than the redeem releases. Non-NAV: the dUSDC balance 1:1.
+    const usd = isNav
+      ? (parseFloat(formatUnits(positionBase, dec)) * (navPerShare ?? 0)) * 0.99
+      : parseFloat(formatUnits(positionBase, 6));
+    const human = Math.floor(usd * 1e4) / 1e4;
     setHumanAmount(String(human));
   }
 
@@ -2356,12 +2398,15 @@ export function TrustlessRedeemPanel({
               </button>
               <button
                 onClick={onRedeem}
-                disabled={!redeemValid || isNav}
+                disabled={!redeemValid || (isNav && !navPerShare)}
                 className="nav-cta"
-                style={{ minWidth: 260, opacity: !redeemValid || isNav ? 0.5 : 1 }}
+                style={{
+                  minWidth: 260,
+                  opacity: !redeemValid || (isNav && !navPerShare) ? 0.5 : 1,
+                }}
                 title={
-                  isNav
-                    ? "NAV baskets can't be withdrawn yet — the on-chain redeem note is pending."
+                  isNav && !navPerShare
+                    ? "Loading the live NAV…"
                     : undefined
                 }
               >
@@ -2384,7 +2429,7 @@ export function TrustlessRedeemPanel({
                   ? `Balance: ${fmtBal(positionBase)} ${balToken} — more than you hold; a larger amount just reverts on-chain.`
                   : `Balance: ${fmtBal(positionBase)} ${balToken}`}
             </div>
-            {isNav && (
+            {isNav && navPerShare != null && (
               <div
                 style={{
                   fontSize: 12,
@@ -2393,9 +2438,9 @@ export function TrustlessRedeemPanel({
                   color: "var(--ink-3)",
                 }}
               >
-                Withdrawing {sym} back to USDC is coming — the NAV faucet&apos;s
-                on-chain redeem note is still being built. Your {sym} balance
-                above is live.
+                Burns {sym} shares at the live NAV (${navPerShare.toFixed(4)}
+                /share) and bridges the released dUSDC to USDC on Sepolia. Enter
+                the USDC you want out.
               </div>
             )}
             {/* Backup & restore are automatic + invisible — no buttons. Your
