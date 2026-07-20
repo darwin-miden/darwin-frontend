@@ -33,19 +33,29 @@ export function Providers({ children }: { children: ReactNode }) {
   // runs at a time this way; nesting a second provider over the same
   // IndexedDB corrupts sync (a delivered note never became consumable
   // — verified live).
-  const [hashBare, setHashBare] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      window.location.hash === "#selfcustody",
-  );
+  // A hashchange-only listener goes STALE on route changes: a Link nav from
+  // /baskets/dcc#selfcustody → /portfolio clears the hash but fires NO
+  // hashchange event, so the bare provider would persist and pages that need
+  // MidenFiSignerProvider (Portfolio) crash on the first render
+  // ("useMidenFiWallet must be used within MidenFiSignerProvider"). Read the
+  // LIVE hash on every render instead: usePathname re-renders this on route
+  // changes, and bumpOnHash re-renders it when the deposit tab toggles the hash
+  // on the same route. First client render matches the old useState-init read,
+  // so hydration is unchanged.
+  const [, bumpOnHash] = useState(0);
   useEffect(() => {
-    const check = () =>
-      setHashBare(window.location.hash === "#selfcustody");
-    check();
-    window.addEventListener("hashchange", check);
-    return () => window.removeEventListener("hashchange", check);
+    const onHash = () => bumpOnHash((n) => n + 1);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  const isTrustless = hashBare;
+  // Bare mode ONLY on the basket detail pages (where the Self-custody deposit
+  // tab lives). Scoping by route means a leaked #selfcustody hash can never put
+  // Portfolio/Faucet/etc. into bare mode and crash their useMidenFiWallet.
+  const isTrustless =
+    pathname != null &&
+    pathname.startsWith("/baskets/") &&
+    typeof window !== "undefined" &&
+    window.location.hash === "#selfcustody";
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
