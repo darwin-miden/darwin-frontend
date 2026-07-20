@@ -649,8 +649,13 @@ export function TrustlessRedeemPanel({
     fetch(`/api/nav-status?basket=${basket?.symbol ?? "DCC"}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        const n = d && Number(d.navPerShareUsd);
-        if (!cancelled && n && n > 0) setNavPerShare(n);
+        if (cancelled || !d) return;
+        const n = Number(d.navPerShareUsd);
+        // V==0 (par — vault holds no priced constituents yet, e.g. right after
+        // a fresh deposit before the orchestrate seeds) reports 0. Treat as
+        // $1/share so withdraw stays enabled and uses the par conversion, which
+        // matches the redeem note's own par fallback (release = s/100).
+        setNavPerShare(Number.isFinite(n) && n > 0 ? n : 1);
       })
       .catch(() => {});
     return () => {
