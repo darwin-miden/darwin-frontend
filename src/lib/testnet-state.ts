@@ -75,12 +75,13 @@ export const DEPLOYED_ACCOUNTS: DeployedAccount[] = [
   // consumes a deposit note, drains the dUSDC collateral, and mints basket
   // tokens 1:1 into a PRIVATE note only the depositor can open.
   {
-    label: "DCC confidential faucet",
+    label: "DCC NAV faucet",
     role: "basket-faucet",
     symbol: "DCC",
-    accountId: "0x9463767a994d6f9178fce256261430",
+    accountId: "0xbec8f5463aa439d170eca2bb648ac1",
     storageMode: "public",
-    notes: "Network-account faucet — mints DCC into a private note.",
+    notes:
+      "Network-account NAV faucet — holds real constituents, mints DCC shares priced at the vault's live NAV into a private note.",
   },
   {
     label: "DAG confidential faucet",

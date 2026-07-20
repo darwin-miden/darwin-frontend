@@ -41,6 +41,7 @@ import {
   evmToUserIdFelts,
 } from "../lib/trustlessController";
 import { readActivity, timeAgo, type Activity } from "../lib/activityLog";
+import { NAV_BASKETS, basketDecimals } from "../lib/basketFaucets";
 
 // Minimal ERC-20 balanceOf — reads the connected wallet's Sepolia USDC.
 const ERC20_BALANCE_ABI = [
@@ -72,10 +73,9 @@ function fromDusdc(v: bigint): number {
   return Number(v) / 10 ** DUSDC_DECIMALS;
 }
 
-// Baskets whose deposits are NAV-priced (shares, not 1:1 dUSDC). Their
-// portfolio value = shares × on-chain NAV-per-share (from /api/nav-status).
-const NAV_BASKETS = ["DCC"] as const;
-const BASKET_TOKEN_DECIMALS = 8;
+// NAV-priced baskets (value = shares × on-chain NAV-per-share) come from the
+// single basket-faucet source of truth so deposit/portfolio/withdraw never
+// drift apart. See lib/basketFaucets.
 
 type Slot = { symbol: BasketSymbol; position: bigint };
 
@@ -230,7 +230,7 @@ export function PortfolioView() {
     for (const [sym, shares] of sharesNet) {
       const nav = navPerShare[sym];
       if (nav != null && shares > 0) {
-        out.set(sym, (shares / 10 ** BASKET_TOKEN_DECIMALS) * nav);
+        out.set(sym, (shares / 10 ** basketDecimals(sym)) * nav);
       }
     }
     // slot-10 refinement only for the non-NAV (System B) baskets.

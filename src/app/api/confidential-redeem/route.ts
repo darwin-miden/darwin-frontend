@@ -9,7 +9,11 @@ import {
   redact,
   releaseSlot,
 } from "../../../lib/apiGuard";
-import { CONFIDENTIAL_FAUCETS } from "../../../lib/confidentialFaucets";
+import {
+  BASKET_FAUCETS,
+  basketFaucetId,
+  isNavBasket,
+} from "../../../lib/basketFaucets";
 
 /**
  * POST /api/confidential-redeem
@@ -88,10 +92,19 @@ export async function POST(req: Request) {
   if (!/^0x[0-9a-fA-F]{30}$/.test(sender) || !/^0x[0-9a-fA-F]{30}$/.test(recipient)) {
     return NextResponse.json({ error: "sender/recipient must be Miden account hex" }, { status: 400 });
   }
-  if (!Object.prototype.hasOwnProperty.call(CONFIDENTIAL_FAUCETS, basket)) {
+  if (!Object.prototype.hasOwnProperty.call(BASKET_FAUCETS, basket)) {
     return NextResponse.json({ error: "basket must be DCC, DAG or DCO" }, { status: 400 });
   }
-  const faucetId = CONFIDENTIAL_FAUCETS[basket];
+  // NAV baskets have no on-chain redeem note yet (the NAV faucet allowlists
+  // deposit/seed/set_feed only). Reject cleanly instead of emitting a redeem
+  // note the faucet-network account would reject.
+  if (isNavBasket(basket)) {
+    return NextResponse.json(
+      { error: "withdraw for NAV baskets is not available yet (redeem note pending)" },
+      { status: 501 },
+    );
+  }
+  const faucetId = basketFaucetId(basket)!;
   let amountBig: bigint;
   try {
     amountBig = BigInt(amount);

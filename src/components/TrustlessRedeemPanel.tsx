@@ -71,6 +71,7 @@ import {
   fetchTrustlessPosition,
 } from "../lib/trustlessController";
 import { liveDccBalance, readDccBalance, stashDccBalance } from "../lib/dccBalance";
+import { basketDecimals, isNavBasket } from "../lib/basketFaucets";
 import { autoBackupWallet, restoreFromBackup } from "../lib/walletBackup";
 import { decryptBytes, encryptBytes } from "../lib/storeBackup";
 import {
@@ -2116,8 +2117,17 @@ export function TrustlessRedeemPanel({
   // warning only; an over-withdraw just reverts on-chain (fee 0, no funds
   // lost). Only the amount being empty/zero disables the button.
   const redeemValid = redeemBase != null && redeemBase > 0n;
-  const fmtDusdc = (base: bigint) =>
-    parseFloat(formatUnits(base, 6)).toLocaleString(undefined, {
+  // NAV baskets hold 8-dec shares priced at the vault's live NAV; the legacy
+  // 1:1 rail holds 6-dec dUSDC. Read the token symbol + decimals from the
+  // single source of truth so the balance never displays with the wrong scale
+  // or label. NAV withdraw has no on-chain redeem note yet — the form below is
+  // disabled for NAV baskets rather than emitting a note the faucet rejects.
+  const sym = basket?.symbol ?? "DCC";
+  const isNav = isNavBasket(sym);
+  const dec = basketDecimals(sym);
+  const balToken = isNav ? sym : "USDC";
+  const fmtBal = (base: bigint) =>
+    parseFloat(formatUnits(base, dec)).toLocaleString(undefined, {
       maximumFractionDigits: 4,
     });
   // Max = the full token balance, floored to 4 decimals (matches the balance
@@ -2298,7 +2308,9 @@ export function TrustlessRedeemPanel({
             <strong>Derived Miden wallet</strong>: <code>{walletId}</code>
           </div>
           <div style={{ color: "var(--ink-3)", marginTop: 4 }}>
-            Must already hold dUSDC (from a prior deposit).
+            {isNav
+              ? `Holds ${sym} shares priced at the vault's live NAV (from a prior deposit).`
+              : "Must already hold dUSDC (from a prior deposit)."}
           </div>
         </div>
       )}
@@ -2344,9 +2356,14 @@ export function TrustlessRedeemPanel({
               </button>
               <button
                 onClick={onRedeem}
-                disabled={!redeemValid}
+                disabled={!redeemValid || isNav}
                 className="nav-cta"
-                style={{ minWidth: 260, opacity: redeemValid ? 1 : 0.5 }}
+                style={{ minWidth: 260, opacity: !redeemValid || isNav ? 0.5 : 1 }}
+                title={
+                  isNav
+                    ? "NAV baskets can't be withdrawn yet — the on-chain redeem note is pending."
+                    : undefined
+                }
               >
                 {network ? "Withdraw" : "Redeem via Epoch (~2 min)"}
               </button>
@@ -2364,9 +2381,23 @@ export function TrustlessRedeemPanel({
               {positionBase == null
                 ? "Balance: reading confidential vault…"
                 : overPosition
-                  ? `Balance: ${fmtDusdc(positionBase)} USDC — more than you hold; a larger amount just reverts on-chain.`
-                  : `Balance: ${fmtDusdc(positionBase)} USDC`}
+                  ? `Balance: ${fmtBal(positionBase)} ${balToken} — more than you hold; a larger amount just reverts on-chain.`
+                  : `Balance: ${fmtBal(positionBase)} ${balToken}`}
             </div>
+            {isNav && (
+              <div
+                style={{
+                  fontSize: 12,
+                  marginTop: 6,
+                  fontFamily: "var(--font-mono-stack)",
+                  color: "var(--ink-3)",
+                }}
+              >
+                Withdrawing {sym} back to USDC is coming — the NAV faucet&apos;s
+                on-chain redeem note is still being built. Your {sym} balance
+                above is live.
+              </div>
+            )}
             {/* Backup & restore are automatic + invisible — no buttons. Your
                 confidential state is backed up on-chain (encrypted) after every
                 deposit/withdraw, and restored silently on a new device. */}

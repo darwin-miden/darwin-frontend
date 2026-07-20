@@ -9,7 +9,7 @@
  * localStorage (not session) so it survives a page reload.
  */
 
-import { CONFIDENTIAL_FAUCETS } from "./confidentialFaucets";
+import { basketFaucetId } from "./basketFaucets";
 
 const key = (walletId: string) => `darwin-dcc-${walletId}`;
 
@@ -22,7 +22,7 @@ export async function stashDccBalance(
   basketSymbol: string,
 ): Promise<bigint | null> {
   try {
-    const faucet = CONFIDENTIAL_FAUCETS[basketSymbol];
+    const faucet = basketFaucetId(basketSymbol);
     if (!faucet) return null;
     const bal = await runExclusive(() =>
       (
@@ -53,7 +53,7 @@ export async function liveDccBalance(
   basketSymbol: string,
 ): Promise<bigint | null> {
   try {
-    const faucetHex = CONFIDENTIAL_FAUCETS[basketSymbol];
+    const faucetHex = basketFaucetId(basketSymbol);
     if (!faucetHex) return null;
     const { AccountId } = await import("@miden-sdk/miden-sdk");
     const acc = (await runExclusive(() =>

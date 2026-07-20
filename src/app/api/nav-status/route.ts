@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { NextResponse } from "next/server";
 
 import { rateLimit, rateLimited, redact } from "../../../lib/apiGuard";
+import { basketFaucetId, isNavBasket } from "../../../lib/basketFaucets";
 
 /**
  * GET /api/nav-status?basket=DCC
@@ -24,10 +25,6 @@ const STATUS_BIN =
   process.env.DARWIN_NAV_STATUS_BIN ||
   "/Users/eden/data/darwin/repos/darwin-relay/target/release/nav_status";
 
-const NAV_FAUCETS: Record<string, string> = {
-  DCC: process.env.DARWIN_NAV_FAUCET_DCC || "0xbec8f5463aa439d170eca2bb648ac1",
-};
-
 function run(args: string[]): Promise<{ stdout: string; code: number | null }> {
   return new Promise((resolve) => {
     const child = spawn(STATUS_BIN, args);
@@ -48,7 +45,7 @@ function run(args: string[]): Promise<{ stdout: string; code: number | null }> {
 export async function GET(req: Request) {
   if (!rateLimit(req)) return rateLimited();
   const basket = new URL(req.url).searchParams.get("basket") ?? "DCC";
-  if (!Object.prototype.hasOwnProperty.call(NAV_FAUCETS, basket)) {
+  if (!isNavBasket(basket)) {
     return NextResponse.json({ error: "not a NAV basket" }, { status: 400 });
   }
 
@@ -62,7 +59,7 @@ export async function GET(req: Request) {
     });
   }
 
-  const { stdout, code } = await run(["--faucet", NAV_FAUCETS[basket]]);
+  const { stdout, code } = await run(["--faucet", basketFaucetId(basket)!]);
   if (code !== 0) {
     return NextResponse.json({ error: `nav_status exit ${code}` }, { status: 500 });
   }

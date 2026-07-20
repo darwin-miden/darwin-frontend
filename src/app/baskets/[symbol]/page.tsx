@@ -14,7 +14,7 @@ import {
 } from "../../../lib/baskets";
 import { MIDENSCAN_BASE } from "../../../lib/testnet-state";
 import { basketBySymbolUpper } from "../../../lib/contracts";
-import { CONFIDENTIAL_FAUCETS } from "../../../lib/confidentialFaucets";
+import { basketFaucetId } from "../../../lib/basketFaucets";
 
 export function generateStaticParams() {
   return BASKETS.map((b) => ({ symbol: b.symbol.toLowerCase() }));
@@ -314,12 +314,12 @@ export default async function BasketDetailPage({
                 gap: 16,
               }}
             >
-              {CONFIDENTIAL_FAUCETS[basket.symbol] && (
+              {basketFaucetId(basket.symbol) && (
                 <ContractCard
                   title="Miden confidential faucet"
                   subtitle={`Network account — mints ${basket.symbol} into a private note`}
-                  address={CONFIDENTIAL_FAUCETS[basket.symbol] as string}
-                  href={`${MIDENSCAN_BASE}/account/${CONFIDENTIAL_FAUCETS[basket.symbol]}`}
+                  address={basketFaucetId(basket.symbol) as string}
+                  href={`${MIDENSCAN_BASE}/account/${basketFaucetId(basket.symbol)}`}
                 />
               )}
             </div>

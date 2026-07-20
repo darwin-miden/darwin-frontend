@@ -9,7 +9,11 @@ import {
   redact,
   releaseSlot,
 } from "../../../lib/apiGuard";
-import { CONFIDENTIAL_FAUCETS } from "../../../lib/confidentialFaucets";
+import {
+  BASKET_FAUCETS,
+  basketFaucetId,
+  isNavBasket,
+} from "../../../lib/basketFaucets";
 
 /**
  * POST /api/confidential-note
@@ -23,8 +27,8 @@ import { CONFIDENTIAL_FAUCETS } from "../../../lib/confidentialFaucets";
  * PRIVATE note for the recipient. mint_amount is priced at the live NAV
  * (fetched here). Pure function — no keys, no chain access.
  *
- * This is the v10 confidential deposit — replaces the public slot-10
- * ledger with private token balances (the grant's Flow A).
+ * Confidential deposit — replaces the public slot-10 ledger with private
+ * token balances.
  */
 
 export const runtime = "nodejs";
@@ -43,10 +47,6 @@ const NAV_BUILDER_BIN =
   process.env.DARWIN_NAV_DEPOSIT_BIN ||
   "/Users/eden/data/darwin/repos/darwin-relay/target/release/send_nav_deposit";
 
-// Basket → NAV faucet-network account (price-oracle component + NAV note).
-const NAV_FAUCETS: Record<string, string> = {
-  DCC: process.env.DARWIN_NAV_FAUCET_DCC || "0xbec8f5463aa439d170eca2bb648ac1",
-};
 
 interface Body {
   sender?: string;
@@ -106,11 +106,11 @@ export async function POST(req: Request) {
   if (!/^0x[0-9a-fA-F]{30}$/.test(sender) || !/^0x[0-9a-fA-F]{30}$/.test(recipient)) {
     return NextResponse.json({ error: "sender/recipient must be Miden account hex" }, { status: 400 });
   }
-  const isNav = Object.prototype.hasOwnProperty.call(NAV_FAUCETS, basket);
-  if (!isNav && !Object.prototype.hasOwnProperty.call(CONFIDENTIAL_FAUCETS, basket)) {
+  if (!Object.prototype.hasOwnProperty.call(BASKET_FAUCETS, basket)) {
     return NextResponse.json({ error: "basket must be DCC, DAG or DCO" }, { status: 400 });
   }
-  const faucetId = isNav ? NAV_FAUCETS[basket] : CONFIDENTIAL_FAUCETS[basket];
+  const isNav = isNavBasket(basket);
+  const faucetId = basketFaucetId(basket)!;
   let amountBig: bigint;
   try {
     amountBig = BigInt(amount);
