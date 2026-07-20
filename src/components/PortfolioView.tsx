@@ -114,10 +114,15 @@ export function PortfolioView() {
       fetch(`/api/nav-status?basket=${sym}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
-          const nav = d && Number(d.navPerShareUsd);
-          if (nav && Number.isFinite(nav)) {
-            setNavPerShare((prev) => ({ ...prev, [sym]: nav }));
-          }
+          if (!d) return;
+          const nav = Number(d.navPerShareUsd);
+          // V==0 (par — vault holds no priced constituents yet, e.g. right
+          // after a deposit before the orchestrate seeds) reports 0. Treat as
+          // $1/share so the position shows at par instead of vanishing.
+          setNavPerShare((prev) => ({
+            ...prev,
+            [sym]: Number.isFinite(nav) && nav > 0 ? nav : 1,
+          }));
         })
         .catch(() => {});
     }
