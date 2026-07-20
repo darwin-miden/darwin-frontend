@@ -864,6 +864,7 @@ export function TrustlessDepositPanel({
           type: "deposit",
           basket: basket?.symbol ?? "DCC",
           amount: humanAmount,
+          shares: built.mintAmount,
           tx: sepoliaTx ?? undefined,
         });
         setStage("done");
@@ -1008,7 +1009,7 @@ export function TrustlessDepositPanel({
           Self-custody{basket ? ` · ${basket.symbol}` : ""}. One signature
           derives your Miden wallet in-browser; Epoch bridges your USDC, then
           the Miden network mints your {basket?.symbol ?? "basket"} position —
-          confidential, valued 1:1 with your collateral. A single “Confirm
+          confidential, priced at the basket&apos;s live NAV. A single “Confirm
           deposit” does the whole thing; no separate buy step.
         </p>
       ) : (

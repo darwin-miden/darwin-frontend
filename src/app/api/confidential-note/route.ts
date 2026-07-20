@@ -36,6 +36,18 @@ const BUILDER_BIN =
   process.env.DARWIN_CONFIDENTIAL_DEPOSIT_BIN ||
   "/Users/eden/data/darwin/repos/darwin-relay/target/release/send_confidential_deposit";
 
+// NAV-priced builder: reads the faucet's live supply + vault value on-chain and
+// prices the mint at NAV (shares = deposit × supply / vault_value), replacing
+// the old 1:1 mint. Only the baskets whose NAV faucet is deployed use it.
+const NAV_BUILDER_BIN =
+  process.env.DARWIN_NAV_DEPOSIT_BIN ||
+  "/Users/eden/data/darwin/repos/darwin-relay/target/release/send_nav_deposit";
+
+// Basket → NAV faucet-network account (price-oracle component + NAV note).
+const NAV_FAUCETS: Record<string, string> = {
+  DCC: process.env.DARWIN_NAV_FAUCET_DCC || "0xbec8f5463aa439d170eca2bb648ac1",
+};
+
 interface Body {
   sender?: string;
   recipient?: string;
@@ -43,12 +55,16 @@ interface Body {
   amount?: string;
 }
 
-function runBuilder(args: string[]): Promise<{ stdout: string; stderr: string; code: number | null }> {
+function runBuilder(
+  bin: string,
+  args: string[],
+  timeoutMs = 30_000,
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
-    const child = spawn(BUILDER_BIN, args);
+    const child = spawn(bin, args);
     let stdout = "";
     let stderr = "";
-    const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
     // Without this, a missing/non-exec binary emits an unhandled 'error'
@@ -90,10 +106,11 @@ export async function POST(req: Request) {
   if (!/^0x[0-9a-fA-F]{30}$/.test(sender) || !/^0x[0-9a-fA-F]{30}$/.test(recipient)) {
     return NextResponse.json({ error: "sender/recipient must be Miden account hex" }, { status: 400 });
   }
-  if (!Object.prototype.hasOwnProperty.call(CONFIDENTIAL_FAUCETS, basket)) {
+  const isNav = Object.prototype.hasOwnProperty.call(NAV_FAUCETS, basket);
+  if (!isNav && !Object.prototype.hasOwnProperty.call(CONFIDENTIAL_FAUCETS, basket)) {
     return NextResponse.json({ error: "basket must be DCC, DAG or DCO" }, { status: 400 });
   }
-  const faucetId = CONFIDENTIAL_FAUCETS[basket];
+  const faucetId = isNav ? NAV_FAUCETS[basket] : CONFIDENTIAL_FAUCETS[basket];
   let amountBig: bigint;
   try {
     amountBig = BigInt(amount);
@@ -104,31 +121,23 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "amount out of range" }, { status: 400 });
   }
 
-  // The confidential mint is 1:1 in base units by design: the on-chain
-  // note mints from the REAL drained collateral and ignores every NAV/fee
-  // storage felt (post-audit hardening), and redeem conserves exactly. So
-  // there is no NAV to fetch or apply here — mintAmount == amount. (The
-  // builder still takes --fee-factor/--nav-scale but treats them as dead
-  // no-ops; we pass 1/1 so the note storage is deterministic.)
+  // NAV baskets: the builder reads the faucet's live supply + vault value
+  // on-chain and mints shares = deposit × supply / vault_value (par value on
+  // the first deposit). Non-NAV baskets fall back to the 1:1 v10 builder.
+  const commonArgs = [
+    "--emit-json",
+    "--faucet", faucetId,
+    "--sender", sender,
+    "--recipient", recipient,
+    "--amount", amountBig.toString(),
+  ];
 
   if (!acquireSlot()) return busySlot();
   let stdout: string, stderr: string, code: number | null;
   try {
-    ({ stdout, stderr, code } = await runBuilder([
-      "--emit-json",
-      "--faucet",
-      faucetId,
-      "--sender",
-      sender,
-      "--recipient",
-      recipient,
-      "--amount",
-      amountBig.toString(),
-      "--fee-factor",
-      "1",
-      "--nav-scale",
-      "1",
-    ]));
+    ({ stdout, stderr, code } = isNav
+      ? await runBuilder(NAV_BUILDER_BIN, commonArgs, 90_000)
+      : await runBuilder(BUILDER_BIN, [...commonArgs, "--fee-factor", "1", "--nav-scale", "1"]));
   } finally {
     releaseSlot();
   }

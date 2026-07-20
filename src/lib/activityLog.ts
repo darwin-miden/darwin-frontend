@@ -16,6 +16,10 @@ export type Activity = {
   basket: string;
   /** Human amount (USDC in / dUSDC out), as typed. */
   amount: string;
+  /** Basket-token SHARES minted/burned, in base units (8-dec). NAV baskets
+   *  only — lets the portfolio price the position as shares × NAV-per-share
+   *  instead of assuming value == deposit amount. */
+  shares?: string;
   /** Sepolia tx or Miden note id, for an explorer link. */
   tx?: string;
   /** Unix ms. */

@@ -72,6 +72,11 @@ function fromDusdc(v: bigint): number {
   return Number(v) / 10 ** DUSDC_DECIMALS;
 }
 
+// Baskets whose deposits are NAV-priced (shares, not 1:1 dUSDC). Their
+// portfolio value = shares × on-chain NAV-per-share (from /api/nav-status).
+const NAV_BASKETS = ["DCC"] as const;
+const BASKET_TOKEN_DECIMALS = 8;
+
 type Slot = { symbol: BasketSymbol; position: bigint };
 
 export function PortfolioView() {
@@ -89,6 +94,8 @@ export function PortfolioView() {
   const [activity, setActivity] = useState<Activity[]>([]);
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [usdc, setUsdc] = useState<number | null>(null);
+  // NAV baskets (e.g. DCC) — live USD value of one share, read on-chain.
+  const [navPerShare, setNavPerShare] = useState<Record<string, number>>({});
   const [now, setNow] = useState<number>(0);
   const [range, setRange] = useState<RangeKey>("ALL");
   const [tab, setTab] = useState<"positions" | "activity">("positions");
@@ -101,6 +108,19 @@ export function PortfolioView() {
     setLoading(true);
     setNow(Date.now());
     setActivity(readActivity(identity));
+    // NAV-per-share for NAV baskets (on-chain vault value / supply) so a
+    // position is priced as shares × NAV, tracking the vault — not 1:1.
+    for (const sym of NAV_BASKETS) {
+      fetch(`/api/nav-status?basket=${sym}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          const nav = d && Number(d.navPerShareUsd);
+          if (nav && Number.isFinite(nav)) {
+            setNavPerShare((prev) => ({ ...prev, [sym]: nav }));
+          }
+        })
+        .catch(() => {});
+    }
     try {
       // USDC — the loose stablecoin held outside any basket. On the ETH rail
       // that's Sepolia USDC; on the MidenFi rail it's the dUSDC in the wallet.
@@ -191,22 +211,41 @@ export function PortfolioView() {
   // Net position per basket, derived from activity (works for both rails),
   // refined by the live slot-10 read where we have it.
   const positions = useMemo(() => {
-    const net = new Map<string, number>();
+    const navSet = new Set<string>(NAV_BASKETS);
+    const usdNet = new Map<string, number>(); // non-NAV: value == USD amount (1:1)
+    const sharesNet = new Map<string, number>(); // NAV: basket-token base units
     for (const a of activity) {
-      const cur = net.get(a.basket) ?? 0;
-      const amt = Number(a.amount) || 0;
-      net.set(a.basket, cur + (a.type === "deposit" ? amt : -amt));
-    }
-    if (slots) {
-      for (const s of slots) {
-        if (s.position > 0n) net.set(s.symbol, fromDusdc(s.position));
+      const sign = a.type === "deposit" ? 1 : -1;
+      if (navSet.has(a.basket) && a.shares) {
+        const cur = sharesNet.get(a.basket) ?? 0;
+        sharesNet.set(a.basket, cur + sign * (Number(a.shares) || 0));
+      } else {
+        const cur = usdNet.get(a.basket) ?? 0;
+        usdNet.set(a.basket, cur + sign * (Number(a.amount) || 0));
       }
     }
-    return [...net.entries()]
+    const out = new Map<string, number>();
+    for (const [sym, v] of usdNet) out.set(sym, v);
+    // NAV baskets: value = shares × on-chain NAV-per-share (tracks the vault).
+    for (const [sym, shares] of sharesNet) {
+      const nav = navPerShare[sym];
+      if (nav != null && shares > 0) {
+        out.set(sym, (shares / 10 ** BASKET_TOKEN_DECIMALS) * nav);
+      }
+    }
+    // slot-10 refinement only for the non-NAV (System B) baskets.
+    if (slots) {
+      for (const s of slots) {
+        if (s.position > 0n && !navSet.has(s.symbol)) {
+          out.set(s.symbol, fromDusdc(s.position));
+        }
+      }
+    }
+    return [...out.entries()]
       .map(([symbol, value]) => ({ symbol, value: Math.max(0, value) }))
       .filter((p) => p.value > 1e-6)
       .sort((a, b) => b.value - a.value);
-  }, [activity, slots]);
+  }, [activity, slots, navPerShare]);
 
   const totalValue = positions.reduce((s, p) => s + p.value, 0);
 

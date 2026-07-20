@@ -150,3 +150,4 @@ next-env.d.ts
 /playwright/.cache/
 .vercel
 .DS_Store
+/tmp/

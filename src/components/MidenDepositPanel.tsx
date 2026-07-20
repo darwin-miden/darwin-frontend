@@ -444,6 +444,7 @@ export function MidenDepositPanel({ basket }: Props) {
         type: "deposit",
         basket: basket.symbol,
         amount,
+        shares: built.mintAmount,
       });
       void refreshBalance();
     } catch (e) {
@@ -480,10 +481,10 @@ export function MidenDepositPanel({ basket }: Props) {
       >
         Deposit dUSDC from your MidenFi wallet (
         <code>{address.slice(0, 10)}…</code>). The Miden network drains your
-        collateral and mints {basket.symbol} tokens 1:1 into a{" "}
-        <strong>private note</strong> you consume — confidential balance,
-        no server, no operator. Because the balance is private, claiming it
-        takes two prompts (import + consume) after the deposit.
+        collateral and mints {basket.symbol} <strong>shares priced at the
+        vault&apos;s live NAV</strong> into a private note you consume —
+        confidential balance, no server, no operator. Because the balance is
+        private, claiming it takes two prompts (import + consume) after the deposit.
       </p>
       <p
         style={{

@@ -89,7 +89,7 @@ export interface EpochQuoteParams {
   evmSourceAddress: `0x${string}`;
   /** Miden recipient — the relay wallet's hex Miden account id. */
   midenRecipientId: string;
-  /** Min Miden output, base units of the dUSDC faucet (18 decimals). */
+  /** Min Miden output, base units of the dUSDC faucet (6 decimals). */
   minTokenOut: string;
   /**
    * Exact USDC INPUT to send (Sepolia base units, 18-dec). When set (non-zero)

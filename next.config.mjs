@@ -7,6 +7,20 @@ const nextConfig = {
   // prod (Vercel/launchd) → default `.next`.
   ...(process.env.DARWIN_BUILD_DISTDIR ? { distDir: process.env.DARWIN_BUILD_DISTDIR } : {}),
 
+  // Operator-side (Mac :3010) low-memory build path. The CF tunnel serves
+  // ONLY /api/* from the Mac (Vercel serves the public static pages), so on
+  // the memory-constrained Mac we skip the RSS-heavy steps — SWC minify,
+  // type-check, lint, webpack parallelism — that make a full `next build`
+  // spike past jetsam's limit and get SIGKILL'd. Env-gated so Vercel (which
+  // must minify + type-check the public build) is unaffected.
+  ...(process.env.DARWIN_LOWMEM_BUILD
+    ? {
+        eslint: { ignoreDuringBuilds: true },
+        typescript: { ignoreBuildErrors: true },
+        experimental: { cpus: 1, workerThreads: false },
+      }
+    : {}),
+
   // The @miden-sdk/miden-sdk package ships large WASM blobs and
   // requires SharedArrayBuffer + Atomics for its multi-threaded prover.
   // We tell Next.js to load .wasm via async imports and set the
@@ -28,6 +42,15 @@ const nextConfig = {
         "@miden-sdk/miden-wallet-adapter-react",
         "@miden-sdk/miden-wallet-adapter-miden",
       ];
+    }
+    // Low-memory operator build: serialise webpack + drop minification so the
+    // compile phase's peak RSS stays under jetsam's kill threshold.
+    if (process.env.DARWIN_LOWMEM_BUILD) {
+      config.parallelism = 1;
+      config.optimization = {
+        ...(config.optimization || {}),
+        minimize: false,
+      };
     }
     return config;
   },
