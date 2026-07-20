@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { ConnectKitButton } from "connectkit";
 
 import { LogoFull } from "./Logo";
@@ -44,21 +45,25 @@ export type NavKey =
   | "portfolio";
 
 export function NavBar({ active }: { active?: NavKey }) {
-  // The Self-custody tab (and /trustless) swap the app to the BARE
-  // Miden provider — MidenFiSignerProvider is absent there and
-  // useMidenFiWallet would throw, so the connect button hides.
-  const [bareMode, setBareMode] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      window.location.hash === "#selfcustody",
-  );
+  // The Self-custody tab swaps the app to the BARE Miden provider —
+  // MidenFiSignerProvider is absent there and useMidenFiWallet (in
+  // MidenConnectButton / WalletExclusivity below) would throw, so those hide.
+  // Mirror Providers.tsx EXACTLY: read the live hash each render, re-rendered
+  // by usePathname on route changes and bumpOnHash on hashchange, and scope to
+  // /baskets/* only. A hashchange-only state went stale on a Link nav away
+  // from #selfcustody, leaving the wrong button on other routes.
+  const pathname = usePathname();
+  const [, bumpOnHash] = useState(0);
   useEffect(() => {
-    const check = () =>
-      setBareMode(window.location.hash === "#selfcustody");
-    check();
-    window.addEventListener("hashchange", check);
-    return () => window.removeEventListener("hashchange", check);
+    const onHash = () => bumpOnHash((n) => n + 1);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, []);
+  const bareMode =
+    pathname != null &&
+    pathname.startsWith("/baskets/") &&
+    typeof window !== "undefined" &&
+    window.location.hash === "#selfcustody";
 
   const link = (key: NavKey, href: string, label: string) => (
     <Link
