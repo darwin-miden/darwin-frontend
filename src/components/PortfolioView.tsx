@@ -256,7 +256,10 @@ export function PortfolioView() {
       .map(([symbol, value]) => ({
         symbol,
         value: Math.max(0, value),
-        tokenAmount: tokens.get(symbol) ?? null,
+        // NAV baskets: the on-chain share count. Non-NAV (1:1) baskets: 1 token
+        // ≈ $1, so the token amount equals the USD value — show it too so every
+        // row carries "<amount> <SYM>" under the symbol.
+        tokenAmount: tokens.get(symbol) ?? Math.max(0, value),
       }))
       .filter((p) => p.value > 1e-6)
       .sort((a, b) => b.value - a.value);

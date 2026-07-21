@@ -13,7 +13,10 @@
  * they match immediately after a rebalance and drift otherwise. See
  * lib/navOffchain for the precise relationship.
  */
+import { useEffect, useState } from "react";
+
 import type { BasketSymbol } from "../lib/baskets";
+import { isNavBasket } from "../lib/basketFaucets";
 import { useNavLive } from "../lib/useNavLive";
 
 const ASSET_LABEL: Record<string, string> = {
@@ -32,6 +35,33 @@ function latencyColor(ms: number | null): string {
 
 export function LiveNavCard({ symbol }: { symbol: BasketSymbol }) {
   const { data, latencyMs, isFetching, error } = useNavLive(symbol);
+
+  // For NAV baskets the headline is the price of ONE token (live NAV-per-share
+  // ≈ $1), NOT the notional "unit" index level (Σ weight × price ≈ $27k) — the
+  // token you hold and see in the portfolio is the per-share one, so showing
+  // the index level made "1 DCC" look like it cost $27k. Fetch the per-share
+  // NAV so the basket page and the portfolio agree.
+  const nav = isNavBasket(symbol);
+  const [perShare, setPerShare] = useState<number | null>(null);
+  useEffect(() => {
+    if (!nav) return;
+    let cancelled = false;
+    const load = () =>
+      fetch(`/api/nav-status?basket=${symbol}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (cancelled || !d) return;
+          const n = Number(d.navPerShareUsd);
+          setPerShare(Number.isFinite(n) && n > 0 ? n : 1);
+        })
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [symbol, nav]);
 
   return (
     <div
@@ -56,7 +86,7 @@ export function LiveNavCard({ symbol }: { symbol: BasketSymbol }) {
             color: "var(--ink-3)",
           }}
         >
-          Target NAV / unit
+          {nav ? `NAV / ${symbol}` : "Target NAV / unit"}
         </div>
         <div
           style={{
@@ -67,7 +97,17 @@ export function LiveNavCard({ symbol }: { symbol: BasketSymbol }) {
           }}
           data-testid="live-nav-value"
         >
-          {data ? `$${data.navUsd.toFixed(2)}` : isFetching ? "…" : "—"}
+          {nav
+            ? perShare != null
+              ? `$${perShare.toFixed(4)}`
+              : isFetching
+                ? "…"
+                : "—"
+            : data
+              ? `$${data.navUsd.toFixed(2)}`
+              : isFetching
+                ? "…"
+                : "—"}
         </div>
       </div>
 
