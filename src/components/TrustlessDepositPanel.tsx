@@ -151,6 +151,39 @@ function fmtBase(base: string, decimals: number): string {
   }
 }
 
+// After a programmatic chain switch, some wallets (Rabby/MetaMask) haven't
+// reloaded the new chain's native balance yet, so the very next tx request
+// renders "Gas balance is not enough" and disables Sign — until the user
+// cancels and retries, by which point the balance loaded. Warm it: read the
+// account's Sepolia ETH balance through the wallet's OWN injected provider
+// (eth_getBalance hits the wallet's RPC, populating the cache the gas check
+// reads) until it comes back non-zero, so the approval popup opens with the
+// gas already loaded. Best-effort + time-boxed — never blocks the deposit.
+async function warmWalletGas(evmAddress: string): Promise<void> {
+  try {
+    const eth = (
+      window as unknown as {
+        ethereum?: { request?: (a: unknown) => Promise<unknown> };
+      }
+    ).ethereum;
+    if (!eth?.request) return;
+    for (let i = 0; i < 8; i++) {
+      try {
+        const bal = (await eth.request({
+          method: "eth_getBalance",
+          params: [evmAddress, "latest"],
+        })) as string;
+        if (bal && BigInt(bal) > 0n) return;
+      } catch {
+        /* provider mid-switch — retry below */
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  } catch {
+    /* best-effort warm; never block the deposit */
+  }
+}
+
 type StageState = "idle" | "running" | "done";
 
 function StageRow({
@@ -522,6 +555,9 @@ export function TrustlessDepositPanel({
       try {
         await switchChainAsync({ chainId: SEPOLIA_CHAIN_ID });
       } catch (_) {}
+      // Warm the wallet's Sepolia gas balance now (right after the switch) so
+      // it's loaded by the time the deposit's approval popup opens.
+      await warmWalletGas(evmAddress);
       const eth = (window as unknown as { ethereum?: unknown }).ethereum;
       if (!eth) throw new Error("No injected ETH provider (MetaMask?)");
       const walletClient = createWalletClient({
@@ -605,6 +641,14 @@ export function TrustlessDepositPanel({
         });
       }
       pendingQuoteRef.current = null;
+      // Right before the approval popup opens: guarantee the wallet is on
+      // Sepolia AND its gas balance is loaded, so it never shows "Gas balance
+      // is not enough" on the first attempt. When the quote was reused (no
+      // switch above), the wallet may have drifted chains; this re-asserts it.
+      try {
+        await switchChainAsync({ chainId: SEPOLIA_CHAIN_ID });
+      } catch (_) {}
+      await warmWalletGas(evmAddress);
       setStage("signing-sepolia");
       const submit = await submitIntent(sdkRef.current, quote);
       // The Sepolia deposit hash lives on depositResult (depositToCompact's
