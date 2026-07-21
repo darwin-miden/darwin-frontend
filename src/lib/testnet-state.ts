@@ -78,7 +78,7 @@ export const DEPLOYED_ACCOUNTS: DeployedAccount[] = [
     label: "DCC NAV faucet (v12)",
     role: "basket-faucet",
     symbol: "DCC",
-    accountId: "0xfa0b9c953ad920d14758177924d99c",
+    accountId: "0x2901b41fb0a901714d03b804b8d97e",
     storageMode: "public",
     notes:
       "Network-account NAV faucet — holds real constituents, mints DCC shares priced at the vault's live NAV, and redeems them back to dUSDC. Deposit + withdraw.",

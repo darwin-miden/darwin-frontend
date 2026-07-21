@@ -31,7 +31,7 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   // nav_deposit and nav_redeem notes. See darwin-relay send_nav_deposit /
   // send_nav_redeem.
   DCC: {
-    id: "0xfa0b9c953ad920d14758177924d99c",
+    id: "0x2901b41fb0a901714d03b804b8d97e",
     decimals: 8,
     nav: true,
   },
