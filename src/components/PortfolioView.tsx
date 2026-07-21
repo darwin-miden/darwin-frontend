@@ -230,12 +230,18 @@ export function PortfolioView() {
       }
     }
     const out = new Map<string, number>();
+    // Token amount held per NAV basket (human units), so the row can show the
+    // share count alongside its USD value — never conflating "98.87 DCC" (what
+    // you hold) with "$99.63" (what it's worth).
+    const tokens = new Map<string, number>();
     for (const [sym, v] of usdNet) out.set(sym, v);
     // NAV baskets: value = shares × on-chain NAV-per-share (tracks the vault).
     for (const [sym, shares] of sharesNet) {
       const nav = navPerShare[sym];
       if (nav != null && shares > 0) {
-        out.set(sym, (shares / 10 ** basketDecimals(sym)) * nav);
+        const human = shares / 10 ** basketDecimals(sym);
+        tokens.set(sym, human);
+        out.set(sym, human * nav);
       }
     }
     // slot-10 refinement only for the non-NAV (System B) baskets.
@@ -247,7 +253,11 @@ export function PortfolioView() {
       }
     }
     return [...out.entries()]
-      .map(([symbol, value]) => ({ symbol, value: Math.max(0, value) }))
+      .map(([symbol, value]) => ({
+        symbol,
+        value: Math.max(0, value),
+        tokenAmount: tokens.get(symbol) ?? null,
+      }))
       .filter((p) => p.value > 1e-6)
       .sort((a, b) => b.value - a.value);
   }, [activity, slots, navPerShare]);
@@ -463,7 +473,23 @@ export function PortfolioView() {
                     borderBottom: "1px dashed var(--rule)",
                   }}
                 >
-                  <span style={{ fontWeight: 600 }}>{p.symbol}</span>
+                  <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <span style={{ fontWeight: 600 }}>{p.symbol}</span>
+                    {p.tokenAmount != null && (
+                      <span
+                        style={{
+                          fontFamily: "var(--font-mono-stack)",
+                          fontSize: 12,
+                          color: "var(--ink-3)",
+                        }}
+                      >
+                        {p.tokenAmount.toLocaleString(undefined, {
+                          maximumFractionDigits: 4,
+                        })}{" "}
+                        {p.symbol}
+                      </span>
+                    )}
+                  </span>
                   <span style={{ fontFamily: "var(--font-mono-stack)", fontSize: 14 }}>
                     ${usd(p.value)}
                   </span>

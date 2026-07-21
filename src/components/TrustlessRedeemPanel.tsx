@@ -2161,8 +2161,7 @@ export function TrustlessRedeemPanel({
   // NAV baskets hold 8-dec shares priced at the vault's live NAV; the legacy
   // 1:1 rail holds 6-dec dUSDC. Read the token symbol + decimals from the
   // single source of truth so the balance never displays with the wrong scale
-  // or label. NAV withdraw has no on-chain redeem note yet — the form below is
-  // disabled for NAV baskets rather than emitting a note the faucet rejects.
+  // or label.
   const sym = basket?.symbol ?? "DCC";
   const isNav = isNavBasket(sym);
   const dec = basketDecimals(sym);
@@ -2171,6 +2170,18 @@ export function TrustlessRedeemPanel({
     parseFloat(formatUnits(base, dec)).toLocaleString(undefined, {
       maximumFractionDigits: 4,
     });
+  // Balance line for NAV baskets shows BOTH the token amount (what you hold)
+  // and its live USD value (amount × NAV-per-share) so the two are never
+  // conflated — e.g. "98.8725 DCC · ≈ $99.63".
+  const balLabel = (base: bigint): string => {
+    const amount = `${fmtBal(base)} ${balToken}`;
+    if (!isNav || navPerShare == null) return amount;
+    const usd = parseFloat(formatUnits(base, dec)) * navPerShare;
+    return `${amount} · ≈ $${usd.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  };
   // Max = the full token balance, floored to 4 decimals (matches the balance
   // shown below). No cushion needed: the burn is 1:1 and the Epoch exit leg
   // consumes marginally LESS dUSDC than the burn releases (the slippage
@@ -2431,8 +2442,8 @@ export function TrustlessRedeemPanel({
               {positionBase == null
                 ? "Balance: reading confidential vault…"
                 : overPosition
-                  ? `Balance: ${fmtBal(positionBase)} ${balToken} — more than you hold; a larger amount just reverts on-chain.`
-                  : `Balance: ${fmtBal(positionBase)} ${balToken}`}
+                  ? `Balance: ${balLabel(positionBase)} — more than you hold; a larger amount just reverts on-chain.`
+                  : `Balance: ${balLabel(positionBase)}`}
             </div>
             {isNav && navPerShare != null && (
               <div
