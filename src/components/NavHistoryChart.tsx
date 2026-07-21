@@ -61,9 +61,12 @@ export function NavHistoryChart({ basket }: Props) {
     );
   }
 
+  // The history is stored on a par-index scale (par = 100). The headline and
+  // the portfolio price one DCC at ~$1, so divide by 100 to put the chart on
+  // the same per-token dollar scale (99.89 → $0.9989).
   const data = resp.points.map((p) => ({
     date: new Date(p.t * 1000).toISOString().slice(0, 10),
-    nav: p.nav,
+    nav: p.nav / 100,
   }));
 
   return (
@@ -80,6 +83,9 @@ export function NavHistoryChart({ basket }: Props) {
             domain={["auto", "auto"]}
             tick={{ fontSize: 10, fill: "var(--ink-3)" }}
             width={48}
+            tickFormatter={(v) =>
+              typeof v === "number" ? `$${v.toFixed(3)}` : String(v)
+            }
           />
           <Tooltip
             contentStyle={{
@@ -88,7 +94,7 @@ export function NavHistoryChart({ basket }: Props) {
               fontSize: 12,
             }}
             formatter={(v) =>
-              typeof v === "number" ? v.toFixed(2) : String(v)
+              typeof v === "number" ? `$${v.toFixed(4)}` : String(v)
             }
           />
           <Line
