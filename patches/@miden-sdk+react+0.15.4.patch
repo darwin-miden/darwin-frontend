@@ -1,0 +1,13 @@
+diff --git a/node_modules/@miden-sdk/react/dist/index.mjs b/node_modules/@miden-sdk/react/dist/index.mjs
+index d2473c8..720e6f6 100644
+--- a/node_modules/@miden-sdk/react/dist/index.mjs
++++ b/node_modules/@miden-sdk/react/dist/index.mjs
+@@ -455,7 +455,7 @@ async function initializeSignerAccount(client, config) {
+   let builder = new AccountBuilder(seed).withAuthComponent(
+     AccountComponent.createAuthComponentFromCommitment(
+       commitmentWord,
+-      AuthScheme2.AuthEcdsaK256Keccak
++      (AuthScheme2.AuthEcdsaK256Keccak ?? 1)
+     )
+   ).storageMode(config.storageMode).withBasicWalletComponent();
+   if (config.customComponents?.length) {
