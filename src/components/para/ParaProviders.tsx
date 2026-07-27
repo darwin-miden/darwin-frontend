@@ -66,7 +66,14 @@ export default function ParaProviders({ children }: { children: ReactNode }) {
         externalWalletConfig: externalWalletConfig as any,
       }}
     >
-      <MidenProvider config={{ rpcUrl: "testnet" }}>{children}</MidenProvider>
+      {/* Remote testnet prover (not the local multi-threaded one) so /para
+          needs NO SharedArrayBuffer → NO cross-origin isolation. That lets us
+          drop COOP/COEP on this route (see next.config headers), which is what
+          allows Para's cross-origin auth iframe (app.getpara.com/auth/otp) to
+          load — it is ERR_BLOCKED_BY_RESPONSE under COEP. */}
+      <MidenProvider config={{ rpcUrl: "testnet", prover: "testnet" }}>
+        {children}
+      </MidenProvider>
     </ParaSignerProvider>
   );
 }

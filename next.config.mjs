@@ -122,6 +122,10 @@ const nextConfig = {
       // The prover spawns Web Workers from blob: URLs.
       "worker-src 'self' blob:",
       "child-src 'self' blob:",
+      // Para renders its auth / MPC flow inside a cross-origin iframe served
+      // from app.beta.getpara.com (prod: app.getpara.com). frame-src must allow
+      // it or the /para login modal can't advance past the email step.
+      "frame-src 'self' blob: https://*.getpara.com https://*.usecapsule.com",
       [
         "connect-src 'self' blob: data:",
         "https://ethereum-sepolia-rpc.publicnode.com",
@@ -151,7 +155,27 @@ const nextConfig = {
 
     return [
       {
+        // Baseline security headers on every route.
         source: "/(.*)",
+        headers: [
+          { key: "Content-Security-Policy", value: csp },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=63072000; includeSubDomains; preload",
+          },
+        ],
+      },
+      {
+        // Cross-origin isolation (COOP + COEP) — required by the Miden LOCAL
+        // multi-threaded STARK prover's SharedArrayBuffer. Applied to every
+        // route EXCEPT /para: Para's auth runs in a cross-origin iframe
+        // (app.getpara.com/auth/otp) that is ERR_BLOCKED_BY_RESPONSE under COEP.
+        // /para instead uses a REMOTE prover (see ParaProviders.tsx), so it
+        // needs no SAB and can safely drop isolation. NB: reach /para via a full
+        // page load — a client-side nav keeps the previous document's COEP.
+        source: "/((?!para).*)",
         headers: [
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
           {
@@ -164,13 +188,6 @@ const nextConfig = {
               process.env.NODE_ENV === "development"
                 ? "credentialless"
                 : "require-corp",
-          },
-          { key: "Content-Security-Policy", value: csp },
-          { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          {
-            key: "Strict-Transport-Security",
-            value: "max-age=63072000; includeSubDomains; preload",
           },
         ],
       },
