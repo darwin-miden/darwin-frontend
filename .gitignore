@@ -151,3 +151,6 @@ next-env.d.ts
 .vercel
 .DS_Store
 /tmp/
+
+# Isolated dev/build dir for the /para branch (DARWIN_BUILD_DISTDIR)
+.next-para/
