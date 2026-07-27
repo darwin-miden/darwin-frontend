@@ -32,6 +32,36 @@ const nextConfig = {
       topLevelAwait: true,
       layers: true,
     };
+    // The @getpara SDK references a pile of OPTIONAL peer packages (account-
+    // abstraction plugins, non-EVM wallet connectors, Farcaster, React-Native
+    // storage, pino-pretty) that we don't install. Their Vite setup tree-shakes
+    // these; webpack instead hard-fails "Module not found". Alias each to an
+    // empty module so the bundle builds — the Para embedded flow never calls
+    // them. NB: enabling MetaMask/Rabby login later means installing
+    // @getpara/evm-wallet-connectors and dropping it from this list.
+    const paraOptionalStubs = [
+      "@farcaster/miniapp-sdk",
+      "@getpara/aa-alchemy",
+      "@getpara/aa-biconomy",
+      "@getpara/aa-cdp",
+      "@getpara/aa-gelato",
+      "@getpara/aa-pimlico",
+      "@getpara/aa-porto",
+      "@getpara/aa-rhinestone",
+      "@getpara/aa-safe",
+      "@getpara/aa-thirdweb",
+      "@getpara/aa-zerodev",
+      "@getpara/cosmos-wallet-connectors",
+      "@getpara/evm-wallet-connectors",
+      "@getpara/solana-wallet-connectors",
+      "@react-native-async-storage/async-storage",
+      "pino-pretty",
+    ];
+    config.resolve = config.resolve || {};
+    config.resolve.alias = {
+      ...(config.resolve.alias || {}),
+      ...Object.fromEntries(paraOptionalStubs.map((m) => [m, false])),
+    };
     // Server bundle has no use for the browser WASM SDK, mark it as
     // external so SSR doesn't try to load it.
     if (isServer) {
@@ -74,8 +104,13 @@ const nextConfig = {
       "form-action 'self'",
       // 'wasm-unsafe-eval' for the Miden STARK prover; 'unsafe-inline'
       // for Next's hydration bootstrap (no nonce pipeline here). External
-      // <script src> from other origins is still blocked.
-      "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+      // <script src> from other origins is still blocked. In DEV only,
+      // 'unsafe-eval' is added because `next dev`'s React-Refresh/HMR wraps
+      // modules in eval() — without it nothing hydrates locally. Production
+      // builds emit no eval, so the shipped CSP stays strict (no unsafe-eval).
+      `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${
+        process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""
+      }`,
       "style-src 'self' 'unsafe-inline'",
       // No blanket `https:` on img-src: connect-src is the exfil
       // allowlist, but a blanket image host would let an injected script
@@ -103,6 +138,12 @@ const nextConfig = {
         "https://*.walletconnect.com",
         "https://*.walletconnect.org",
         "https://*.reown.com",
+        // Para (getpara) embedded-wallet API + MPC network for the /para route.
+        // usecapsule.com is Para's legacy domain still used by some endpoints.
+        "https://*.getpara.com",
+        "wss://*.getpara.com",
+        "https://*.usecapsule.com",
+        "wss://*.usecapsule.com",
       ].join(" "),
       "upgrade-insecure-requests",
     ].join("; ");
