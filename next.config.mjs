@@ -52,7 +52,8 @@ const nextConfig = {
       "@getpara/aa-thirdweb",
       "@getpara/aa-zerodev",
       "@getpara/cosmos-wallet-connectors",
-      "@getpara/evm-wallet-connectors",
+      // @getpara/evm-wallet-connectors is now INSTALLED (MetaMask/Rabby login on
+      // /para) — do NOT stub it.
       "@getpara/solana-wallet-connectors",
       "@react-native-async-storage/async-storage",
       "pino-pretty",
