@@ -56,6 +56,11 @@ export function Providers({ children }: { children: ReactNode }) {
     pathname.startsWith("/baskets/") &&
     typeof window !== "undefined" &&
     window.location.hash === "#selfcustody";
+  // /para brings its own Para + Miden providers (a Para-embedded signer with
+  // its own WASM client). Mounting the default MidenContextProvider on top
+  // would run a second Miden client over the same IndexedDB and corrupt sync,
+  // so this route opts out entirely and renders children bare.
+  const isPara = pathname != null && pathname.startsWith("/para");
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
@@ -66,7 +71,9 @@ export function Providers({ children }: { children: ReactNode }) {
             "--ck-accent-text-color": "#0b0b0c",
           }}
         >
-          {isTrustless ? (
+          {isPara ? (
+            children
+          ) : isTrustless ? (
             <MidenBareContextProvider>{children}</MidenBareContextProvider>
           ) : (
             <MidenContextProvider>{children}</MidenContextProvider>

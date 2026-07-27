@@ -15,10 +15,13 @@
   },
   "dependencies": {
     "@epoch-protocol/epoch-intents-sdk": "^1.0.32",
+    "@getpara/react-sdk-lite": "^2.32.1",
+    "@miden-sdk/miden-para": "^0.15.1",
     "@miden-sdk/miden-sdk": "^0.15.4",
     "@miden-sdk/miden-wallet-adapter-base": "^0.15.1",
     "@miden-sdk/miden-wallet-adapter-react": "^0.15.1",
     "@miden-sdk/react": "^0.15.4",
+    "@miden-sdk/use-miden-para-react": "^0.15.1",
     "@tanstack/react-query": "^5.100.10",
     "connectkit": "^1.9.2",
     "next": "^15.0.0",
