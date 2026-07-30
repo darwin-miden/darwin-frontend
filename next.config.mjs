@@ -41,6 +41,7 @@ const nextConfig = {
     // @getpara/evm-wallet-connectors and dropping it from this list.
     const paraOptionalStubs = [
       "@farcaster/miniapp-sdk",
+      "@farcaster/miniapp-wagmi-connector",
       "@getpara/aa-alchemy",
       "@getpara/aa-biconomy",
       "@getpara/aa-cdp",

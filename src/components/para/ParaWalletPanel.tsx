@@ -50,8 +50,8 @@ export function ParaWalletPanel() {
     <div className="mx-auto w-full max-w-[460px] rounded-2xl border border-white/10 bg-white/[0.03] p-6">
       <h1 className="text-xl font-semibold text-white">Connect with Para</h1>
       <p className="mt-1 text-sm text-white/50">
-        Embedded Miden wallet via Para (email / passkey). Runs alongside the
-        existing MetaMask connection, not in place of it.
+        Sign in with email, Google, X or passkey — Para manages your Miden
+        account. Fund it below from your own MetaMask / Rabby.
       </p>
 
       {!PARA_API_KEY && (
