@@ -21,21 +21,33 @@
  * to the Para account → we sync + consume it → spendable dUSDC balance.
  */
 
-import { useConsume, useMiden, useSyncState, useWaitForNotes } from "@miden-sdk/react";
+import {
+  useConsume,
+  useMiden,
+  useSend,
+  useSyncState,
+  useWaitForCommit,
+  useWaitForNotes,
+} from "@miden-sdk/react";
 import { useCallback, useEffect, useState } from "react";
-import { createWalletClient, custom, formatUnits, parseUnits } from "viem";
+import { createWalletClient, custom, formatUnits, http, parseUnits } from "viem";
 import { sepolia } from "viem/chains";
 import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
 
 import {
   ALLOCATOR_URL,
   applySlippageBps,
+  EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS,
   EPOCH_USDC_SEPOLIA,
+  MIDEN_DESTINATION_CHAIN_ID,
   SEPOLIA_CHAIN_ID,
   dusdcMidenBaseUnits,
   extractNonce,
   fetchQuote,
+  fetchRedeemQuote,
   submitIntent,
+  submitRedeemIntent,
+  usdcSepoliaBaseUnits,
 } from "../../lib/epoch";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -111,6 +123,17 @@ const STAGE_LABEL: Record<Stage, string> = {
   error: "",
 };
 
+type WStage = "idle" | "quoting" | "signing-note" | "awaiting-fill" | "done" | "error";
+
+const WSTAGE_LABEL: Record<WStage, string> = {
+  idle: "",
+  quoting: "Getting a redeem quote…",
+  "signing-note": "Sign the payout note in Para…",
+  "awaiting-fill": "Epoch is paying out on Sepolia…",
+  done: "Withdrawn ✓",
+  error: "",
+};
+
 export function ParaFundingPanel() {
   const { client, runExclusive, signerAccountId, isReady } = useMiden() as unknown as {
     client: unknown;
@@ -121,14 +144,30 @@ export function ParaFundingPanel() {
   const { consume } = useConsume();
   const { sync: syncState } = useSyncState();
   const { waitForConsumableNotes } = useWaitForNotes();
+  const { send: sendNote } = useSend() as unknown as {
+    send: (a: {
+      from: string;
+      to: string;
+      assetId: string;
+      amount: bigint;
+      noteType: string;
+      returnNote: boolean;
+    }) => Promise<{ txId?: string; note?: { id?: () => { toString?: () => string } } }>;
+  };
+  const { waitForCommit } = useWaitForCommit() as unknown as {
+    waitForCommit: (txId: string, opts?: { timeoutMs?: number; intervalMs?: number }) => Promise<unknown>;
+  };
 
   const [evmAddress, setEvmAddress] = useState<`0x${string}` | null>(null);
   const [amount, setAmount] = useState("1");
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState<string | null>(null);
   const [dusdc, setDusdc] = useState<bigint | null>(null);
+  const [wAmount, setWAmount] = useState("1");
+  const [wStage, setWStage] = useState<WStage>("idle");
 
   const busy = stage !== "idle" && stage !== "done" && stage !== "error";
+  const wBusy = wStage !== "idle" && wStage !== "done" && wStage !== "error";
 
   const refreshBalance = useCallback(
     async (retries = 1) => {
@@ -270,9 +309,20 @@ export function ParaFundingPanel() {
         .map((n) => n.inputNoteRecord?.()?.id?.()?.toString?.() ?? "")
         .filter(Boolean);
 
+      // Consume ONLY the note Epoch actually delivered — never a stray
+      // tag-colliding P2ID note (right tag, wrong target account) left over from
+      // earlier tests, which throws "P2ID's target account address and
+      // transaction address do not match" inside the WASM (harmless but noisy).
+      // Fall back to all inbound notes only when Epoch didn't report a note id.
+      const norm = (s: string) => s.toLowerCase().replace(/^0x/, "");
+      const targetIds =
+        epochNoteId && inboundIds.some((id) => norm(id) === norm(epochNoteId as string))
+          ? inboundIds.filter((id) => norm(id) === norm(epochNoteId as string))
+          : inboundIds;
+
       setStage("consuming");
       let consumedAny = false;
-      for (const id of inboundIds) {
+      for (const id of targetIds) {
         try {
           await consume({ accountId: signerAccountId, notes: [id] });
           consumedAny = true;
@@ -289,6 +339,86 @@ export function ParaFundingPanel() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStage("error");
+    }
+  }
+
+  // Withdraw: the mirror of Fund. From the Para Miden account → USDC back to the
+  // user's Sepolia address, via Epoch's redeem. The user signs NO Sepolia tx —
+  // they create a P2IDE note on Miden (signed by Para) targeting Epoch's
+  // allocator; the solver consumes it and pays USDC on Sepolia.
+  async function onWithdraw() {
+    if (!signerAccountId || !evmAddress || !client) return;
+    setError(null);
+    try {
+      setWStage("quoting");
+      // A walletClient carrying the Miden virtual chain id (no Sepolia tx is
+      // signed here — http() transport is only the SDK's sponsor context).
+      const sepoliaWC = createWalletClient({ account: evmAddress, chain: sepolia, transport: http() });
+      const midenWC = {
+        ...sepoliaWC,
+        chain: { ...sepoliaWC.chain, id: MIDEN_DESTINATION_CHAIN_ID },
+      } as never;
+      const sdk = new EpochIntentSDK({ apiBaseUrl: ALLOCATOR_URL, walletClient: midenWC });
+
+      const minSepoliaOut = applySlippageBps(usdcSepoliaBaseUnits(wAmount), EPOCH_MIN_TOKEN_OUT_SLIPPAGE_BPS);
+      const quote = await fetchRedeemQuote(sdk, {
+        midenSourceId: signerAccountId,
+        evmRecipient: evmAddress,
+        minUsdcSepoliaBaseUnits: minSepoliaOut,
+      });
+
+      setWStage("signing-note");
+      const submit = await submitRedeemIntent(sdk, quote, async (faucetId, amountBase, allocatorId) => {
+        try {
+          const out = await sendNote({
+            from: signerAccountId,
+            to: allocatorId,
+            assetId: faucetId,
+            amount: BigInt(amountBase),
+            noteType: "public",
+            returnNote: true,
+          });
+          if (out?.txId) {
+            try {
+              await waitForCommit(out.txId, { timeoutMs: 120_000, intervalMs: 4_000 });
+            } catch {
+              /* the SDK still polls the fill; commit-wait is best-effort */
+            }
+          }
+          const noteId = out?.note?.id?.()?.toString?.();
+          return { success: true, noteId };
+        } catch (e) {
+          console.warn("[para-withdraw] sendNote failed", e);
+          return { success: false };
+        }
+      });
+
+      const nonce = extractNonce(submit);
+      setWStage("awaiting-fill");
+      if (nonce) {
+        const url = `${ALLOCATOR_URL}/intentStatus/${evmAddress}/${nonce}`;
+        const start = Date.now();
+        while (Date.now() - start < 150_000) {
+          try {
+            const r = await fetch(url).then((res) => res.json());
+            if (Array.isArray(r) && r[0]) {
+              if (r[0].status === "success") break;
+              if (r[0].status === "failed") {
+                throw new Error(`Epoch redeem failed: ${JSON.stringify(r[0]).slice(0, 150)}`);
+              }
+            }
+          } catch (e) {
+            if (String(e).includes("Epoch redeem failed")) throw e;
+          }
+          await sleep(5000);
+        }
+      }
+
+      setWStage("done");
+      await refreshBalance(6);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setWStage("error");
     }
   }
 
@@ -355,6 +485,47 @@ export function ParaFundingPanel() {
           Funded ✓ — your dUSDC is now on your Para Miden account.
         </p>
       )}
+
+      {/* Withdraw — the mirror of Fund. Shown once the account holds dUSDC. */}
+      {evmAddress && dusdc != null && dusdc > 0n && (
+        <div className="mt-6 border-t border-black/10 pt-5">
+          <h3 className="text-base font-semibold text-black">Withdraw to Sepolia</h3>
+          <p className="mt-1 text-sm text-black/50">
+            Redeem dUSDC from your Para Miden account back to USDC on your Sepolia address (via Epoch).
+          </p>
+          <label className="mt-4 block text-xs uppercase tracking-wide text-black/40">dUSDC amount</label>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              value={wAmount}
+              onChange={(e) => setWAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+              inputMode="decimal"
+              disabled={wBusy}
+              className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 font-mono text-black outline-none focus:border-black/40"
+              placeholder="1.0"
+            />
+            <span className="text-sm text-black/40">dUSDC</span>
+          </div>
+          <button
+            type="button"
+            onClick={onWithdraw}
+            disabled={wBusy || !wAmount || Number(wAmount) <= 0}
+            className="nav-cta mt-4 w-full disabled:opacity-50"
+            style={{ textAlign: "center" }}
+          >
+            {wBusy ? WSTAGE_LABEL[wStage] : "Withdraw to Sepolia"}
+          </button>
+          <p className="mt-3 text-xs text-black/40">
+            Payout to <span className="font-mono">{evmAddress.slice(0, 6)}…{evmAddress.slice(-4)}</span> on Sepolia. No
+            Sepolia tx to sign — Para signs the payout note.
+          </p>
+          {wStage === "done" && (
+            <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
+              Withdrawn ✓ — USDC is on its way to your Sepolia address.
+            </p>
+          )}
+        </div>
+      )}
+
       {error && (
         <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700">{error}</p>
       )}
