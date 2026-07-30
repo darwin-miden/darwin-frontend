@@ -35,9 +35,18 @@ import "@getpara/react-sdk-lite/styles.css";
 import { MidenProvider } from "@miden-sdk/react";
 import { ParaSignerProvider } from "@miden-sdk/use-miden-para-react";
 import type { ReactNode } from "react";
+import { http } from "viem";
 import { mainnet, sepolia } from "wagmi/chains";
 
 const PARA_API_KEY = process.env.NEXT_PUBLIC_PARA_API_KEY ?? "";
+
+// CORS-friendly RPCs (publicnode), same as the app's lib/wagmi.ts. Para's
+// evmConnector otherwise defaults mainnet → eth.merkle.io, which (a) isn't in
+// our CSP connect-src and (b) blocks CORS from localhost → a retry flood that
+// churns Para's wagmi state and re-inits the Miden client in a loop ("Miden
+// ready: Initializing…" forever). Pinning both chains at publicnode fixes it.
+const MAINNET_RPC = process.env.NEXT_PUBLIC_MAINNET_RPC_HTTP || "https://ethereum-rpc.publicnode.com";
+const SEPOLIA_RPC = process.env.NEXT_PUBLIC_SEPOLIA_RPC_HTTP || "https://ethereum-sepolia-rpc.publicnode.com";
 
 // A real WalletConnect id is needed only for QR/mobile wallets; the app treats
 // the placeholder as "no WC". MetaMask/Rabby are injected (EIP-6963) and need
@@ -51,7 +60,15 @@ const WC_PROJECT_ID = RAW_WC_ID && RAW_WC_ID !== "darwin-protocol-demo" ? RAW_WC
 // the Miden signer (which reads `embedded.wallets`) gets an account.
 const externalWalletConfig = {
   wallets: ["METAMASK", "RABBY"],
-  evmConnector: { config: { chains: [mainnet, sepolia] } },
+  evmConnector: {
+    config: {
+      chains: [mainnet, sepolia],
+      transports: {
+        [mainnet.id]: http(MAINNET_RPC),
+        [sepolia.id]: http(SEPOLIA_RPC),
+      },
+    },
+  },
   createLinkedEmbeddedForExternalWallets: ["METAMASK", "RABBY"],
   ...(WC_PROJECT_ID ? { walletConnect: { projectId: WC_PROJECT_ID } } : {}),
 };
