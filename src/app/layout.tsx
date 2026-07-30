@@ -35,7 +35,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`}>
-      <body>
+      {/* Browser extensions (password managers, Rabby, etc.) inject attributes
+          onto <body> before React hydrates (bis_register, __processed_…),
+          causing a benign hydration mismatch. Suppress it on <body>. */}
+      <body suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>
