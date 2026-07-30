@@ -55,9 +55,16 @@ const RAW_WC_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
 const WC_PROJECT_ID = RAW_WC_ID && RAW_WC_ID !== "darwin-protocol-demo" ? RAW_WC_ID : "";
 
 // External-wallet login for the Para modal. MetaMask + Rabby are offered as
-// login methods alongside email/Google/X/passkey. `createLinkedEmbeddedForExternalWallets`
-// makes an external-wallet login also provision a linked embedded wallet, so
-// the Miden signer (which reads `embedded.wallets`) gets an account.
+// login methods alongside email/Google/X/passkey.
+//
+// NB: we deliberately do NOT set `createLinkedEmbeddedForExternalWallets`. With
+// it, Para tries to LINK any detected external wallet (e.g. a Rabby extension
+// the user has installed) to the account even when they signed in with Google —
+// it then blocks on a wallet-ownership verification signature that never comes,
+// hanging on "AwaitingAccountSetup" so the Miden account never finalizes
+// ("Miden ready: Initializing…" forever). Without it, email/Google/X/passkey
+// logins complete cleanly. (Open item: whether an external-wallet LOGIN yields a
+// Miden account on its own — MetaMask/Rabby are primarily the FUNDING source.)
 const externalWalletConfig = {
   wallets: ["METAMASK", "RABBY"],
   evmConnector: {
@@ -69,7 +76,6 @@ const externalWalletConfig = {
       },
     },
   },
-  createLinkedEmbeddedForExternalWallets: ["METAMASK", "RABBY"],
   ...(WC_PROJECT_ID ? { walletConnect: { projectId: WC_PROJECT_ID } } : {}),
 };
 
