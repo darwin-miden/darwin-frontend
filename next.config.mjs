@@ -192,6 +192,19 @@ const nextConfig = {
           },
         ],
       },
+      {
+        // /para gets NO COEP (Para's cross-origin auth iframe is blocked under
+        // it) but DOES get COOP `same-origin-allow-popups`: Para's Google/X
+        // OAuth opens a popup and monitors it via `window.closed`. With COOP
+        // unset (default), that read is severed ("COOP would block the
+        // window.closed call") → Para hangs on AwaitingAccountSetup → the Miden
+        // account never finalizes. `same-origin-allow-popups` keeps the opener
+        // ↔ popup relationship so the OAuth flow can complete.
+        source: "/para",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
+        ],
+      },
     ];
   },
 };
