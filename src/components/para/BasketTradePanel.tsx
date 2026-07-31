@@ -43,7 +43,11 @@ async function withProveRetry<T>(fn: () => Promise<T>, tries = 4): Promise<T> {
     } catch (e) {
       lastErr = e;
       const msg = String((e as { message?: string })?.message ?? e);
-      if (!/deadline|timed\s*out|timeout|prove transaction/i.test(msg)) throw e;
+      // Retry ONLY the remote prover's pre-submit timeout (gRPC DeadlineExceeded /
+      // "Request timed out"). A tx that timed out at PROVE never submitted, so
+      // re-emitting the identical server-built note is safe. Do NOT retry generic
+      // errors that can occur post-submit — narrower than "any timeout".
+      if (!/deadline\s*exceeded|deadline expired|request timed out/i.test(msg)) throw e;
       await sleep(2500 * (i + 1));
     }
   }
@@ -58,13 +62,14 @@ function prettyErr(e: unknown): string {
   return msg;
 }
 
-type Stage = "idle" | "building" | "emitting" | "claiming" | "done" | "error";
+type Stage = "idle" | "building" | "emitting" | "claiming" | "done" | "pending" | "error";
 const BUY_LABEL: Record<Stage, string> = {
   idle: "",
   building: "Building your order…",
   emitting: "Signing the deposit…",
   claiming: "Minting basket shares…",
   done: "Bought ✓",
+  pending: "Awaiting claim",
   error: "",
 };
 const SELL_LABEL: Record<Stage, string> = {
@@ -73,6 +78,7 @@ const SELL_LABEL: Record<Stage, string> = {
   emitting: "Signing the sale…",
   claiming: "Releasing dUSDC…",
   done: "Sold ✓",
+  pending: "Awaiting claim",
   error: "",
 };
 
@@ -115,9 +121,14 @@ export function BasketTradePanel({
   const [buyStage, setBuyStage] = useState<Stage>("idle");
   const [sellStage, setSellStage] = useState<Stage>("idle");
   const [error, setError] = useState<string | null>(null);
+  // Set when a payback note was minted/released on-chain but the local consume
+  // stalled (prover flakiness). Kept so the user can re-claim instead of the
+  // funds being stranded with no recovery path (they're on-chain, just unclaimed).
+  const [pendingClaim, setPendingClaim] = useState<{ built: BuiltNote; kind: "buy" | "sell" } | null>(null);
 
-  const buyBusy = buyStage !== "idle" && buyStage !== "done" && buyStage !== "error";
-  const sellBusy = sellStage !== "idle" && sellStage !== "done" && sellStage !== "error";
+  const busyStage = (s: Stage) => s !== "idle" && s !== "done" && s !== "pending" && s !== "error";
+  const buyBusy = busyStage(buyStage);
+  const sellBusy = busyStage(sellStage);
   const nav = isNavBasket(symbol);
   const shareDecimals = basketDecimals(symbol);
 
@@ -145,22 +156,19 @@ export function BasketTradePanel({
   // Emit a server-built note as the account's own output note, then import +
   // consume the private payback note the NTX builder produces. Shared by buy
   // (deposit note → minted shares) and sell (redeem note → released dUSDC).
-  async function emitAndClaim(built: BuiltNote, setStage: (s: Stage) => void) {
-    setStage("emitting");
-    const { Note, NoteArray, NoteFile } = await import("@miden-sdk/miden-sdk");
-    const note = Note.deserialize(Uint8Array.from(atob(built.noteB64!), (c) => c.charCodeAt(0)));
-    await withProveRetry(() =>
-      executeTx({
-        accountId: signerAccountId!,
-        request: () => new TransactionRequestBuilder().withOwnOutputNotes(new NoteArray([note])).build(),
-      }),
-    );
-
-    setStage("claiming");
+  // Import + consume the private payback note the NTX builder produced. Idempotent
+  // (re-importing an already-known note is a no-op; a consumed note stops matching),
+  // so this is also the retry path for a stalled claim. Returns true once consumed.
+  async function claimPayback(built: BuiltNote): Promise<boolean> {
+    const { NoteFile } = await import("@miden-sdk/miden-sdk");
     const noteFile = NoteFile.deserialize(
       Uint8Array.from(atob(built.paybackFileB64!), (c) => c.charCodeAt(0)),
     );
-    await (client as { importNoteFile?: (f: unknown) => Promise<string> }).importNoteFile?.(noteFile);
+    try {
+      await (client as { importNoteFile?: (f: unknown) => Promise<string> }).importNoteFile?.(noteFile);
+    } catch {
+      /* already imported */
+    }
     for (let i = 0; i < 30; i++) {
       await sleep(5000);
       try {
@@ -176,6 +184,43 @@ export function BasketTradePanel({
       }
     }
     return false;
+  }
+
+  async function emitAndClaim(built: BuiltNote, setStage: (s: Stage) => void) {
+    setStage("emitting");
+    const { Note, NoteArray } = await import("@miden-sdk/miden-sdk");
+    const note = Note.deserialize(Uint8Array.from(atob(built.noteB64!), (c) => c.charCodeAt(0)));
+    await withProveRetry(() =>
+      executeTx({
+        accountId: signerAccountId!,
+        request: () => new TransactionRequestBuilder().withOwnOutputNotes(new NoteArray([note])).build(),
+      }),
+    );
+    setStage("claiming");
+    return claimPayback(built);
+  }
+
+  // Re-run a stalled claim (payback already emitted on-chain — just re-consume).
+  async function retryClaim() {
+    if (!pendingClaim || !signerAccountId || !client) return;
+    const { built, kind } = pendingClaim;
+    const setStage = kind === "buy" ? setBuyStage : setSellStage;
+    setError(null);
+    setStage("claiming");
+    try {
+      const ok = await claimPayback(built);
+      if (ok) {
+        setPendingClaim(null);
+        setStage("done");
+        await refresh();
+        onDone?.();
+      } else {
+        setStage("pending");
+      }
+    } catch (e) {
+      setError(prettyErr(e));
+      setStage("pending");
+    }
   }
 
   async function onBuy() {
@@ -203,7 +248,13 @@ export function BasketTradePanel({
         throw new Error(built.error ?? `confidential-note API ${r.status}`);
       }
       const claimed = await emitAndClaim(built, setBuyStage);
-      if (!claimed) throw new Error("Shares minted but not claimed yet — refresh in a moment, your funds are safe.");
+      if (!claimed) {
+        // Shares are minted on-chain but the local consume stalled — keep the note
+        // so the user can re-claim (Retry) instead of stranding it.
+        setPendingClaim({ built, kind: "buy" });
+        setBuyStage("pending");
+        return;
+      }
       setBuyStage("done");
       setBuyAmount(""); // clear the spent amount so it doesn't read as "exceeds balance"
       await refresh();
@@ -239,7 +290,13 @@ export function BasketTradePanel({
         throw new Error(built.error ?? `confidential-redeem API ${r.status}`);
       }
       const claimed = await emitAndClaim(built, setSellStage);
-      if (!claimed) throw new Error("dUSDC released but not claimed yet — refresh in a moment, your funds are safe.");
+      if (!claimed) {
+        // dUSDC is released on-chain but the local consume stalled — keep the note
+        // so the user can re-claim (Retry) instead of stranding it.
+        setPendingClaim({ built, kind: "sell" });
+        setSellStage("pending");
+        return;
+      }
       setSellStage("done");
       setSellAmount(""); // clear the sold amount so it doesn't read as "exceeds balance"
       await refresh();
@@ -359,6 +416,24 @@ export function BasketTradePanel({
           </button>
           {sellStage === "claiming" && <p style={sty.hint}>The network is releasing your dUSDC — up to a minute.</p>}
           {sellStage === "done" && <p style={sty.doneMsg}>Sold ✓ — dUSDC is back in your account.</p>}
+        </div>
+      )}
+
+      {pendingClaim && (
+        <div style={{ marginTop: 16, borderTop: "1px solid var(--rule)", paddingTop: 16 }}>
+          <p style={sty.hint}>
+            Your {pendingClaim.kind === "buy" ? "shares were minted" : "dUSDC was released"} on-chain, but the
+            testnet prover stalled while claiming them into your account. Nothing is lost — retry the claim.
+          </p>
+          <button
+            type="button"
+            onClick={retryClaim}
+            disabled={buyBusy || sellBusy}
+            className="nav-cta"
+            style={{ ...sty.fullBtn, opacity: buyBusy || sellBusy ? 0.5 : 1 }}
+          >
+            {buyBusy || sellBusy ? "Claiming…" : "Retry claim"}
+          </button>
         </div>
       )}
 

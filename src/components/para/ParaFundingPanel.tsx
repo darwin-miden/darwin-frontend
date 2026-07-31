@@ -123,7 +123,7 @@ const STAGE_LABEL: Record<Stage, string> = {
   error: "",
 };
 
-type WStage = "idle" | "quoting" | "signing-note" | "awaiting-fill" | "done" | "error";
+type WStage = "idle" | "quoting" | "signing-note" | "awaiting-fill" | "done" | "pending" | "error";
 
 const WSTAGE_LABEL: Record<WStage, string> = {
   idle: "",
@@ -131,6 +131,7 @@ const WSTAGE_LABEL: Record<WStage, string> = {
   "signing-note": "Sign the payout note in Para…",
   "awaiting-fill": "Epoch is paying out on Sepolia…",
   done: "Withdrawn ✓",
+  pending: "Still settling…",
   error: "",
 };
 
@@ -168,7 +169,7 @@ export function ParaFundingPanel() {
   const [wStage, setWStage] = useState<WStage>("idle");
 
   const busy = stage !== "idle" && stage !== "done" && stage !== "error";
-  const wBusy = wStage !== "idle" && wStage !== "done" && wStage !== "error";
+  const wBusy = wStage !== "idle" && wStage !== "done" && wStage !== "pending" && wStage !== "error";
 
   const refreshBalance = useCallback(
     async (retries = 3) => {
@@ -289,7 +290,7 @@ export function ParaFundingPanel() {
       setStage("bridging");
       let epochNoteId: string | null = null;
       if (intentNonce) {
-        const url = `${ALLOCATOR_URL}/intentStatus/${evmAddress}/${intentNonce}`;
+        const url = `${ALLOCATOR_URL}/intentStatus/${encodeURIComponent(evmAddress)}/${encodeURIComponent(intentNonce)}`;
         const start = Date.now();
         while (Date.now() - start < 120_000) {
           try {
@@ -440,14 +441,18 @@ export function ParaFundingPanel() {
 
       const nonce = extractNonce(submit);
       setWStage("awaiting-fill");
+      let filled = false;
       if (nonce) {
-        const url = `${ALLOCATOR_URL}/intentStatus/${evmAddress}/${nonce}`;
+        const url = `${ALLOCATOR_URL}/intentStatus/${encodeURIComponent(evmAddress)}/${encodeURIComponent(nonce)}`;
         const start = Date.now();
         while (Date.now() - start < 150_000) {
           try {
             const r = await fetch(url).then((res) => res.json());
             if (Array.isArray(r) && r[0]) {
-              if (r[0].status === "success") break;
+              if (r[0].status === "success") {
+                filled = true;
+                break;
+              }
               if (r[0].status === "failed") {
                 throw new Error(`Epoch redeem failed: ${JSON.stringify(r[0]).slice(0, 150)}`);
               }
@@ -459,7 +464,13 @@ export function ParaFundingPanel() {
         }
       }
 
-      setWStage("done");
+      // The dUSDC already left the vault (the payout note was created when Para
+      // signed it). If Epoch confirmed the fill it's done; otherwise it's still
+      // settling — DON'T claim success. Surface a distinct "pending" state so the
+      // user knows the payout is in flight (Epoch keeps processing it), never a
+      // false "Withdrawn ✓" that reads as a silent loss.
+      setWStage(filled ? "done" : "pending");
+      setWAmount("");
       await refreshBalance(6);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -580,6 +591,12 @@ export function ParaFundingPanel() {
             Payout to <span style={{ fontFamily: "var(--font-mono-stack)" }}>{evmAddress.slice(0, 6)}…{evmAddress.slice(-4)}</span> on Sepolia. No Sepolia tx to sign — Para signs the payout note.
           </p>
           {wStage === "done" && <p style={sty.doneMsg}>Withdrawn ✓ — USDC is on its way to your Sepolia address.</p>}
+          {wStage === "pending" && (
+            <p style={sty.hint}>
+              Payout submitted — Epoch is still settling it on Sepolia. Your USDC is in flight (the redeem
+              note is reclaimable if it doesn&apos;t land); check your Sepolia wallet in a few minutes.
+            </p>
+          )}
         </div>
       )}
 
