@@ -205,6 +205,7 @@ export function BasketTradePanel({
       const claimed = await emitAndClaim(built, setBuyStage);
       if (!claimed) throw new Error("Shares minted but not claimed yet — refresh in a moment, your funds are safe.");
       setBuyStage("done");
+      setBuyAmount(""); // clear the spent amount so it doesn't read as "exceeds balance"
       await refresh();
       onDone?.();
     } catch (e) {
@@ -240,6 +241,7 @@ export function BasketTradePanel({
       const claimed = await emitAndClaim(built, setSellStage);
       if (!claimed) throw new Error("dUSDC released but not claimed yet — refresh in a moment, your funds are safe.");
       setSellStage("done");
+      setSellAmount(""); // clear the sold amount so it doesn't read as "exceeds balance"
       await refresh();
       onDone?.();
     } catch (e) {
