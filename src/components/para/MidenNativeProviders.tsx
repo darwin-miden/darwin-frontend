@@ -25,7 +25,7 @@ import type { ReactNode } from "react";
 
 export default function MidenNativeProviders({ children }: { children: ReactNode }) {
   return (
-    <MidenProvider config={{ rpcUrl: "testnet", prover: "testnet" }}>
+    <MidenProvider config={{ rpcUrl: "testnet", prover: "testnet", proverTimeoutMs: 120_000 }}>
       <MidenFiSignerProvider
         appName="Darwin"
         network={WalletAdapterNetwork.Testnet}

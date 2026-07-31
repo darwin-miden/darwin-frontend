@@ -103,7 +103,13 @@ export default function ParaProviders({ children }: { children: ReactNode }) {
         externalWalletConfig: externalWalletConfig as any,
       }}
     >
-      <MidenProvider config={{ rpcUrl: "testnet", prover: "testnet" }}>
+      {/* proverTimeoutMs: /para proves on the REMOTE testnet prover (no local
+          prover — see the header note). Its default client-side gRPC deadline is
+          short, so a heavier tx (e.g. a NAV basket redeem) on a loaded prover
+          returns `DeadlineExceeded` even though the prover is still working. Give
+          it 120s so the client waits for the (slow but valid) proof instead of
+          bailing early; BasketTradePanel still retries on top of this. */}
+      <MidenProvider config={{ rpcUrl: "testnet", prover: "testnet", proverTimeoutMs: 120_000 }}>
         {children}
       </MidenProvider>
     </ParaSignerProvider>
