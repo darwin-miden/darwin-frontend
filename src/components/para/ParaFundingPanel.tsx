@@ -163,6 +163,7 @@ export function ParaFundingPanel() {
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState<string | null>(null);
   const [dusdc, setDusdc] = useState<bigint | null>(null);
+  const [sepoliaUsdc, setSepoliaUsdc] = useState<bigint | null>(null);
   const [wAmount, setWAmount] = useState("1");
   const [wStage, setWStage] = useState<WStage>("idle");
 
@@ -204,6 +205,34 @@ export function ParaFundingPanel() {
     if (isReady && signerAccountId) refreshBalance(3);
   }, [isReady, signerAccountId, refreshBalance]);
 
+  // Read the wallet's Sepolia USDC balance (ERC-20 balanceOf) via the injected
+  // provider. eth_call runs on the wallet's SELECTED chain, so switch to Sepolia
+  // first — the balance is meaningless read against mainnet. Best-effort.
+  const readSepoliaUsdc = useCallback(async (addr: `0x${string}`): Promise<bigint | null> => {
+    const eth = getEth();
+    if (!eth) return null;
+    try {
+      await switchToSepolia(eth);
+      const data = ("0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0")) as `0x${string}`;
+      const res = (await eth.request({
+        method: "eth_call",
+        params: [{ to: EPOCH_USDC_SEPOLIA.address, data }, "latest"],
+      })) as string;
+      const bal = res && res !== "0x" ? BigInt(res) : 0n;
+      setSepoliaUsdc(bal);
+      return bal;
+    } catch {
+      /* balance read best-effort — the user can still type an amount */
+      return null;
+    }
+  }, []);
+
+  async function onMaxFund() {
+    if (!evmAddress) return;
+    const bal = sepoliaUsdc ?? (await readSepoliaUsdc(evmAddress));
+    if (bal != null) setAmount(formatUnits(bal, EPOCH_USDC_SEPOLIA.decimals));
+  }
+
   async function connectEvm() {
     setError(null);
     const eth = getEth();
@@ -213,7 +242,10 @@ export function ParaFundingPanel() {
     }
     try {
       const accs = (await eth.request({ method: "eth_requestAccounts" })) as string[];
-      if (accs?.[0]) setEvmAddress(accs[0] as `0x${string}`);
+      if (accs?.[0]) {
+        setEvmAddress(accs[0] as `0x${string}`);
+        void readSepoliaUsdc(accs[0] as `0x${string}`);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -341,6 +373,8 @@ export function ParaFundingPanel() {
       }
 
       setStage("done");
+      setAmount(""); // clear the funded amount so it doesn't linger for the next fund
+      if (evmAddress) void readSepoliaUsdc(evmAddress); // Sepolia balance dropped
       await refreshBalance(6);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -464,7 +498,14 @@ export function ParaFundingPanel() {
         </button>
       ) : (
         <>
-          <label style={sty.fieldLabel}>USDC amount (Sepolia)</label>
+          <label style={{ ...sty.fieldLabel, display: "flex", justifyContent: "space-between" }}>
+            <span>USDC amount (Sepolia)</span>
+            {sepoliaUsdc != null && (
+              <span style={{ textTransform: "none" }}>
+                Balance: {formatUnits(sepoliaUsdc, EPOCH_USDC_SEPOLIA.decimals)} USDC
+              </span>
+            )}
+          </label>
           <div style={sty.inputRow}>
             <input
               value={amount}
@@ -474,6 +515,9 @@ export function ParaFundingPanel() {
               style={sty.input}
               placeholder="1.0"
             />
+            <button type="button" onClick={onMaxFund} disabled={busy} style={sty.maxBtn}>
+              Max
+            </button>
             <span style={{ fontSize: 14, color: "var(--ink-3)" }}>USDC</span>
           </div>
           <button
