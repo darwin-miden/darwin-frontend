@@ -85,6 +85,9 @@ export default function ParaProviders({ children }: { children: ReactNode }) {
       apiKey={PARA_API_KEY}
       environment="BETA"
       appName="Darwin"
+      // Sign Miden txs (consume, payout note) silently — the user already
+      // clicked Fund/Withdraw, so Para's per-tx confirmation modal is redundant.
+      showSigningModal={false}
       paraProviderConfig={{
         // Show the email/OAuth auth block AND the external wallets block.
         paraModalConfig: { authLayout: ["AUTH:FULL", "EXTERNAL:FULL"] },

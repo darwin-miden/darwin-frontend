@@ -370,11 +370,16 @@ export function ParaFundingPanel() {
       setWStage("signing-note");
       const submit = await submitRedeemIntent(sdk, quote, async (faucetId, amountBase, allocatorId) => {
         try {
+          // Never send more dUSDC than the vault holds — the reverse quote can
+          // ask for a hair more than the balance (rate/rounding), which
+          // underflows the vault ("subtracting X from Y would underflow").
+          let sendAmount = BigInt(amountBase);
+          if (dusdc != null && sendAmount > dusdc) sendAmount = dusdc;
           const out = await sendNote({
             from: signerAccountId,
             to: allocatorId,
             assetId: faucetId,
-            amount: BigInt(amountBase),
+            amount: sendAmount,
             noteType: "public",
             returnNote: true,
           });
@@ -431,6 +436,9 @@ export function ParaFundingPanel() {
   }
 
   const dusdcHuman = dusdc != null ? formatUnits(dusdc, EPOCH_USDC_SEPOLIA.midenDecimals) : "—";
+  // Withdraw is capped at the vault balance — requesting more underflows.
+  const wMax = dusdc != null ? formatUnits(dusdc, EPOCH_USDC_SEPOLIA.midenDecimals) : "0";
+  const wOverBalance = !!wAmount && Number(wAmount) > Number(wMax);
 
   return (
     <div className="mx-auto mt-4 w-full max-w-[460px] rounded-2xl border border-black/10 bg-black/[0.03] p-6">
@@ -493,7 +501,10 @@ export function ParaFundingPanel() {
           <p className="mt-1 text-sm text-black/50">
             Redeem dUSDC from your Para Miden account back to USDC on your Sepolia address (via Epoch).
           </p>
-          <label className="mt-4 block text-xs uppercase tracking-wide text-black/40">dUSDC amount</label>
+          <label className="mt-4 flex items-center justify-between text-xs uppercase tracking-wide text-black/40">
+            <span>dUSDC amount</span>
+            <span className="normal-case">Balance: {dusdcHuman}</span>
+          </label>
           <div className="mt-1 flex items-center gap-2">
             <input
               value={wAmount}
@@ -503,12 +514,23 @@ export function ParaFundingPanel() {
               className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 font-mono text-black outline-none focus:border-black/40"
               placeholder="1.0"
             />
+            <button
+              type="button"
+              onClick={() => setWAmount(wMax)}
+              disabled={wBusy}
+              className="shrink-0 rounded-lg border border-black/15 px-3 py-2 text-sm font-semibold text-black/70 hover:bg-black/5 disabled:opacity-50"
+            >
+              Max
+            </button>
             <span className="text-sm text-black/40">dUSDC</span>
           </div>
+          {wOverBalance && (
+            <p className="mt-2 text-xs text-red-600">Amount exceeds your balance ({dusdcHuman} dUSDC).</p>
+          )}
           <button
             type="button"
             onClick={onWithdraw}
-            disabled={wBusy || !wAmount || Number(wAmount) <= 0}
+            disabled={wBusy || !wAmount || Number(wAmount) <= 0 || wOverBalance}
             className="nav-cta mt-4 w-full disabled:opacity-50"
             style={{ textAlign: "center" }}
           >
