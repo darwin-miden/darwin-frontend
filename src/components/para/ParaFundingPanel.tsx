@@ -29,7 +29,7 @@ import {
   useWaitForCommit,
   useWaitForNotes,
 } from "@miden-sdk/react";
-import { useCallback, useEffect, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useState } from "react";
 import { createWalletClient, custom, formatUnits, http, parseUnits } from "viem";
 import { sepolia } from "viem/chains";
 import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
@@ -441,116 +441,162 @@ export function ParaFundingPanel() {
   const wOverBalance = !!wAmount && Number(wAmount) > Number(wMax);
 
   return (
-    <div className="mx-auto mt-4 w-full max-w-[460px] rounded-2xl border border-black/10 bg-black/[0.03] p-6">
-      <h2 className="text-lg font-semibold text-black">Fund your Miden account</h2>
-      <p className="mt-1 text-sm text-black/50">
-        Bridge Sepolia USDC from your own MetaMask / Rabby into your Para Miden account (via Epoch).
+    <div>
+      <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: "var(--ink)" }}>Fund your Miden account</h2>
+      <p style={{ marginTop: 4, fontSize: 14, color: "var(--ink-3)" }}>
+        Bridge Sepolia USDC from your own MetaMask / Rabby into your Miden account (via Epoch).
       </p>
 
-      <div className="mt-4 flex items-center justify-between border-b border-black/10 py-2 text-sm">
-        <span className="text-black/50">Your dUSDC on Miden</span>
-        <span className="font-mono text-black/90">{dusdcHuman}</span>
+      <div style={sty.balanceRow}>
+        <span style={{ color: "var(--ink-3)" }}>Your dUSDC on Miden</span>
+        <span style={{ fontFamily: "var(--font-mono-stack)", color: "var(--ink)" }}>{dusdcHuman}</span>
       </div>
 
       {!evmAddress ? (
-        <button type="button" onClick={connectEvm} className="nav-cta mt-5 w-full" style={{ textAlign: "center" }}>
+        <button type="button" onClick={connectEvm} className="nav-cta" style={sty.fullBtn}>
           Connect MetaMask / Rabby (Sepolia)
         </button>
       ) : (
         <>
-          <label className="mt-5 block text-xs uppercase tracking-wide text-black/40">USDC amount (Sepolia)</label>
-          <div className="mt-1 flex items-center gap-2">
+          <label style={sty.fieldLabel}>USDC amount (Sepolia)</label>
+          <div style={sty.inputRow}>
             <input
               value={amount}
               onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
               inputMode="decimal"
               disabled={busy}
-              className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 font-mono text-black outline-none focus:border-black/40"
+              style={sty.input}
               placeholder="1.0"
             />
-            <span className="text-sm text-black/40">USDC</span>
+            <span style={{ fontSize: 14, color: "var(--ink-3)" }}>USDC</span>
           </div>
-
           <button
             type="button"
             onClick={onFund}
             disabled={busy || !amount || Number(amount) <= 0}
-            className="nav-cta mt-4 w-full disabled:opacity-50"
-            style={{ textAlign: "center" }}
+            className="nav-cta"
+            style={{ ...sty.fullBtn, opacity: busy || !amount || Number(amount) <= 0 ? 0.5 : 1 }}
           >
             {busy ? STAGE_LABEL[stage] : "Fund"}
           </button>
-
-          <p className="mt-3 text-xs text-black/40">
-            Source wallet: <span className="font-mono">{evmAddress.slice(0, 6)}…{evmAddress.slice(-4)}</span> · sends on
-            Sepolia, delivers dUSDC to your Para Miden account.
+          <p style={sty.hint}>
+            Source wallet <span style={{ fontFamily: "var(--font-mono-stack)" }}>{evmAddress.slice(0, 6)}…{evmAddress.slice(-4)}</span> · sends on Sepolia, delivers dUSDC to your Miden account.
           </p>
         </>
       )}
 
-      {stage === "done" && (
-        <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
-          Funded ✓ — your dUSDC is now on your Para Miden account.
-        </p>
-      )}
+      {stage === "done" && <p style={sty.doneMsg}>Funded ✓ — your dUSDC is now on your Miden account.</p>}
 
       {/* Withdraw — the mirror of Fund. Shown once the account holds dUSDC. */}
       {evmAddress && dusdc != null && dusdc > 0n && (
-        <div className="mt-6 border-t border-black/10 pt-5">
-          <h3 className="text-base font-semibold text-black">Withdraw to Sepolia</h3>
-          <p className="mt-1 text-sm text-black/50">
-            Redeem dUSDC from your Para Miden account back to USDC on your Sepolia address (via Epoch).
+        <div style={{ marginTop: 24, borderTop: "1px solid var(--rule)", paddingTop: 20 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0, color: "var(--ink)" }}>Withdraw to Sepolia</h3>
+          <p style={{ marginTop: 4, fontSize: 14, color: "var(--ink-3)" }}>
+            Redeem dUSDC from your Miden account back to USDC on your Sepolia address (via Epoch).
           </p>
-          <label className="mt-4 flex items-center justify-between text-xs uppercase tracking-wide text-black/40">
+          <label style={{ ...sty.fieldLabel, display: "flex", justifyContent: "space-between" }}>
             <span>dUSDC amount</span>
-            <span className="normal-case">Balance: {dusdcHuman}</span>
+            <span style={{ textTransform: "none" }}>Balance: {dusdcHuman}</span>
           </label>
-          <div className="mt-1 flex items-center gap-2">
+          <div style={sty.inputRow}>
             <input
               value={wAmount}
               onChange={(e) => setWAmount(e.target.value.replace(/[^0-9.]/g, ""))}
               inputMode="decimal"
               disabled={wBusy}
-              className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 font-mono text-black outline-none focus:border-black/40"
+              style={sty.input}
               placeholder="1.0"
             />
-            <button
-              type="button"
-              onClick={() => setWAmount(wMax)}
-              disabled={wBusy}
-              className="shrink-0 rounded-lg border border-black/15 px-3 py-2 text-sm font-semibold text-black/70 hover:bg-black/5 disabled:opacity-50"
-            >
+            <button type="button" onClick={() => setWAmount(wMax)} disabled={wBusy} style={sty.maxBtn}>
               Max
             </button>
-            <span className="text-sm text-black/40">dUSDC</span>
+            <span style={{ fontSize: 14, color: "var(--ink-3)" }}>dUSDC</span>
           </div>
           {wOverBalance && (
-            <p className="mt-2 text-xs text-red-600">Amount exceeds your balance ({dusdcHuman} dUSDC).</p>
+            <p style={{ marginTop: 8, fontSize: 12, color: "#b91c1c" }}>
+              Amount exceeds your balance ({dusdcHuman} dUSDC).
+            </p>
           )}
           <button
             type="button"
             onClick={onWithdraw}
             disabled={wBusy || !wAmount || Number(wAmount) <= 0 || wOverBalance}
-            className="nav-cta mt-4 w-full disabled:opacity-50"
-            style={{ textAlign: "center" }}
+            className="nav-cta"
+            style={{ ...sty.fullBtn, opacity: wBusy || !wAmount || Number(wAmount) <= 0 || wOverBalance ? 0.5 : 1 }}
           >
             {wBusy ? WSTAGE_LABEL[wStage] : "Withdraw to Sepolia"}
           </button>
-          <p className="mt-3 text-xs text-black/40">
-            Payout to <span className="font-mono">{evmAddress.slice(0, 6)}…{evmAddress.slice(-4)}</span> on Sepolia. No
-            Sepolia tx to sign — Para signs the payout note.
+          <p style={sty.hint}>
+            Payout to <span style={{ fontFamily: "var(--font-mono-stack)" }}>{evmAddress.slice(0, 6)}…{evmAddress.slice(-4)}</span> on Sepolia. No Sepolia tx to sign — Para signs the payout note.
           </p>
-          {wStage === "done" && (
-            <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
-              Withdrawn ✓ — USDC is on its way to your Sepolia address.
-            </p>
-          )}
+          {wStage === "done" && <p style={sty.doneMsg}>Withdrawn ✓ — USDC is on its way to your Sepolia address.</p>}
         </div>
       )}
 
-      {error && (
-        <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700">{error}</p>
-      )}
+      {error && <p style={sty.errMsg}>{error}</p>}
     </div>
   );
 }
+
+const sty: Record<string, CSSProperties> = {
+  balanceRow: {
+    marginTop: 16,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottom: "1px solid var(--rule)",
+    paddingBottom: 8,
+    fontSize: 14,
+  },
+  fieldLabel: {
+    marginTop: 18,
+    display: "block",
+    fontSize: 12,
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    color: "var(--ink-3)",
+  },
+  inputRow: { marginTop: 6, display: "flex", alignItems: "center", gap: 8 },
+  input: {
+    width: "100%",
+    borderRadius: 8,
+    border: "1px solid var(--rule)",
+    background: "var(--paper)",
+    padding: "9px 12px",
+    fontFamily: "var(--font-mono-stack)",
+    fontSize: 14,
+    color: "var(--ink)",
+    outline: "none",
+  },
+  maxBtn: {
+    flexShrink: 0,
+    borderRadius: 8,
+    border: "1px solid var(--rule)",
+    background: "transparent",
+    padding: "9px 12px",
+    fontSize: 13,
+    fontWeight: 600,
+    color: "var(--ink-2)",
+    cursor: "pointer",
+  },
+  fullBtn: { width: "100%", textAlign: "center", marginTop: 16 },
+  hint: { marginTop: 12, fontSize: 12, color: "var(--ink-3)" },
+  doneMsg: {
+    marginTop: 12,
+    borderRadius: 8,
+    border: "1px solid rgba(76,195,138,0.4)",
+    background: "rgba(76,195,138,0.12)",
+    padding: "8px 12px",
+    fontSize: 13,
+    color: "#2e7d52",
+  },
+  errMsg: {
+    marginTop: 12,
+    borderRadius: 8,
+    border: "1px solid rgba(220,38,38,0.35)",
+    background: "rgba(220,38,38,0.08)",
+    padding: "8px 12px",
+    fontSize: 12,
+    color: "#b91c1c",
+  },
+};
