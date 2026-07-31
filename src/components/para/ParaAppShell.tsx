@@ -116,6 +116,17 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
   useEffect(() => {
     if (!depositOpen && connected) refreshBalance();
   }, [depositOpen, connected, refreshBalance]);
+  // Keep Cash live: poll while connected so a deposit made in the modal (or the
+  // initial synced-in balance) shows up in the header without a manual reload.
+  // Once the balance is non-zero, refreshBalance returns on the first read, so a
+  // funded account polls cheaply (one sync).
+  useEffect(() => {
+    if (!connected) return;
+    const id = setInterval(() => {
+      void refreshBalance();
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [connected, refreshBalance]);
 
   const cash = dusdc != null ? Number(formatUnits(dusdc, EPOCH_USDC_SEPOLIA.midenDecimals)) : 0;
   const cashUsd = cash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
