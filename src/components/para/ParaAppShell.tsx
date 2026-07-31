@@ -1,26 +1,23 @@
 "use client";
 
 /**
- * Polymarket-style app shell for the Para experience: a top bar with
- * Portfolio / Cash / Deposit / Connect, and the funding+withdraw flow in a
- * modal opened from Deposit (or by clicking the Cash balance).
+ * Connected app shell (Polymarket-style): top bar with Portfolio / Cash /
+ * Deposit / account, plus the funding+withdraw flow in a modal. Signer-AGNOSTIC
+ * — it drives connect/disconnect through the unified `useSigner()`, so it works
+ * identically under ParaProviders (Para) or MidenNativeProviders (MidenFi). The
+ * Para-vs-Miden choice is made a level up (ParaApp), which mounts the matching
+ * provider around this shell.
  *
- * Styled with the app's own CSS system (CSS variables + `nav-cta` etc.) via
- * inline styles — the app does NOT use Tailwind, so utility classes are inert.
- *
- * Runs on the remote-prover / no-COEP model (see ParaProviders) so Para's auth
- * iframe works. Connect offers a choice: Para (email/Google/X/passkey/MetaMask/
- * Rabby) or a native Miden wallet (wired next). Whatever connects, Cash +
- * Deposit/Withdraw work through the unified @miden-sdk/react hooks.
+ * Styled with the app's own CSS system (CSS vars + `nav-cta`) via inline styles
+ * — the app does NOT use Tailwind.
  */
 
-import { CSSProperties, useCallback, useEffect, useState } from "react";
+import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { useMiden, useSigner } from "@miden-sdk/react";
-import { useModal } from "@miden-sdk/use-miden-para-react";
 import { formatUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
-import { ParaFundingPanel } from "./ParaFundingPanel";
+import { DepositMethods } from "./DepositMethods";
 import { LogoFull } from "../Logo";
 
 function short(v: string | null | undefined, head = 6, tail = 4) {
@@ -41,9 +38,22 @@ const value: CSSProperties = {
   color: "var(--ink)",
 };
 
-export function ParaAppShell() {
+const shellRoot: CSSProperties = {
+  minHeight: "100vh",
+  background: "var(--paper)",
+  color: "var(--ink)",
+  fontFamily: "var(--font-sans-stack)",
+};
+const topbar: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "14px clamp(20px, 4vw, 40px)",
+  borderBottom: "1px solid var(--rule)",
+};
+
+export function ParaAppShell({ onExit }: { onExit: () => void }) {
   const signer = useSigner();
-  const { openModal } = useModal();
   const { client, runExclusive, signerAccountId, isReady } = useMiden() as unknown as {
     client: unknown;
     runExclusive: <T>(fn: () => Promise<T> | T) => Promise<T>;
@@ -54,7 +64,17 @@ export function ParaAppShell() {
 
   const [dusdc, setDusdc] = useState<bigint | null>(null);
   const [depositOpen, setDepositOpen] = useState(false);
-  const [connectOpen, setConnectOpen] = useState(false);
+
+  // Kick off the wallet connection once when this shell mounts (the method was
+  // already chosen a level up). For Para this pops the Para modal; for MidenFi
+  // it prompts the extension.
+  const tried = useRef(false);
+  useEffect(() => {
+    if (!tried.current && !signer?.isConnected) {
+      tried.current = true;
+      Promise.resolve(signer?.connect?.()).catch(() => {});
+    }
+  }, [signer]);
 
   const refreshBalance = useCallback(async () => {
     if (!client || !signerAccountId) return;
@@ -82,151 +102,121 @@ export function ParaAppShell() {
   const cash = dusdc != null ? Number(formatUnits(dusdc, EPOCH_USDC_SEPOLIA.midenDecimals)) : 0;
   const cashUsd = cash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  async function disconnect() {
+    try {
+      await signer?.disconnect?.();
+    } catch {
+      /* ignore */
+    }
+    onExit();
+  }
+
+  // Not connected yet (completing sign-in / user closed the modal).
+  if (!connected) {
+    return (
+      <div style={shellRoot}>
+        <header style={topbar}>
+          <span className="nav-logo" style={{ display: "flex" }}>
+            <LogoFull aria-label="Darwin" />
+          </span>
+          <button type="button" className="nav-cta" onClick={disconnect}>
+            Cancel
+          </button>
+        </header>
+        <main style={{ maxWidth: 480, margin: "0 auto", padding: "clamp(60px, 14vh, 160px) 20px", textAlign: "center" }}>
+          <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Finishing sign-in…</h1>
+          <p style={{ marginTop: 10, color: "var(--ink-3)" }}>
+            A Para popup opens to finish sign-in. If your browser blocked it, allow
+            popups for this site, then Retry — and sign the verification message your
+            wallet prompts.
+          </p>
+          <button
+            type="button"
+            className="nav-cta"
+            style={{ marginTop: 18 }}
+            onClick={() => Promise.resolve(signer?.connect?.()).catch(() => {})}
+          >
+            Retry
+          </button>
+        </main>
+      </div>
+    );
+  }
+
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "var(--paper)",
-        color: "var(--ink)",
-        fontFamily: "var(--font-sans-stack)",
-      }}
-    >
-      {/* Top bar */}
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "14px clamp(20px, 4vw, 40px)",
-          borderBottom: "1px solid var(--rule)",
-        }}
-      >
+    <div style={shellRoot}>
+      <header style={topbar}>
         <span className="nav-logo" style={{ display: "flex" }}>
           <LogoFull aria-label="Darwin" />
         </span>
-
         <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-          {connected && (
-            <>
-              <div style={{ textAlign: "right" }}>
-                <div style={label}>Portfolio</div>
-                <div style={value}>$0.00</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDepositOpen(true)}
-                style={{ textAlign: "right", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-                title="Add or withdraw funds"
-              >
-                <div style={label}>Cash</div>
-                <div style={{ ...value, color: "var(--green)" }}>${cashUsd}</div>
-              </button>
-              <button type="button" className="nav-cta" onClick={() => setDepositOpen(true)}>
-                Deposit
-              </button>
-              <button
-                type="button"
-                className="nav-cta"
-                onClick={() => signer?.disconnect()}
-                title={signerAccountId ?? ""}
-                style={{ fontFamily: "var(--font-mono-stack)", fontSize: 12 }}
-              >
-                {short(signerAccountId)} ⏻
-              </button>
-            </>
-          )}
-          {!connected && (
-            <button type="button" className="nav-cta" onClick={() => setConnectOpen(true)}>
-              Connect wallet
-            </button>
-          )}
+          <div style={{ textAlign: "right" }}>
+            <div style={label}>Portfolio</div>
+            <div style={value}>$0.00</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDepositOpen(true)}
+            style={{ textAlign: "right", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+            title="Add or withdraw funds"
+          >
+            <div style={label}>Cash</div>
+            <div style={{ ...value, color: "var(--green)" }}>${cashUsd}</div>
+          </button>
+          <button type="button" className="nav-cta" onClick={() => setDepositOpen(true)}>
+            Deposit
+          </button>
+          <button
+            type="button"
+            className="nav-cta"
+            onClick={disconnect}
+            title={signerAccountId ?? ""}
+            style={{ fontFamily: "var(--font-mono-stack)", fontSize: 12 }}
+          >
+            {short(signerAccountId)} ⏻
+          </button>
         </div>
       </header>
 
-      {/* Body */}
       <main style={{ maxWidth: "var(--max)", margin: "0 auto", padding: "clamp(40px, 8vh, 96px) clamp(20px, 4vw, 40px)" }}>
-        {connected ? (
-          <div
-            style={{
-              background: "var(--paper-2)",
-              border: "1px solid var(--rule)",
-              borderRadius: 16,
-              padding: "clamp(24px, 4vw, 40px)",
-              maxWidth: 640,
-            }}
-          >
-            <h1 style={{ fontSize: 26, fontWeight: 600, margin: 0 }}>Welcome to Darwin</h1>
-            <p style={{ marginTop: 8, color: "var(--ink-3)" }}>
-              Your Miden account is ready. You hold{" "}
-              <span style={{ fontFamily: "var(--font-mono-stack)", color: "var(--green)" }}>${cashUsd}</span> in dUSDC.
-            </p>
-            <p style={{ marginTop: 4, fontSize: 14, color: "var(--ink-3)" }}>
-              Use{" "}
-              <button
-                type="button"
-                onClick={() => setDepositOpen(true)}
-                style={{ background: "none", border: "none", padding: 0, color: "var(--orange)", cursor: "pointer", textDecoration: "underline" }}
-              >
-                Deposit
-              </button>{" "}
-              to add or withdraw funds. Baskets are coming next.
-            </p>
-          </div>
-        ) : (
-          <div style={{ maxWidth: 540, margin: "0 auto", textAlign: "center" }}>
-            <h1 style={{ fontSize: 34, fontWeight: 600, margin: 0, letterSpacing: "-0.02em" }}>
-              One token, a whole strategy
-            </h1>
-            <p style={{ marginTop: 12, color: "var(--ink-3)" }}>
-              Sign in to get a Miden account and fund it from your own wallet.
-            </p>
-            <button type="button" className="nav-cta" style={{ marginTop: 24 }} onClick={() => setConnectOpen(true)}>
-              Connect wallet
-            </button>
-          </div>
-        )}
+        <div
+          style={{
+            background: "var(--paper-2)",
+            border: "1px solid var(--rule)",
+            borderRadius: 16,
+            padding: "clamp(24px, 4vw, 40px)",
+            maxWidth: 640,
+          }}
+        >
+          <h1 style={{ fontSize: 26, fontWeight: 600, margin: 0 }}>Welcome to Darwin</h1>
+          <p style={{ marginTop: 8, color: "var(--ink-3)" }}>
+            Your Miden account is ready. You hold{" "}
+            <span style={{ fontFamily: "var(--font-mono-stack)", color: "var(--green)" }}>${cashUsd}</span> in dUSDC.
+          </p>
+          <p style={{ marginTop: 4, fontSize: 14, color: "var(--ink-3)" }}>
+            Use{" "}
+            <button
+              type="button"
+              onClick={() => setDepositOpen(true)}
+              style={{ background: "none", border: "none", padding: 0, color: "var(--orange)", cursor: "pointer", textDecoration: "underline" }}
+            >
+              Deposit
+            </button>{" "}
+            to add or withdraw funds. Baskets are coming next.
+          </p>
+        </div>
       </main>
 
-      {/* Connect-choice modal */}
-      {connectOpen && !connected && (
-        <Overlay onClose={() => setConnectOpen(false)}>
-          <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Connect</h2>
-          <p style={{ marginTop: 4, fontSize: 14, color: "var(--ink-3)" }}>Choose how you want to sign in.</p>
-          <button type="button" onClick={() => { setConnectOpen(false); openModal?.(); }} style={choiceBtn}>
-            <div style={{ fontWeight: 600 }}>Continue with Para</div>
-            <div style={{ fontSize: 12, color: "var(--ink-3)" }}>Email, Google, X, passkey, or MetaMask / Rabby</div>
-          </button>
-          <button type="button" disabled style={{ ...choiceBtn, opacity: 0.55, cursor: "not-allowed" }}>
-            <div style={{ fontWeight: 600 }}>Connect a Miden wallet</div>
-            <div style={{ fontSize: 12, color: "var(--ink-3)" }}>Native Miden wallet (MidenFi) — coming next</div>
-          </button>
-        </Overlay>
-      )}
-
-      {/* Deposit / Withdraw modal */}
       {depositOpen && (
         <Overlay onClose={() => setDepositOpen(false)}>
-          <ParaFundingPanel />
+          <DepositMethods />
         </Overlay>
       )}
     </div>
   );
 }
 
-const choiceBtn: CSSProperties = {
-  display: "block",
-  width: "100%",
-  marginTop: 14,
-  textAlign: "left",
-  background: "var(--paper-2)",
-  border: "1px solid var(--rule)",
-  borderRadius: 12,
-  padding: "14px 16px",
-  cursor: "pointer",
-  color: "var(--ink)",
-};
-
-function Overlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+export function Overlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
     <div
       onClick={onClose}

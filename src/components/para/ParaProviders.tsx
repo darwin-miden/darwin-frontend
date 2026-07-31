@@ -57,16 +57,24 @@ const WC_PROJECT_ID = RAW_WC_ID && RAW_WC_ID !== "darwin-protocol-demo" ? RAW_WC
 // External-wallet login for the Para modal. MetaMask + Rabby are offered as
 // login methods alongside email/Google/X/passkey.
 //
-// NB: we deliberately do NOT set `createLinkedEmbeddedForExternalWallets`. With
-// it, Para tries to LINK any detected external wallet (e.g. a Rabby extension
-// the user has installed) to the account even when they signed in with Google —
-// it then blocks on a wallet-ownership verification signature that never comes,
-// hanging on "AwaitingAccountSetup" so the Miden account never finalizes
-// ("Miden ready: Initializing…" forever). Without it, email/Google/X/passkey
-// logins complete cleanly. (Open item: whether an external-wallet LOGIN yields a
-// Miden account on its own — MetaMask/Rabby are primarily the FUNDING source.)
+// `createLinkedEmbeddedForExternalWallets` is REQUIRED for an external-wallet
+// login to actually work here. Para's Miden signer reads `embedded.wallets`, so
+// a MetaMask/Rabby login must provision a LINKED EMBEDDED wallet — that's the
+// Miden signer. Full auth (this flag) does exactly that AND verifies wallet
+// ownership with a one-time signature. WITHOUT it, the account has only an
+// unverified external wallet and the Miden layer throws
+// `ParaApiError: user must verify biometrics or external wallets`.
+//
+// It fires ONLY inside `connectExternalWallet` — i.e. when the user actually
+// clicks MetaMask/Rabby in the modal (ExternalWalletProvider `isWithFullAuth`).
+// A Google/email login connects no wallet, so it's untouched: the flag does NOT
+// auto-link a merely-installed extension. The full-auth path briefly shows Para's
+// "Creating Your Account…" while the wallet prompts the verification signature —
+// that's the expected UX, not a hang (headless couldn't sign it, hence the old
+// misdiagnosis).
 const externalWalletConfig = {
   wallets: ["METAMASK", "RABBY"],
+  createLinkedEmbeddedForExternalWallets: ["METAMASK", "RABBY"],
   evmConnector: {
     config: {
       chains: [mainnet, sepolia],

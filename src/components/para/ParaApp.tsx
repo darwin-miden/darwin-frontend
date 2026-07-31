@@ -1,19 +1,32 @@
 "use client";
 
 /**
- * Self-contained Para experience: the Para/Miden providers wrapping the
- * Polymarket-style app shell (header + funding/withdraw modal). Imported only
- * via next/dynamic({ ssr: false }) from /para so the WASM client never loads on
+ * /para entry. The user first picks a connection method (ConnectGate, no
+ * provider mounted). That choice decides which signer provider wraps the shared
+ * app shell:
+ *   - "para"  → ParaProviders (ParaSignerProvider → Para-managed Miden account)
+ *   - "miden" → MidenNativeProviders (MidenFiSignerProvider → native wallet)
+ * The shell + funding/withdraw are signer-agnostic, so they work under either.
+ * Imported only via next/dynamic({ ssr: false }) so the WASM client stays off
  * the server.
  */
 
+import { useState } from "react";
+
 import ParaProviders from "./ParaProviders";
+import MidenNativeProviders from "./MidenNativeProviders";
 import { ParaAppShell } from "./ParaAppShell";
+import { ConnectGate, type ConnectMethod } from "./ConnectGate";
 
 export default function ParaApp() {
-  return (
-    <ParaProviders>
-      <ParaAppShell />
-    </ParaProviders>
+  const [method, setMethod] = useState<ConnectMethod | null>(null);
+
+  if (!method) return <ConnectGate onChoose={setMethod} />;
+
+  const shell = <ParaAppShell onExit={() => setMethod(null)} />;
+  return method === "para" ? (
+    <ParaProviders>{shell}</ParaProviders>
+  ) : (
+    <MidenNativeProviders>{shell}</MidenNativeProviders>
   );
 }
