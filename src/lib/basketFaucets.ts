@@ -31,7 +31,12 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   // nav_deposit and nav_redeem notes. See darwin-relay send_nav_deposit /
   // send_nav_redeem.
   DCC: {
-    id: "0x2901b41fb0a901714d03b804b8d97e",
+    // v13 NAV faucet — compute_v now counts un-converted vault dUSDC at par
+    // (watermark in feed[3]), so a deposit's value is in NAV immediately: no
+    // dilution, a buy→sell round-trip conserves value (fee only). Supersedes the
+    // v12 faucet 0x2901b41f… whose NAV omitted the cash and diluted deposits
+    // until the orchestrator caught up (~27% loss on a rapid round-trip).
+    id: "0x84eca6c055459db1355f3dc7764b8a",
     decimals: 8,
     nav: true,
   },
