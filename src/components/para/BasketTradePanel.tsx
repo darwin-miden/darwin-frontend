@@ -29,6 +29,35 @@ import { liveDccBalance } from "../../lib/dccBalance";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// /para proves on the REMOTE testnet prover (the route runs without cross-origin
+// isolation so Para's auth iframe can load, which rules out the local
+// multi-threaded prover). That prover intermittently times out
+// ("DeadlineExceeded" / "Request timed out"); retry the proving a few times with
+// backoff before surfacing the error. A timed-out prove never submitted the tx,
+// so retrying is safe (no double-emit).
+async function withProveRetry<T>(fn: () => Promise<T>, tries = 4): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      const msg = String((e as { message?: string })?.message ?? e);
+      if (!/deadline|timed\s*out|timeout|prove transaction/i.test(msg)) throw e;
+      await sleep(2500 * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
+function prettyErr(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/deadline|timed\s*out|timeout/i.test(msg)) {
+    return "The testnet prover is busy and timed out after a few retries. Wait a moment and try again — your funds are safe.";
+  }
+  return msg;
+}
+
 type Stage = "idle" | "building" | "emitting" | "claiming" | "done" | "error";
 const BUY_LABEL: Record<Stage, string> = {
   idle: "",
@@ -120,10 +149,12 @@ export function BasketTradePanel({
     setStage("emitting");
     const { Note, NoteArray, NoteFile } = await import("@miden-sdk/miden-sdk");
     const note = Note.deserialize(Uint8Array.from(atob(built.noteB64!), (c) => c.charCodeAt(0)));
-    await executeTx({
-      accountId: signerAccountId!,
-      request: () => new TransactionRequestBuilder().withOwnOutputNotes(new NoteArray([note])).build(),
-    });
+    await withProveRetry(() =>
+      executeTx({
+        accountId: signerAccountId!,
+        request: () => new TransactionRequestBuilder().withOwnOutputNotes(new NoteArray([note])).build(),
+      }),
+    );
 
     setStage("claiming");
     const noteFile = NoteFile.deserialize(
@@ -177,7 +208,7 @@ export function BasketTradePanel({
       await refresh();
       onDone?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(prettyErr(e));
       setBuyStage("error");
     }
   }
@@ -212,7 +243,7 @@ export function BasketTradePanel({
       await refresh();
       onDone?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(prettyErr(e));
       setSellStage("error");
     }
   }
