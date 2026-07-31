@@ -17,7 +17,9 @@ import { useMiden, useSigner } from "@miden-sdk/react";
 import { formatUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
+import { BASKETS } from "../../lib/baskets";
 import { DepositMethods } from "./DepositMethods";
+import { BasketBuyPanel } from "./BasketBuyPanel";
 import { LogoFull } from "../Logo";
 
 function short(v: string | null | undefined, head = 6, tail = 4) {
@@ -64,6 +66,7 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
 
   const [dusdc, setDusdc] = useState<bigint | null>(null);
   const [depositOpen, setDepositOpen] = useState(false);
+  const [buySymbol, setBuySymbol] = useState<string | null>(null);
 
   // Kick off the wallet connection once when this shell mounts (the method was
   // already chosen a level up). For Para this pops the Para modal; for MidenFi
@@ -178,38 +181,73 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
         </div>
       </header>
 
-      <main style={{ maxWidth: "var(--max)", margin: "0 auto", padding: "clamp(40px, 8vh, 96px) clamp(20px, 4vw, 40px)" }}>
-        <div
-          style={{
-            background: "var(--paper-2)",
-            border: "1px solid var(--rule)",
-            borderRadius: 16,
-            padding: "clamp(24px, 4vw, 40px)",
-            maxWidth: 640,
-          }}
-        >
-          <h1 style={{ fontSize: 26, fontWeight: 600, margin: 0 }}>Welcome to Darwin</h1>
-          <p style={{ marginTop: 8, color: "var(--ink-3)" }}>
-            Your Miden account is ready. You hold{" "}
-            <span style={{ fontFamily: "var(--font-mono-stack)", color: "var(--green)" }}>${cashUsd}</span> in dUSDC.
-          </p>
-          <p style={{ marginTop: 4, fontSize: 14, color: "var(--ink-3)" }}>
-            Use{" "}
+      <main style={{ maxWidth: "var(--max)", margin: "0 auto", padding: "clamp(32px, 6vh, 72px) clamp(20px, 4vw, 40px)" }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Baskets</h1>
+          <p style={{ margin: 0, fontSize: 14, color: "var(--ink-3)" }}>
+            You hold{" "}
+            <span style={{ fontFamily: "var(--font-mono-stack)", color: "var(--green)" }}>${cashUsd}</span> in dUSDC ·{" "}
             <button
               type="button"
               onClick={() => setDepositOpen(true)}
               style={{ background: "none", border: "none", padding: 0, color: "var(--orange)", cursor: "pointer", textDecoration: "underline" }}
             >
               Deposit
-            </button>{" "}
-            to add or withdraw funds. Baskets are coming next.
+            </button>
           </p>
+        </div>
+
+        <div
+          style={{
+            marginTop: 20,
+            display: "grid",
+            gap: 16,
+            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+          }}
+        >
+          {BASKETS.map((b) => (
+            <div
+              key={b.symbol}
+              style={{
+                background: "var(--paper-2)",
+                border: "1px solid var(--rule)",
+                borderRadius: 16,
+                padding: 20,
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                <h2 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>{b.name}</h2>
+                <span style={{ fontFamily: "var(--font-mono-stack)", fontSize: 13, color: "var(--ink-3)" }}>{b.symbol}</span>
+              </div>
+              <p style={{ marginTop: 8, fontSize: 13, color: "var(--ink-3)", flex: 1 }}>{b.description}</p>
+              <button
+                type="button"
+                className="nav-cta"
+                style={{ marginTop: 16, width: "100%", textAlign: "center" }}
+                onClick={() => setBuySymbol(b.symbol)}
+              >
+                Buy
+              </button>
+            </div>
+          ))}
         </div>
       </main>
 
       {depositOpen && (
         <Overlay onClose={() => setDepositOpen(false)}>
           <DepositMethods />
+        </Overlay>
+      )}
+
+      {buySymbol && (
+        <Overlay onClose={() => setBuySymbol(null)}>
+          <BasketBuyPanel
+            symbol={buySymbol}
+            name={BASKETS.find((b) => b.symbol === buySymbol)?.name ?? buySymbol}
+            onDone={refreshBalance}
+          />
         </Overlay>
       )}
     </div>
