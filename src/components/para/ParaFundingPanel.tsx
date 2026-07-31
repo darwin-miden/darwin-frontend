@@ -170,11 +170,18 @@ export function ParaFundingPanel() {
   const wBusy = wStage !== "idle" && wStage !== "done" && wStage !== "error";
 
   const refreshBalance = useCallback(
-    async (retries = 1) => {
+    async (retries = 3) => {
       if (!client || !signerAccountId) return;
       const { AccountId } = await import("@miden-sdk/miden-sdk");
       const dusdcFaucet = AccountId.fromHex(EPOCH_USDC_SEPOLIA.midenFaucetId);
       for (let i = 0; i < retries; i++) {
+        // Sync BEFORE reading — a getAccount without a fresh sync returns the
+        // last-known (often stale/zero) state, so a funded account can read 0.
+        try {
+          await runExclusive(() => syncState());
+        } catch {
+          /* sync mid-flight — read anyway */
+        }
         try {
           const acc = (await runExclusive(() =>
             (client as { getAccount: (id: unknown) => Promise<unknown> }).getAccount(
@@ -183,11 +190,10 @@ export function ParaFundingPanel() {
           )) as { vault: () => { getBalance: (id: unknown) => bigint } } | null;
           const bal = acc ? BigInt(acc.vault().getBalance(dusdcFaucet) ?? 0n) : 0n;
           setDusdc(bal);
-          if (bal > 0n || retries === 1) return;
+          if (bal > 0n) return;
         } catch {
-          /* vault not synced yet */
+          /* vault not synced yet — retry */
         }
-        await runExclusive(() => syncState()).catch(() => {});
         await sleep(2000);
       }
     },
@@ -195,7 +201,7 @@ export function ParaFundingPanel() {
   );
 
   useEffect(() => {
-    if (isReady && signerAccountId) refreshBalance(1);
+    if (isReady && signerAccountId) refreshBalance(3);
   }, [isReady, signerAccountId, refreshBalance]);
 
   async function connectEvm() {

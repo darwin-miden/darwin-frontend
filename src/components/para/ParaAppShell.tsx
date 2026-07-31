@@ -13,7 +13,7 @@
  */
 
 import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
-import { useMiden, useSigner } from "@miden-sdk/react";
+import { useMiden, useSigner, useSyncState } from "@miden-sdk/react";
 import { formatUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
@@ -62,6 +62,7 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
     signerAccountId: string | null;
     isReady: boolean;
   };
+  const { sync: syncState } = useSyncState();
   const connected = !!signer?.isConnected && !!signerAccountId;
 
   const [dusdc, setDusdc] = useState<bigint | null>(null);
@@ -79,21 +80,35 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
     }
   }, [signer]);
 
+  // Read the dUSDC vault balance. Sync FIRST — a `getAccount` without a fresh
+  // sync returns the last-known (often stale/zero) state, which is why a funded
+  // account can read $0.00 right after connecting or switching. Retry a couple of
+  // times: the node may lag a beat behind the on-chain deposit.
   const refreshBalance = useCallback(async () => {
     if (!client || !signerAccountId) return;
-    try {
-      const { AccountId } = await import("@miden-sdk/miden-sdk");
-      const faucet = AccountId.fromHex(EPOCH_USDC_SEPOLIA.midenFaucetId);
-      const acc = (await runExclusive(() =>
-        (client as { getAccount: (id: unknown) => Promise<unknown> }).getAccount(
-          AccountId.fromHex(signerAccountId),
-        ),
-      )) as { vault: () => { getBalance: (id: unknown) => bigint } } | null;
-      setDusdc(acc ? BigInt(acc.vault().getBalance(faucet) ?? 0n) : 0n);
-    } catch {
-      /* vault not synced yet */
+    const { AccountId } = await import("@miden-sdk/miden-sdk");
+    const faucet = AccountId.fromHex(EPOCH_USDC_SEPOLIA.midenFaucetId);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await runExclusive(() => syncState());
+      } catch {
+        /* sync mid-flight — read anyway */
+      }
+      try {
+        const acc = (await runExclusive(() =>
+          (client as { getAccount: (id: unknown) => Promise<unknown> }).getAccount(
+            AccountId.fromHex(signerAccountId),
+          ),
+        )) as { vault: () => { getBalance: (id: unknown) => bigint } } | null;
+        const bal = acc ? BigInt(acc.vault().getBalance(faucet) ?? 0n) : 0n;
+        setDusdc(bal);
+        if (bal > 0n) return;
+      } catch {
+        /* vault not synced yet — retry */
+      }
+      await new Promise((r) => setTimeout(r, 1500));
     }
-  }, [client, signerAccountId, runExclusive]);
+  }, [client, signerAccountId, runExclusive, syncState]);
 
   useEffect(() => {
     if (isReady && signerAccountId) refreshBalance();
