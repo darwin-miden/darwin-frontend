@@ -19,7 +19,7 @@ import { formatUnits } from "viem";
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { BASKETS } from "../../lib/baskets";
 import { DepositMethods } from "./DepositMethods";
-import { BasketBuyPanel } from "./BasketBuyPanel";
+import { BasketTradePanel } from "./BasketTradePanel";
 import { LogoFull } from "../Logo";
 
 function short(v: string | null | undefined, head = 6, tail = 4) {
@@ -269,7 +269,7 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
 
       {buySymbol && (
         <Overlay onClose={() => setBuySymbol(null)}>
-          <BasketBuyPanel
+          <BasketTradePanel
             symbol={buySymbol}
             name={BASKETS.find((b) => b.symbol === buySymbol)?.name ?? buySymbol}
             onDone={refreshBalance}
