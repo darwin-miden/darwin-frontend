@@ -31,12 +31,15 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   // nav_deposit and nav_redeem notes. See darwin-relay send_nav_deposit /
   // send_nav_redeem.
   DCC: {
-    // v13 NAV faucet — compute_v now counts un-converted vault dUSDC at par
-    // (watermark in feed[3]), so a deposit's value is in NAV immediately: no
-    // dilution, a buy→sell round-trip conserves value (fee only). Supersedes the
-    // v12 faucet 0x2901b41f… whose NAV omitted the cash and diluted deposits
-    // until the orchestrator caught up (~27% loss on a rapid round-trip).
-    id: "0x84eca6c055459db1355f3dc7764b8a",
+    // v17 NAV faucet — compute_v = max(dUSDC_cash*100, priced_constituents). The
+    // vault double-holds cash + mirrored constituents, so max() (not sum) avoids
+    // double-counting while still pricing a fresh deposit's cash immediately (no
+    // dilution) and giving live crypto exposure once constituents exceed cash.
+    // Needs NO per-tick watermark write (robust to flaky testnet feed writes) and
+    // degrades to cash-only if the price feed is unset. Supersedes v12 (0x2901b41f,
+    // ~27% round-trip dilution) and v13 (watermark-in-feed, double-counted when a
+    // feed write dropped).
+    id: "0x33800b5c229908713d9c4598d71760",
     decimals: 8,
     nav: true,
   },
