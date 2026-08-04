@@ -25,9 +25,14 @@
  * excluded from the root provider in Providers.tsx, and this subtree only ever
  * mounts via next/dynamic({ ssr: false }) so the WASM blob stays off the server.
  *
- * Remote testnet prover (not the local multi-threaded one) so /para needs NO
- * SharedArrayBuffer → NO cross-origin isolation → COOP/COEP are dropped on this
- * route (next.config), which is what lets Para's cross-origin auth iframe load.
+ * Proving: /para proves on the LOCAL single-threaded prover. The app already
+ * loads the single-threaded WASM (`@miden-sdk/miden-sdk` "." export → dist/st),
+ * and single-threaded proving needs NO SharedArrayBuffer — only the MULTI-
+ * threaded prover does. So we keep proving on-device WITHOUT cross-origin
+ * isolation: COOP/COEP stay dropped on this route (next.config), which is what
+ * lets Para's cross-origin auth iframe load. On-device proving avoids the shared
+ * remote testnet prover's queue + intermittent gRPC DeadlineExceeded ("failed to
+ * prove") stalls, which were the dominant, most variable slice of trade latency.
  */
 
 import "@getpara/react-sdk-lite/styles.css";
@@ -103,13 +108,12 @@ export default function ParaProviders({ children }: { children: ReactNode }) {
         externalWalletConfig: externalWalletConfig as any,
       }}
     >
-      {/* proverTimeoutMs: /para proves on the REMOTE testnet prover (no local
-          prover — see the header note). Its default client-side gRPC deadline is
-          short, so a heavier tx (e.g. a NAV basket redeem) on a loaded prover
-          returns `DeadlineExceeded` even though the prover is still working. Give
-          it 120s so the client waits for the (slow but valid) proof instead of
-          bailing early; BasketTradePanel still retries on top of this. */}
-      <MidenProvider config={{ rpcUrl: "testnet", prover: "testnet", proverTimeoutMs: 120_000 }}>
+      {/* prover: "local" — prove on-device (single-threaded st WASM, no SAB, see
+          header note) instead of the shared remote testnet prover. This removes
+          the network round-trip + the loaded-prover DeadlineExceeded stalls that
+          made trades feel "too long". proverTimeoutMs is a no-op for local proving
+          (kept harmlessly); BasketTradePanel still retries on top. */}
+      <MidenProvider config={{ rpcUrl: "testnet", prover: "local", proverTimeoutMs: 120_000 }}>
         {children}
       </MidenProvider>
     </ParaSignerProvider>

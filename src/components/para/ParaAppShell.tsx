@@ -63,7 +63,21 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
     isReady: boolean;
   };
   const { sync: syncState } = useSyncState();
-  const connected = !!signer?.isConnected && !!signerAccountId;
+  // Latch the connected gate on the STICKY signerAccountId. Para's useAccount()
+  // react-query key includes the injected wallet's evmAccount address/chainId, so
+  // during a long sign+prove (a NAV redeem can take up to 120s on the remote
+  // prover) a transient wagmi refresh flips signer.isConnected to false for a
+  // render or two — which, if gated on directly, tears this shell down to the
+  // "Finishing sign-in…" screen MID-TRADE (the user perceives it as a logout, and
+  // the client re-init that follows leaves the vault reading 0 → redeem underflow).
+  // signerAccountId survives that blip (MidenProvider keeps it across a transient
+  // Para disconnect; a real disconnect goes through onExit at the ParaApp level and
+  // unmounts this whole shell), so once connected, gate on the account id alone.
+  const everConnected = useRef(false);
+  if (signer?.isConnected && signerAccountId) everConnected.current = true;
+  const connected = everConnected.current
+    ? !!signerAccountId
+    : !!signer?.isConnected && !!signerAccountId;
 
   const [dusdc, setDusdc] = useState<bigint | null>(null);
   const [depositOpen, setDepositOpen] = useState(false);

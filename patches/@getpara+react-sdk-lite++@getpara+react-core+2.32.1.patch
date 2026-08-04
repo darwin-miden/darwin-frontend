@@ -1,0 +1,9 @@
+diff --git a/node_modules/@getpara/react-sdk-lite/node_modules/@getpara/react-core/dist/provider/hooks/queries/createAccountHook.js b/node_modules/@getpara/react-sdk-lite/node_modules/@getpara/react-core/dist/provider/hooks/queries/createAccountHook.js
+index 1111111..2222222 100644
+--- a/node_modules/@getpara/react-sdk-lite/node_modules/@getpara/react-core/dist/provider/hooks/queries/createAccountHook.js
++++ b/node_modules/@getpara/react-sdk-lite/node_modules/@getpara/react-core/dist/provider/hooks/queries/createAccountHook.js
+@@ -87,2 +87,4 @@
+       queryKey,
++      placeholderData: (prev) => prev,
++      staleTime: 5e3,
+       queryFn: () => __async(this, null, function* () {

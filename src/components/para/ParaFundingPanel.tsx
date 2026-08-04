@@ -53,6 +53,24 @@ import {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const SEPOLIA_HEX = "0xaa36a7"; // 11155111
 
+// Retry a prove-gated call across the flaky testnet remote prover's transient
+// timeouts (gRPC DeadlineExceeded / "Failed to fetch" / "Request timed out").
+// Re-running the same consume is safe — a consumed note can't be re-consumed.
+async function withProveRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      const msg = String((e as { message?: string })?.message ?? e);
+      if (!/deadline\s*exceeded|deadline expired|request timed out|failed to fetch/i.test(msg)) throw e;
+      await new Promise((r) => setTimeout(r, 2500 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 type Eth = { request: (a: { method: string; params?: unknown[] }) => Promise<unknown> };
 function getEth(): Eth | null {
   const eth = (window as unknown as { ethereum?: Eth }).ethereum;
@@ -284,8 +302,23 @@ export function ParaFundingPanel() {
       });
 
       setStage("signing");
-      const submit = await submitIntent(sdk, quote);
-      const intentNonce = extractNonce(submit);
+      // solveIntent signs + broadcasts the approve + Compact deposit on Sepolia,
+      // then viem waits for the deposit's confirmation — which can TIME OUT on a
+      // slow/flaky Sepolia RPC even though the tx mines fine (verified live: these
+      // deposits land, status 0x1). Treat THAT specific confirmation timeout as
+      // "submitted": the USDC is on its way + Epoch will see the deposit, so fall
+      // through to the note-claim below (it finds the delivery by account, no nonce
+      // needed) instead of erroring on a deposit that actually succeeded. Anything
+      // else is a real signing/deposit failure — rethrow.
+      let submit: unknown = null;
+      try {
+        submit = await submitIntent(sdk, quote);
+      } catch (e) {
+        const msg = String((e as { message?: string })?.message ?? e);
+        if (!/timed out while waiting for transaction|to be confirmed|waitfortransactionreceipt/i.test(msg)) throw e;
+        console.warn("[para-fund] deposit confirmation timed out (tx likely mined) — continuing to claim", e);
+      }
+      const intentNonce = submit ? extractNonce(submit) : undefined;
 
       setStage("bridging");
       let epochNoteId: string | null = null;
@@ -311,66 +344,76 @@ export function ParaFundingPanel() {
         }
       }
 
+      // Wait for + consume Epoch's delivered dUSDC note AUTOMATICALLY, right here
+      // in the deposit flow — the user must NEVER run a second action to see their
+      // dUSDC. Epoch's solver fills async (the note lands a bit after the intent
+      // reports success) and the remote prover is intermittently flaky, so we keep
+      // syncing + retrying the consume (prove-retry) under a generous 6-minute
+      // deadline until THIS deposit's note is consumed into the vault. Any other
+      // consumable notes (e.g. an earlier delivery whose consume had stalled) are
+      // swept opportunistically in the same pass, so a stall never strands dUSDC.
       setStage("receiving");
-      let delivered: unknown[] = [];
-      for (let attempt = 0; attempt < 4 && delivered.length === 0; attempt++) {
+      const norm = (s: string) => s.toLowerCase().replace(/^0x/, "");
+      const wantId = epochNoteId ? norm(epochNoteId as string) : null;
+      const claimDeadline = Date.now() + 6 * 60_000;
+      let claimed = false;
+      let sawNote = false;
+      while (Date.now() < claimDeadline && !claimed) {
         try {
           await runExclusive(() => syncState());
         } catch {
-          /* retry */
+          /* mid-sync — retry next tick */
         }
+        let inboundIds: string[] = [];
         try {
-          const raced = await Promise.race<unknown[] | undefined>([
-            waitForConsumableNotes({
-              accountId: signerAccountId,
-              minCount: 1,
-              timeoutMs: 30_000,
-              intervalMs: 5_000,
-            }) as Promise<unknown[] | undefined>,
-            new Promise<unknown[]>((resolve) => setTimeout(() => resolve([]), 33_000)),
-          ]);
-          delivered = Array.isArray(raced) ? raced : [];
+          const notes = (await waitForConsumableNotes({
+            accountId: signerAccountId,
+            minCount: 1,
+            timeoutMs: 20_000,
+            intervalMs: 5_000,
+          })) as
+            | Array<{ inputNoteRecord?: () => { id?: () => { toString?: () => string } } | null }>
+            | undefined;
+          inboundIds = (notes ?? [])
+            .map((n) => n.inputNoteRecord?.()?.id?.()?.toString?.() ?? "")
+            .filter(Boolean);
         } catch {
-          delivered = [];
+          inboundIds = [];
         }
-      }
-      if (delivered.length === 0) {
-        throw new Error(
-          epochNoteId
-            ? `Note ${epochNoteId.slice(0, 18)}… is delivered on-chain but the client hasn't synced it — refresh and retry, your funds are safe.`
-            : "Epoch never confirmed delivery and no note reached the account.",
-        );
-      }
-
-      const inboundIds = (
-        delivered as Array<{ inputNoteRecord?: () => { id?: () => { toString?: () => string } } | null }>
-      )
-        .map((n) => n.inputNoteRecord?.()?.id?.()?.toString?.() ?? "")
-        .filter(Boolean);
-
-      // Consume ONLY the note Epoch actually delivered — never a stray
-      // tag-colliding P2ID note (right tag, wrong target account) left over from
-      // earlier tests, which throws "P2ID's target account address and
-      // transaction address do not match" inside the WASM (harmless but noisy).
-      // Fall back to all inbound notes only when Epoch didn't report a note id.
-      const norm = (s: string) => s.toLowerCase().replace(/^0x/, "");
-      const targetIds =
-        epochNoteId && inboundIds.some((id) => norm(id) === norm(epochNoteId as string))
-          ? inboundIds.filter((id) => norm(id) === norm(epochNoteId as string))
+        if (inboundIds.length) sawNote = true;
+        // Consume THIS deposit's note first, then sweep any other inbound notes.
+        // Stray tag-colliding P2ID notes (right tag, wrong target) just throw
+        // "target account … do not match" — caught + skipped, harmless.
+        const ordered = wantId
+          ? [
+              ...inboundIds.filter((id) => norm(id) === wantId),
+              ...inboundIds.filter((id) => norm(id) !== wantId),
+            ]
           : inboundIds;
-
-      setStage("consuming");
-      let consumedAny = false;
-      for (const id of targetIds) {
-        try {
-          await consume({ accountId: signerAccountId, notes: [id] });
-          consumedAny = true;
-        } catch (e) {
-          console.warn("[para-fund] skipped un-consumable note", id, e);
+        setStage("consuming");
+        for (const id of ordered) {
+          try {
+            await withProveRetry(() => consume({ accountId: signerAccountId, notes: [id] }));
+            // A successful consume IS the real delivery — stray tag-colliding P2ID
+            // notes (right tag, wrong target) throw "target … do not match", so once
+            // one consumes we stop and never poke the strays (keeps the console clean).
+            claimed = true;
+            break;
+          } catch (e) {
+            console.warn("[para-fund] consume skipped (stray note or prover busy)", id, e);
+          }
+        }
+        if (!claimed) {
+          setStage("receiving");
+          await sleep(5000);
         }
       }
-      if (!consumedAny) {
-        throw new Error("The delivered note couldn't be consumed — refresh and retry, funds are safe.");
+      if (!claimed) {
+        throw new Error(
+          sawNote
+            ? "Your dUSDC was delivered on-chain but the testnet prover kept stalling — reopen Deposit and it finishes claiming automatically, nothing is lost."
+            : "Epoch hasn't delivered the note to your account yet — reopen Deposit in a moment; your funds are safe.",
+        );
       }
 
       setStage("done");
@@ -543,6 +586,13 @@ export function ParaFundingPanel() {
           <p style={sty.hint}>
             Source wallet <span style={{ fontFamily: "var(--font-mono-stack)" }}>{evmAddress.slice(0, 6)}…{evmAddress.slice(-4)}</span> · sends on Sepolia, delivers dUSDC to your Miden account.
           </p>
+          {(stage === "bridging" || stage === "receiving" || stage === "consuming") && (
+            <p style={sty.progressMsg}>
+              Bridging in progress — Epoch is delivering your dUSDC (~1–2 min). This finishes on its own: you can
+              close this window and your balance updates automatically when it lands. (It&apos;s not spendable until
+              then.)
+            </p>
+          )}
         </>
       )}
 
@@ -648,6 +698,17 @@ const sty: Record<string, CSSProperties> = {
   },
   fullBtn: { width: "100%", textAlign: "center", marginTop: 16 },
   hint: { marginTop: 12, fontSize: 12, color: "var(--ink-3)" },
+  // In-flight but positive — a calm blue, same language as the trade panel's
+  // optimistic "settling" state, so the wait reads as progress not a stall.
+  progressMsg: {
+    marginTop: 12,
+    borderRadius: 8,
+    border: "1px solid rgba(59,130,246,0.4)",
+    background: "rgba(59,130,246,0.10)",
+    padding: "8px 12px",
+    fontSize: 12,
+    color: "#1d4ed8",
+  },
   doneMsg: {
     marginTop: 12,
     borderRadius: 8,

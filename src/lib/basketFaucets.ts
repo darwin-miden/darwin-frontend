@@ -31,15 +31,16 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   // nav_deposit and nav_redeem notes. See darwin-relay send_nav_deposit /
   // send_nav_redeem.
   DCC: {
-    // v17 NAV faucet — compute_v = max(dUSDC_cash*100, priced_constituents). The
-    // vault double-holds cash + mirrored constituents, so max() (not sum) avoids
-    // double-counting while still pricing a fresh deposit's cash immediately (no
-    // dilution) and giving live crypto exposure once constituents exceed cash.
-    // Needs NO per-tick watermark write (robust to flaky testnet feed writes) and
-    // degrades to cash-only if the price feed is unset. Supersedes v12 (0x2901b41f,
-    // ~27% round-trip dilution) and v13 (watermark-in-feed, double-counted when a
-    // feed write dropped).
-    id: "0x33800b5c229908713d9c4598d71760",
+    // v18 NAV faucet — compute_v = Σ(constituent_holdings × live price) +
+    // max(0, D−W)×100 (the SYMMETRIC watermark model). V rises AND falls with
+    // the live crypto feed (no max floor), so a redeem settles the real price
+    // move both ways. W = feed[3] tracks cash already mirrored into constituents,
+    // so a fresh deposit's cash lands in NAV at par immediately (no dilution) and
+    // isn't double-counted once mirrored. The relay orchestrator (launchd, every
+    // 10 min) pushes live CoinGecko prices via set_feed and seeds 40/40/20
+    // WBTC/ETH/USDT per deposit. Supersedes v17 (0x33800b5c, max() = upside-only,
+    // downside floored) — see darwin-relay asm/lib/price_oracle.masm.
+    id: "0x357559089dcdeaf13bb9e53964aff6",
     decimals: 8,
     nav: true,
   },

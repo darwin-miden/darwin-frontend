@@ -29,12 +29,11 @@ import { liveDccBalance } from "../../lib/dccBalance";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// /para proves on the REMOTE testnet prover (the route runs without cross-origin
-// isolation so Para's auth iframe can load, which rules out the local
-// multi-threaded prover). That prover intermittently times out
-// ("DeadlineExceeded" / "Request timed out"); retry the proving a few times with
-// backoff before surfacing the error. A timed-out prove never submitted the tx,
-// so retrying is safe (no double-emit).
+// /para proves on the LOCAL single-threaded prover (no cross-origin isolation
+// needed, so Para's auth iframe still loads — see ParaProviders). Local proving
+// avoids the remote testnet prover's "DeadlineExceeded" stalls, but keep a small
+// retry as a harmless safety net: a retried, never-submitted prove can't
+// double-emit, and it still covers the remote path if the prover config flips.
 async function withProveRetry<T>(fn: () => Promise<T>, tries = 4): Promise<T> {
   let lastErr: unknown;
   for (let i = 0; i < tries; i++) {
@@ -62,12 +61,13 @@ function prettyErr(e: unknown): string {
   return msg;
 }
 
-type Stage = "idle" | "building" | "emitting" | "claiming" | "done" | "pending" | "error";
+type Stage = "idle" | "building" | "emitting" | "claiming" | "settling" | "done" | "pending" | "error";
 const BUY_LABEL: Record<Stage, string> = {
   idle: "",
   building: "Building your order…",
   emitting: "Signing the deposit…",
   claiming: "Minting basket shares…",
+  settling: "Shares on the way ✓",
   done: "Bought ✓",
   pending: "Awaiting claim",
   error: "",
@@ -77,6 +77,7 @@ const SELL_LABEL: Record<Stage, string> = {
   building: "Building your order…",
   emitting: "Signing the sale…",
   claiming: "Releasing dUSDC…",
+  settling: "dUSDC on the way ✓",
   done: "Sold ✓",
   pending: "Awaiting claim",
   error: "",
@@ -169,24 +170,48 @@ export function BasketTradePanel({
     } catch {
       /* already imported */
     }
-    for (let i = 0; i < 30; i++) {
-      await sleep(5000);
+    // Detection cadence tuned from MEASURED testnet numbers (probe_blocktime,
+    // 2026-08-05): block time ~3.3s, and one full syncState costs ~1.8s (it's a
+    // combined NTL + chain sync — the cheapest primitive that also imports the
+    // inclusion proof consume() needs, so a lighter tag-filtered RPC probe can't
+    // replace it). The payback note commits ~1-2 blocks after the NTB mints it, so
+    // a full sync already catches it within a block; the ONLY client-side slack is
+    // the poll gap. A 1s sleep (≈2.8s effective cadence incl. the ~1.8s sync)
+    // detects the commit within ~1 block instead of the old ~5s gap, without
+    // hammering the node. Sync + attempt-consume immediately each round (a consume
+    // before the note commits fails cheaply — no proof attempted). ~150 iters ≈
+    // 5-7 min budget: the testnet NTB can occasionally lag well past 2 min.
+    for (let i = 0; i < 150; i++) {
       try {
         await runExclusive(() => syncState());
       } catch {
-        /* retry */
+        /* transient node replica lag (block_to > chain tip) — retry next round */
       }
       try {
-        await consume({ accountId: signerAccountId!, notes: [built.paybackId!] });
+        await withProveRetry(
+          () => consume({ accountId: signerAccountId!, notes: [built.paybackId!] }),
+          2,
+        );
         return true;
       } catch {
-        /* not settled yet — keep polling */
+        /* not settled yet (note not produced / prover busy) — keep polling */
       }
+      await sleep(1000);
     }
     return false;
   }
 
-  async function emitAndClaim(built: BuiltNote, setStage: (s: Stage) => void) {
+  // Emit the server-built note (local prove + submit), THEN settle optimistically.
+  // Once the emit is submitted the on-chain mint/redeem is GUARANTEED, so we flip
+  // to a "settling" success right away and finish the payback claim in the
+  // BACKGROUND — the modal is closable and the balance reconciles on its own. This
+  // is what makes a trade FEEL ~10s instead of ~40s: the ~30s the network needs
+  // (NTB pickup + ~2 blocks + a local consume) no longer blocks the UI. Resolves
+  // as soon as the emit lands — it does NOT await the background claim.
+  async function emitThenSettle(built: BuiltNote, kind: "buy" | "sell") {
+    const setStage = kind === "buy" ? setBuyStage : setSellStage;
+    const clearAmount = kind === "buy" ? setBuyAmount : setSellAmount;
+
     setStage("emitting");
     const { Note, NoteArray } = await import("@miden-sdk/miden-sdk");
     const note = Note.deserialize(Uint8Array.from(atob(built.noteB64!), (c) => c.charCodeAt(0)));
@@ -196,8 +221,33 @@ export function BasketTradePanel({
         request: () => new TransactionRequestBuilder().withOwnOutputNotes(new NoteArray([note])).build(),
       }),
     );
-    setStage("claiming");
-    return claimPayback(built);
+
+    // ── OPTIMISTIC POINT ── the deposit/redeem note is on-chain; settlement is now
+    // guaranteed. Show success, clear the input, bump the header — the user can
+    // walk away. The payback claim below runs WITHOUT blocking the UI.
+    setStage("settling");
+    clearAmount("");
+    onDone?.();
+
+    // Background: wait for the NTB to produce the payback note, consume it locally,
+    // then flip to done + refresh the real balance. If it stalls, the funds are on
+    // -chain (just unclaimed) — surface the Retry path; nothing is lost.
+    void claimPayback(built)
+      .then((claimed) => {
+        if (claimed) {
+          setStage("done");
+          void refresh();
+          onDone?.();
+        } else {
+          setPendingClaim({ built, kind });
+          setStage("pending");
+        }
+      })
+      .catch((e) => {
+        console.warn("[basket-trade] background claim failed", e);
+        setPendingClaim({ built, kind });
+        setStage("pending");
+      });
   }
 
   // Re-run a stalled claim (payback already emitted on-chain — just re-consume).
@@ -247,18 +297,10 @@ export function BasketTradePanel({
       if (!r.ok || !built.noteB64 || !built.paybackFileB64 || !built.paybackId) {
         throw new Error(built.error ?? `confidential-note API ${r.status}`);
       }
-      const claimed = await emitAndClaim(built, setBuyStage);
-      if (!claimed) {
-        // Shares are minted on-chain but the local consume stalled — keep the note
-        // so the user can re-claim (Retry) instead of stranding it.
-        setPendingClaim({ built, kind: "buy" });
-        setBuyStage("pending");
-        return;
-      }
-      setBuyStage("done");
-      setBuyAmount(""); // clear the spent amount so it doesn't read as "exceeds balance"
-      await refresh();
-      onDone?.();
+      // Returns once the deposit is emitted on-chain (~10s); the mint + claim then
+      // settle in the background (see emitThenSettle). The UI is already in the
+      // optimistic "settling" success by the time this resolves.
+      await emitThenSettle(built, "buy");
     } catch (e) {
       setError(prettyErr(e));
       setBuyStage("error");
@@ -289,18 +331,9 @@ export function BasketTradePanel({
       if (!r.ok || !built.noteB64 || !built.paybackFileB64 || !built.paybackId) {
         throw new Error(built.error ?? `confidential-redeem API ${r.status}`);
       }
-      const claimed = await emitAndClaim(built, setSellStage);
-      if (!claimed) {
-        // dUSDC is released on-chain but the local consume stalled — keep the note
-        // so the user can re-claim (Retry) instead of stranding it.
-        setPendingClaim({ built, kind: "sell" });
-        setSellStage("pending");
-        return;
-      }
-      setSellStage("done");
-      setSellAmount(""); // clear the sold amount so it doesn't read as "exceeds balance"
-      await refresh();
-      onDone?.();
+      // Returns once the redeem note is emitted on-chain (~10s); the burn + dUSDC
+      // release then settle in the background (see emitThenSettle).
+      await emitThenSettle(built, "sell");
     } catch (e) {
       setError(prettyErr(e));
       setSellStage("error");
@@ -376,6 +409,12 @@ export function BasketTradePanel({
         {buyBusy ? BUY_LABEL[buyStage] : `Buy ${symbol}`}
       </button>
       {buyStage === "claiming" && <p style={sty.hint}>The network is minting your shares — up to a minute.</p>}
+      {buyStage === "settling" && (
+        <p style={sty.settleMsg}>
+          Shares on the way ✓ — settling on-chain (~30s). Your balance updates automatically; you can close this
+          window.
+        </p>
+      )}
       {buyStage === "done" && <p style={sty.doneMsg}>Bought ✓ — {symbol} shares are in your account.</p>}
 
       {/* Sell — shown once the account holds shares */}
@@ -415,6 +454,12 @@ export function BasketTradePanel({
             {sellBusy ? SELL_LABEL[sellStage] : `Sell ${symbol}`}
           </button>
           {sellStage === "claiming" && <p style={sty.hint}>The network is releasing your dUSDC — up to a minute.</p>}
+          {sellStage === "settling" && (
+            <p style={sty.settleMsg}>
+              dUSDC on the way ✓ — settling on-chain (~30s). Your balance updates automatically; you can close this
+              window.
+            </p>
+          )}
           {sellStage === "done" && <p style={sty.doneMsg}>Sold ✓ — dUSDC is back in your account.</p>}
         </div>
       )}
@@ -496,6 +541,17 @@ const sty: Record<string, CSSProperties> = {
     padding: "8px 12px",
     fontSize: 13,
     color: "#2e7d52",
+  },
+  // Optimistic "settling" state — positive but in-flight, so a calm blue rather
+  // than the final green of doneMsg.
+  settleMsg: {
+    marginTop: 12,
+    borderRadius: 8,
+    border: "1px solid rgba(59,130,246,0.4)",
+    background: "rgba(59,130,246,0.10)",
+    padding: "8px 12px",
+    fontSize: 13,
+    color: "#1d4ed8",
   },
   errMsg: {
     marginTop: 12,
