@@ -96,14 +96,22 @@ export interface ClientDepositParams {
 }
 
 export interface ClientDepositNote {
-  /** The Public deposit note to emit (NetworkAccountTarget attachment). */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  depositNote: any;
-  /** The private P2ID payback note (reconstruct + consume after the mint). */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  paybackNote: any;
+  /** Public deposit note bytes, base64 — emit as an own-output-note. */
+  noteB64: string;
+  /** Payback NoteFile bytes, base64 — import + consume once the network mints. */
+  paybackFileB64: string;
   noteId: string;
   paybackId: string;
+}
+
+// Chunked base64 of a byte array (avoids the arg-count blowup of btoa(String
+// .fromCharCode(...big))).
+function toB64(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
 }
 
 /**
@@ -134,6 +142,7 @@ export async function buildClientDepositNote(
     FungibleAsset,
     NetworkAccountTarget,
     Note,
+    NoteFile,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } = sdk as any;
 
@@ -143,8 +152,13 @@ export async function buildClientDepositNote(
   const dusdc = AccountId.fromHex(params.dusdcFaucet);
 
   // Private P2ID payback (a specific serial we keep to reconstruct + consume it).
+  // Storage is EXACTLY the standard P2idNoteStorage layout — [suffix, prefix], 2
+  // felts, no padding (miden_standards P2idNoteStorage::NUM_ITEMS == 2). Any extra
+  // felt still yields a valid recipient digest (so the note id matches + import
+  // finds it) but makes the minted note UN-consumable — the P2ID script asserts
+  // exactly 2 storage items.
   const paybackSerial = randWord(sdk);
-  const p2idStorage = new NoteStorage([recipient.suffix(), recipient.prefix(), new Felt(0n), new Felt(0n)]);
+  const p2idStorage = new NoteStorage([recipient.suffix(), recipient.prefix()]);
   const paybackRecipient = new NoteRecipient(paybackSerial, NoteScript.p2id(), p2idStorage);
   const paybackTag = NoteTag.withAccountTarget(recipient);
   const paybackNote = new Note(
@@ -177,8 +191,8 @@ export async function buildClientDepositNote(
   );
 
   return {
-    depositNote,
-    paybackNote,
+    noteB64: toB64(depositNote.serialize()),
+    paybackFileB64: toB64(NoteFile.fromOutputNote(paybackNote).serialize()),
     noteId: depositNote.id().toString(),
     paybackId: paybackNote.id().toString(),
   };

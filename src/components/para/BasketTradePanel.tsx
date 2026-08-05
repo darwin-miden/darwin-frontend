@@ -19,13 +19,31 @@
  */
 
 import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
-import { clearMidenStorage, useConsume, useMiden, useSyncState, useTransaction } from "@miden-sdk/react";
+import {
+  clearMidenStorage,
+  useCompile,
+  useConsume,
+  useMiden,
+  useSyncState,
+  useTransaction,
+} from "@miden-sdk/react";
 import { type CSSProperties, useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { formatUnits, parseUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { basketDecimals, isNavBasket } from "../../lib/basketFaucets";
+import { buildClientDepositNote, compileNavDepositScript, computeMintAmount } from "../../lib/clientNote";
 import { liveDccBalance } from "../../lib/dccBalance";
+
+// Decentralization flag: build the confidential deposit note ENTIRELY in the
+// browser (compile + build + emit) instead of fetching it from
+// /api/confidential-note. Gated so the validated server path stays default until
+// the client path is proven E2E against a 0.15.x faucet. When set, DCC buys
+// target the test faucet whose allowlist includes the client-compiled root.
+const CLIENT_NOTE_BUILD = process.env.NEXT_PUBLIC_CLIENT_NOTE === "1";
+// Test NAV faucet deployed 2026-08-05, allowlisting the client @note_script root
+// 0x4c7980e6…. Fresh (supply 0) → a first deposit takes the par-value path.
+const CLIENT_TEST_FAUCET = "0x6a1410b5a60850d15812b56a0f506d";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -158,6 +176,13 @@ export function BasketTradePanel({
   };
   const { consume } = useConsume();
   const { sync: syncState } = useSyncState();
+  // Compile the confidential note script client-side (decentralized note-building).
+  const { noteScript } = useCompile() as unknown as {
+    noteScript: (o: {
+      code: string;
+      libraries?: Array<{ namespace: string; code: string; linking: "static" | "dynamic" }>;
+    }) => Promise<{ root: () => { toHex: () => string } }>;
+  };
   const { execute: executeTx } = useTransaction() as unknown as {
     execute: (o: {
       accountId: string;
@@ -354,26 +379,54 @@ export function BasketTradePanel({
       if (amountBase <= 0n) throw new Error("Enter an amount to buy.");
 
       setBuyStage("building");
-      // Overlap the pre-emit sync with the server note-build: both take ~2s, so
-      // running them together lets the emit skip its own ~1.8s sync (skipSync).
-      const [r, presynced] = await Promise.all([
-        fetch("/api/confidential-note", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sender: signerAccountId,
-            recipient: signerAccountId,
-            basket: symbol,
-            amount: amountBase.toString(),
+      let built: BuiltNote;
+      let presynced: boolean;
+      if (CLIENT_NOTE_BUILD) {
+        // Decentralized path: compile + build the confidential note IN THE BROWSER
+        // (no /api/confidential-note). Targets the fresh test faucet whose allowlist
+        // includes the client-compiled root; supply 0 → the on-chain note takes the
+        // par-value path, so par shares = net matches what the network mints (needed
+        // for the payback P2ID to reconstruct + consume). Sync runs in parallel.
+        const [navScript, ps] = await Promise.all([
+          compileNavDepositScript(noteScript),
+          runExclusive(() => syncState())
+            .then(() => true)
+            .catch(() => false),
+        ]);
+        presynced = ps;
+        const mintAmount = computeMintAmount(amountBase, 0n, 0n);
+        built = await buildClientDepositNote(navScript, {
+          faucet: CLIENT_TEST_FAUCET,
+          sender: signerAccountId,
+          recipient: signerAccountId,
+          dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
+          amount: amountBase,
+          mintAmount,
+        });
+      } else {
+        // Overlap the pre-emit sync with the server note-build: both take ~2s, so
+        // running them together lets the emit skip its own ~1.8s sync (skipSync).
+        const [r, ps] = await Promise.all([
+          fetch("/api/confidential-note", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sender: signerAccountId,
+              recipient: signerAccountId,
+              basket: symbol,
+              amount: amountBase.toString(),
+            }),
           }),
-        }),
-        runExclusive(() => syncState())
-          .then(() => true)
-          .catch(() => false),
-      ]);
-      const built = (await r.json()) as BuiltNote;
-      if (!r.ok || !built.noteB64 || !built.paybackFileB64 || !built.paybackId) {
-        throw new Error(built.error ?? `confidential-note API ${r.status}`);
+          runExclusive(() => syncState())
+            .then(() => true)
+            .catch(() => false),
+        ]);
+        presynced = ps;
+        const server = (await r.json()) as BuiltNote;
+        if (!r.ok || !server.noteB64 || !server.paybackFileB64 || !server.paybackId) {
+          throw new Error(server.error ?? `confidential-note API ${r.status}`);
+        }
+        built = server;
       }
       // Returns once the deposit is emitted on-chain; the mint + claim then settle
       // in the background (see emitThenSettle).
