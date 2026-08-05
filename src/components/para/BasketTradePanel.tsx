@@ -19,8 +19,8 @@
  */
 
 import { TransactionRequestBuilder } from "@miden-sdk/miden-sdk";
-import { useConsume, useMiden, useSyncState, useTransaction } from "@miden-sdk/react";
-import { type CSSProperties, useCallback, useEffect, useState } from "react";
+import { clearMidenStorage, useConsume, useMiden, useSyncState, useTransaction } from "@miden-sdk/react";
+import { type CSSProperties, useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { formatUnits, parseUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
@@ -28,6 +28,33 @@ import { basketDecimals, isNavBasket } from "../../lib/basketFaucets";
 import { liveDccBalance } from "../../lib/dccBalance";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// A Miden account is SEQUENTIAL — only one transaction can be in flight at a time.
+// The optimistic-settle flow runs the payback claim in the BACKGROUND (and it
+// survives the modal closing → the panel remounting), so a naive UI would let the
+// user start a 2nd trade while the 1st's consume is still pending → the two txs
+// conflict in the mempool ("account commitment … does not match" / "vault root …
+// does not match") and surface a scary error. We therefore track in-flight
+// settlements at MODULE scope (persists across remounts) and block a new trade on
+// that account until its previous trade commits. This is the honest constraint, not
+// a limitation we can engineer away — one account settles one trade at a time.
+const settlingAccounts = new Set<string>();
+const settlingListeners = new Set<() => void>();
+function markSettling(acct: string, on: boolean) {
+  if (on) settlingAccounts.add(acct);
+  else settlingAccounts.delete(acct);
+  settlingListeners.forEach((l) => l());
+}
+function useAccountSettling(acct: string | null): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      settlingListeners.add(cb);
+      return () => settlingListeners.delete(cb);
+    },
+    () => (acct ? settlingAccounts.has(acct) : false),
+    () => false,
+  );
+}
 
 // /para proves on the LOCAL single-threaded prover (no cross-origin isolation
 // needed, so Para's auth iframe still loads — see ParaProviders). Local proving
@@ -53,12 +80,35 @@ async function withProveRetry<T>(fn: () => Promise<T>, tries = 4): Promise<T> {
   throw lastErr;
 }
 
+// A corrupt/stale local IndexedDB (e.g. an earlier failed applyTransaction left the
+// account record drifted from the chain) surfaces as these storage/root errors, and
+// then EVERY trade fails on apply until the cache is reset. For a PUBLIC account the
+// on-chain state is the source of truth, so clearing the local store + reloading
+// re-syncs it cleanly — funds are never at risk.
+function isStoreCorruptError(msg: string): boolean {
+  return /vault root|does not match final account header|storage error|failed to apply transaction|conflicts with current mempool/i.test(
+    msg,
+  );
+}
+
 function prettyErr(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
   if (/deadline|timed\s*out|timeout/i.test(msg)) {
     return "The testnet prover is busy and timed out after a few retries. Wait a moment and try again — your funds are safe.";
   }
+  if (isStoreCorruptError(msg)) {
+    return "Your local wallet cache drifted out of sync with the chain (your on-chain funds are safe). Reset the local cache below to re-sync from the chain.";
+  }
   return msg;
+}
+
+async function resetLocalCache() {
+  try {
+    await clearMidenStorage();
+  } catch {
+    /* best-effort — reload re-inits the client either way */
+  }
+  if (typeof window !== "undefined") window.location.reload();
 }
 
 type Stage = "idle" | "building" | "emitting" | "claiming" | "settling" | "done" | "pending" | "error";
@@ -111,6 +161,7 @@ export function BasketTradePanel({
   const { execute: executeTx } = useTransaction() as unknown as {
     execute: (o: {
       accountId: string;
+      skipSync?: boolean;
       request: () => unknown;
     }) => Promise<{ transactionId?: { toString?: () => string } } | null>;
   };
@@ -130,6 +181,11 @@ export function BasketTradePanel({
   const busyStage = (s: Stage) => s !== "idle" && s !== "done" && s !== "pending" && s !== "error";
   const buyBusy = busyStage(buyStage);
   const sellBusy = busyStage(sellStage);
+  // A previous trade on THIS account is still settling on-chain (its background
+  // claim hasn't committed). Block new trades until it does — one account, one
+  // in-flight tx — else the txs conflict. Persists across the modal close/reopen.
+  const accountBusy = useAccountSettling(signerAccountId);
+  const otherTradeSettling = accountBusy && !buyBusy && !sellBusy;
   const nav = isNavBasket(symbol);
   const shareDecimals = basketDecimals(symbol);
 
@@ -208,19 +264,33 @@ export function BasketTradePanel({
   // is what makes a trade FEEL ~10s instead of ~40s: the ~30s the network needs
   // (NTB pickup + ~2 blocks + a local consume) no longer blocks the UI. Resolves
   // as soon as the emit lands — it does NOT await the background claim.
-  async function emitThenSettle(built: BuiltNote, kind: "buy" | "sell") {
+  async function emitThenSettle(built: BuiltNote, kind: "buy" | "sell", presynced: boolean) {
     const setStage = kind === "buy" ? setBuyStage : setSellStage;
     const clearAmount = kind === "buy" ? setBuyAmount : setSellAmount;
+    const acct = signerAccountId!;
 
     setStage("emitting");
     const { Note, NoteArray } = await import("@miden-sdk/miden-sdk");
     const note = Note.deserialize(Uint8Array.from(atob(built.noteB64!), (c) => c.charCodeAt(0)));
-    await withProveRetry(() =>
-      executeTx({
-        accountId: signerAccountId!,
-        request: () => new TransactionRequestBuilder().withOwnOutputNotes(new NoteArray([note])).build(),
-      }),
-    );
+    // Mark the account busy from the emit (it advances the account state); cleared
+    // when the background claim commits (finally, below) or if the emit itself
+    // fails. Blocks a conflicting 2nd trade even across a modal close/reopen.
+    markSettling(acct, true);
+    try {
+      await withProveRetry(() =>
+        executeTx({
+          accountId: acct,
+          // onBuy/onSell already ran syncState() in parallel with the server note-
+          // build, so skip executeTx's own pre-execute sync (~1.8s measured) —
+          // unless that parallel sync failed (presynced=false), then let it sync.
+          skipSync: presynced,
+          request: () => new TransactionRequestBuilder().withOwnOutputNotes(new NoteArray([note])).build(),
+        }),
+      );
+    } catch (e) {
+      markSettling(acct, false); // emit failed → account is not in flight
+      throw e;
+    }
 
     // ── OPTIMISTIC POINT ── the deposit/redeem note is on-chain; settlement is now
     // guaranteed. Show success, clear the input, bump the header — the user can
@@ -247,7 +317,8 @@ export function BasketTradePanel({
         console.warn("[basket-trade] background claim failed", e);
         setPendingClaim({ built, kind });
         setStage("pending");
-      });
+      })
+      .finally(() => markSettling(acct, false)); // account free once the claim commits
   }
 
   // Re-run a stalled claim (payback already emitted on-chain — just re-consume).
@@ -283,24 +354,30 @@ export function BasketTradePanel({
       if (amountBase <= 0n) throw new Error("Enter an amount to buy.");
 
       setBuyStage("building");
-      const r = await fetch("/api/confidential-note", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sender: signerAccountId,
-          recipient: signerAccountId,
-          basket: symbol,
-          amount: amountBase.toString(),
+      // Overlap the pre-emit sync with the server note-build: both take ~2s, so
+      // running them together lets the emit skip its own ~1.8s sync (skipSync).
+      const [r, presynced] = await Promise.all([
+        fetch("/api/confidential-note", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sender: signerAccountId,
+            recipient: signerAccountId,
+            basket: symbol,
+            amount: amountBase.toString(),
+          }),
         }),
-      });
+        runExclusive(() => syncState())
+          .then(() => true)
+          .catch(() => false),
+      ]);
       const built = (await r.json()) as BuiltNote;
       if (!r.ok || !built.noteB64 || !built.paybackFileB64 || !built.paybackId) {
         throw new Error(built.error ?? `confidential-note API ${r.status}`);
       }
-      // Returns once the deposit is emitted on-chain (~10s); the mint + claim then
-      // settle in the background (see emitThenSettle). The UI is already in the
-      // optimistic "settling" success by the time this resolves.
-      await emitThenSettle(built, "buy");
+      // Returns once the deposit is emitted on-chain; the mint + claim then settle
+      // in the background (see emitThenSettle).
+      await emitThenSettle(built, "buy", presynced);
     } catch (e) {
       setError(prettyErr(e));
       setBuyStage("error");
@@ -317,23 +394,29 @@ export function BasketTradePanel({
       if (sharesBase <= 0n) throw new Error("Enter an amount of shares to sell.");
 
       setSellStage("building");
-      const r = await fetch("/api/confidential-redeem", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sender: signerAccountId,
-          recipient: signerAccountId,
-          basket: symbol,
-          amount: sharesBase.toString(),
+      // Overlap the pre-emit sync with the server note-build (same as buy).
+      const [r, presynced] = await Promise.all([
+        fetch("/api/confidential-redeem", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sender: signerAccountId,
+            recipient: signerAccountId,
+            basket: symbol,
+            amount: sharesBase.toString(),
+          }),
         }),
-      });
+        runExclusive(() => syncState())
+          .then(() => true)
+          .catch(() => false),
+      ]);
       const built = (await r.json()) as BuiltNote;
       if (!r.ok || !built.noteB64 || !built.paybackFileB64 || !built.paybackId) {
         throw new Error(built.error ?? `confidential-redeem API ${r.status}`);
       }
-      // Returns once the redeem note is emitted on-chain (~10s); the burn + dUSDC
-      // release then settle in the background (see emitThenSettle).
-      await emitThenSettle(built, "sell");
+      // Returns once the redeem note is emitted on-chain; the burn + dUSDC release
+      // then settle in the background (see emitThenSettle).
+      await emitThenSettle(built, "sell", presynced);
     } catch (e) {
       setError(prettyErr(e));
       setSellStage("error");
@@ -402,12 +485,21 @@ export function BasketTradePanel({
       <button
         type="button"
         onClick={onBuy}
-        disabled={buyBusy || noFunds || !buyAmount || buyNum <= 0 || buyOver}
+        disabled={buyBusy || otherTradeSettling || noFunds || !buyAmount || buyNum <= 0 || buyOver}
         className="nav-cta"
-        style={{ ...sty.fullBtn, opacity: buyBusy || noFunds || !buyAmount || buyNum <= 0 || buyOver ? 0.5 : 1 }}
+        style={{
+          ...sty.fullBtn,
+          opacity: buyBusy || otherTradeSettling || noFunds || !buyAmount || buyNum <= 0 || buyOver ? 0.5 : 1,
+        }}
       >
-        {buyBusy ? BUY_LABEL[buyStage] : `Buy ${symbol}`}
+        {buyBusy ? BUY_LABEL[buyStage] : otherTradeSettling ? "Previous trade settling…" : `Buy ${symbol}`}
       </button>
+      {otherTradeSettling && (
+        <p style={sty.hint}>
+          Your previous trade is still settling on-chain — a Miden account settles one trade at a time. This unlocks
+          automatically in a moment.
+        </p>
+      )}
       {buyStage === "claiming" && <p style={sty.hint}>The network is minting your shares — up to a minute.</p>}
       {buyStage === "settling" && (
         <p style={sty.settleMsg}>
@@ -447,11 +539,14 @@ export function BasketTradePanel({
           <button
             type="button"
             onClick={onSell}
-            disabled={sellBusy || !sellAmount || sellNum <= 0 || sellOver}
+            disabled={sellBusy || otherTradeSettling || !sellAmount || sellNum <= 0 || sellOver}
             className="nav-cta"
-            style={{ ...sty.fullBtn, opacity: sellBusy || !sellAmount || sellNum <= 0 || sellOver ? 0.5 : 1 }}
+            style={{
+              ...sty.fullBtn,
+              opacity: sellBusy || otherTradeSettling || !sellAmount || sellNum <= 0 || sellOver ? 0.5 : 1,
+            }}
           >
-            {sellBusy ? SELL_LABEL[sellStage] : `Sell ${symbol}`}
+            {sellBusy ? SELL_LABEL[sellStage] : otherTradeSettling ? "Previous trade settling…" : `Sell ${symbol}`}
           </button>
           {sellStage === "claiming" && <p style={sty.hint}>The network is releasing your dUSDC — up to a minute.</p>}
           {sellStage === "settling" && (
@@ -482,7 +577,21 @@ export function BasketTradePanel({
         </div>
       )}
 
-      {error && <p style={sty.errMsg}>{error}</p>}
+      {error && (
+        <>
+          <p style={sty.errMsg}>{error}</p>
+          {error.includes("local wallet cache") && (
+            <button
+              type="button"
+              onClick={resetLocalCache}
+              className="nav-cta"
+              style={{ ...sty.fullBtn, marginTop: 8 }}
+            >
+              Reset local cache &amp; reload
+            </button>
+          )}
+        </>
+      )}
     </div>
   );
 }
