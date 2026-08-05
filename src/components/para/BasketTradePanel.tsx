@@ -23,6 +23,7 @@ import {
   clearMidenStorage,
   useCompile,
   useConsume,
+  useExportStore,
   useMiden,
   useSyncState,
   useTransaction,
@@ -130,12 +131,40 @@ function prettyErr(e: unknown): string {
     return "The testnet prover is busy and timed out after a few retries. Wait a moment and try again — your funds are safe.";
   }
   if (isStoreCorruptError(msg)) {
-    return "Your local wallet cache drifted out of sync with the chain (your on-chain funds are safe). Reset the local cache below to re-sync from the chain.";
+    return "Your local cache is showing a balance the chain hasn't confirmed — a display glitch, not lost funds. Re-sync below to pull your TRUE on-chain balance. Your on-chain funds and notes are untouched (we back up the cache first).";
   }
   return msg;
 }
 
-async function resetLocalCache() {
+// Re-sync the local store from the chain. Before wiping, snapshot the store so a
+// pending PRIVATE note (whose secret lives only locally) can never be permanently
+// stranded by a reset — the snapshot is kept in localStorage (survives the wipe)
+// and can be re-imported to recover. Best-effort: a failed/oversized backup never
+// blocks the re-sync (the account itself is public and re-imports cleanly on reload).
+async function resetLocalCache(
+  exportStore?: () => Promise<string | Uint8Array>,
+  accountId?: string | null,
+) {
+  try {
+    if (exportStore && accountId && typeof localStorage !== "undefined") {
+      const snap = await exportStore();
+      let b64: string | null = null;
+      if (typeof snap === "string") b64 = snap;
+      else if (snap) {
+        // chunked base64 (avoid a huge spread that blows the call stack)
+        let s = "";
+        const u8 = new Uint8Array(snap);
+        for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode(...u8.subarray(i, i + 8192));
+        b64 = btoa(s);
+      }
+      // localStorage cap ~5MB; skip an oversized snapshot rather than throw.
+      if (b64 && b64.length < 3_000_000) {
+        localStorage.setItem(`darwin.para.storeBackup.${accountId}`, b64);
+      }
+    }
+  } catch {
+    /* best-effort backup — never block the re-sync */
+  }
   try {
     await clearMidenStorage();
   } catch {
@@ -191,6 +220,9 @@ export function BasketTradePanel({
   };
   const { consume } = useConsume();
   const { sync: syncState } = useSyncState();
+  const { exportStore } = useExportStore() as unknown as {
+    exportStore: () => Promise<string | Uint8Array>;
+  };
   // Compile the confidential note script client-side (decentralized note-building).
   const { noteScript } = useCompile() as unknown as {
     noteScript: (o: {
@@ -704,14 +736,14 @@ export function BasketTradePanel({
       {error && (
         <>
           <p style={sty.errMsg}>{error}</p>
-          {error.includes("local wallet cache") && (
+          {error.includes("TRUE on-chain balance") && (
             <button
               type="button"
-              onClick={resetLocalCache}
+              onClick={() => resetLocalCache(exportStore, signerAccountId)}
               className="nav-cta"
               style={{ ...sty.fullBtn, marginTop: 8 }}
             >
-              Reset local cache &amp; reload
+              Re-sync from chain
             </button>
           )}
         </>
