@@ -16,11 +16,15 @@
  *   0x4c7980e6700642199e845d7423aaa04d2744019f3a5c4c3fbb5c53d6d8831783
  */
 import navDepositNoteMasm from "./masm/nav_deposit_note.masm";
+import navRedeemNoteMasm from "./masm/nav_redeem_note.masm";
 import mathMasm from "./masm/math.masm";
 import priceOracleMasm from "./masm/price_oracle.masm";
 
 /** The `@note_script`-form NAV deposit script (0.15.x), compiled client-side. */
 export const NAV_DEPOSIT_NOTE_MASM: string = navDepositNoteMasm;
+
+/** The `@note_script`-form NAV redeem script (0.15.x), compiled client-side. */
+export const NAV_REDEEM_NOTE_MASM: string = navRedeemNoteMasm;
 
 /**
  * The two darwin libraries the deposit script links, statically, in the order the
@@ -46,6 +50,11 @@ type CompileNoteScript = (opts: {
  */
 export async function compileNavDepositScript(noteScript: CompileNoteScript) {
   return noteScript({ code: NAV_DEPOSIT_NOTE_MASM, libraries: NAV_NOTE_LIBRARIES });
+}
+
+/** Compile the NAV redeem note script in the browser (root must be allowlisted). */
+export async function compileNavRedeemScript(noteScript: CompileNoteScript) {
+  return noteScript({ code: NAV_REDEEM_NOTE_MASM, libraries: NAV_NOTE_LIBRARIES });
 }
 
 // View-call tx scripts: `call` the faucet's own procs so they run in the faucet
@@ -133,6 +142,19 @@ export function computeMintAmount(amount: bigint, supply: bigint, vaultValue: bi
   const net = (amount * 100n * FEE_COMPLEMENT) / 10000n;
   if (supply > 0n && vaultValue > 0n) return (net * supply) / vaultValue;
   return net;
+}
+
+/**
+ * The dUSDC the network will release for burning `shares` (basket token, 8-dec),
+ * from live `supply` (S) and vault value `V`. Mirrors nav_redeem_note.masm:
+ *   V == 0 (par, unpriced vault) → release = shares / 100            (8-dec → 6-dec)
+ *   else                        → release = shares * V / S / 100      (pro-rata NAV)
+ * Integer division matches the note's felt_div. Needed to reconstruct the payback
+ * dUSDC note at the exact released amount so it stays consumable.
+ */
+export function computeReleaseAmount(shares: bigint, supply: bigint, vaultValue: bigint): bigint {
+  if (vaultValue === 0n || supply === 0n) return shares / 100n;
+  return (shares * vaultValue) / supply / 100n;
 }
 
 export interface ClientDepositParams {
@@ -249,6 +271,99 @@ export async function buildClientDepositNote(
     noteB64: toB64(depositNote.serialize()),
     paybackFileB64: toB64(NoteFile.fromOutputNote(paybackNote).serialize()),
     noteId: depositNote.id().toString(),
+    paybackId: paybackNote.id().toString(),
+  };
+}
+
+export interface ClientRedeemParams {
+  /** Basket faucet (network account) the redeem note targets, hex. */
+  faucet: string;
+  /** Redeemer (sender + payback recipient), hex. */
+  redeemer: string;
+  /** dUSDC faucet id, hex (the released collateral). */
+  dusdcFaucet: string;
+  /** Basket-token shares to burn, base units (8-dec). */
+  shares: bigint;
+  /** dUSDC released to the payback, from the faucet's live NAV (6-dec). */
+  release: bigint;
+}
+
+/**
+ * Build the confidential NAV redeem note ENTIRELY client-side — the inverse of
+ * buildClientDepositNote and the faithful port of send_nav_redeem.rs. The note
+ * carries the SHARES to burn; the network burns them, prices the pro-rata claim
+ * at the live NAV, and releases dUSDC into the private P2ID payback. Storage
+ * embeds the payback recipient (100..103), note_type/tag (104/105), and the
+ * dUSDC release asset KEY+VALUE (108..115) whose amount felt is patched on-chain.
+ */
+export async function buildClientRedeemNote(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  redeemScript: any,
+  params: ClientRedeemParams,
+): Promise<ClientDepositNote> {
+  const sdk = await import("@miden-sdk/miden-sdk");
+  const {
+    AccountId,
+    Felt,
+    NoteStorage,
+    NoteScript,
+    NoteRecipient,
+    NoteType,
+    NoteTag,
+    NoteMetadata,
+    NoteAssets,
+    FungibleAsset,
+    NetworkAccountTarget,
+    Note,
+    NoteFile,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } = sdk as any;
+
+  const faucet = AccountId.fromHex(params.faucet);
+  const redeemer = AccountId.fromHex(params.redeemer);
+  const dusdc = AccountId.fromHex(params.dusdcFaucet);
+
+  // Private P2ID payback carrying the ACTUAL released dUSDC (canonical 2-felt
+  // storage — see buildClientDepositNote).
+  const paybackSerial = randWord(sdk);
+  const p2idStorage = new NoteStorage([redeemer.suffix(), redeemer.prefix()]);
+  const paybackRecipient = new NoteRecipient(paybackSerial, NoteScript.p2id(), p2idStorage);
+  const paybackTag = NoteTag.withAccountTarget(redeemer);
+  const paybackNote = new Note(
+    new NoteAssets([new FungibleAsset(dusdc, params.release)]),
+    new NoteMetadata(faucet, NoteType.Private, paybackTag),
+    paybackRecipient,
+  );
+
+  // Storage = 16 felts: payback digest (100..103), note_type Private (104), tag
+  // (105), pad (106,107), dUSDC release asset KEY (108..111) + VALUE (112..115).
+  // The amount at 112 is a placeholder the on-chain note patches to the real
+  // NAV-priced release; the payback above carries that exact `release`.
+  const releaseAsset = new FungibleAsset(dusdc, params.release);
+  const digest = paybackRecipient.digest().toFelts();
+  const inputs = [
+    ...digest,
+    new Felt(0n), // note_type Private
+    new Felt(BigInt(paybackTag.asU32())),
+    new Felt(0n), // 106 pad
+    new Felt(0n), // 107 pad
+    ...releaseAsset.vaultKey().toFelts(), // 108..111 dUSDC KEY
+    ...releaseAsset.intoWord().toFelts(), // 112..115 dUSDC VALUE (amount patched on-chain)
+  ];
+  const redeemRecipient = new NoteRecipient(randWord(sdk), redeemScript, new NoteStorage(inputs));
+
+  // Public note carrying the shares to burn, tagged + attached to the faucet.
+  const redeemNote = Note.withAttachments(
+    new NoteAssets([new FungibleAsset(faucet, params.shares)]),
+    new NoteMetadata(redeemer, NoteType.Public, NoteTag.withAccountTarget(faucet)),
+    redeemRecipient,
+    [new NetworkAccountTarget(faucet).toAttachment()],
+  );
+
+  return {
+    noteB64: toB64(redeemNote.serialize()),
+    paybackFileB64: toB64(NoteFile.fromOutputNote(paybackNote).serialize()),
+    noteId: redeemNote.id().toString(),
     paybackId: paybackNote.id().toString(),
   };
 }

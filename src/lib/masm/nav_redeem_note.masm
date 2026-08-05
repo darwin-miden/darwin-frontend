@@ -1,0 +1,123 @@
+# v12 NAV redeem note — executed BY THE NETWORK against the DCC basket
+# faucet-network account. The inverse of nav_deposit_note.
+#
+# The note carries the redeemer's basket-token SHARES. In one network tx:
+#   1. Read the REAL burned share amount s from the note's single asset
+#      (BEFORE burning — receive_and_burn clobbers low memory). Assert it is
+#      THIS faucet's own token.
+#   2. Read supply S BEFORE the burn (get_token_supply) — the price basis.
+#   3. receive_and_burn → burn the shares (supply -= s).
+#   4. V = compute_v (vault constituents, unaffected by the burn).
+#   5. release_dusdc = s * V / S / 100  (USD*1e8 → dUSDC 6-dec), i.e. the
+#      redeemer's pro-rata claim on the vault priced at the live NAV. The
+#      payout is bound on-chain to the REAL shares burned (which the redeemer
+#      must own) and the REAL supply + holdings — never to a free felt — so a
+#      redeemer can never extract more than their NAV share, and the vault
+#      cannot be drained beyond its dUSDC (the move fails safely otherwise).
+#   6. create the private payback + move `release` dUSDC to the redeemer,
+#      using the storage dUSDC KEY[108] with its amount felt (mem[112])
+#      patched to the computed release.
+#
+# Storage felts (loaded at ptr 100). Word loads are 4-aligned:
+#   100..103 = RECIPIENT digest  (P2ID private → redeemer wallet)
+#   104      = note_type         (Private = 0)
+#   105      = tag
+#   106..107 = padding
+#   108..111 = dUSDC ASSET_KEY   (identifies the collateral to release)
+#   112..115 = dUSDC ASSET_VALUE (amount felt at 112 is patched on-chain)
+#
+# NOTE: changing this script changes its root; the basket faucet's
+# AuthNetworkAccount allowlist must be redeployed with the new root.
+
+use miden::core::sys
+use miden::protocol::active_note
+use miden::protocol::active_account
+use miden::protocol::asset
+use miden::protocol::asset::ASSET_VALUE_MEMORY_OFFSET
+use miden::protocol::output_note
+use miden::standards::wallets::basic
+use miden::standards::faucets::fungible
+use darwin::math
+use darwin::price_oracle
+
+const DUSDC_SUF = 7513476840783009536
+const DUSDC_PRE = 18199311028627498257
+
+# Read the note's single basket-token asset amount (the burn/redeem basis)
+# into abs mem[210]. Asserts exactly one asset AND that it is THIS basket
+# faucet's own token. Must run BEFORE receive_and_burn.
+@locals(64)
+proc read_burned_amount
+    locaddr.0 exec.active_note::get_assets      # [num_assets]
+    push.1 assert_eq.err="nav redeem note must carry exactly one basket-token asset"
+
+    padw locaddr.0 mem_loadw_le                  # [ASSET_KEY]
+    exec.asset::key_into_faucet_id               # [a_suffix, a_prefix]
+    exec.active_account::get_id                  # [act_suffix, act_prefix, a_suffix, a_prefix]
+    movup.2 assert_eq.err="redeem must burn this basket's own token"
+    assert_eq.err="redeem must burn this basket's own token"
+
+    padw locaddr.0 add.ASSET_VALUE_MEMORY_OFFSET mem_loadw_le  # [ASSET_VALUE]
+    exec.asset::fungible_value_into_amount       # [burned]
+    mem_store.210
+end
+
+@note_script
+pub proc main
+    push.100 exec.active_note::get_storage
+    drop drop
+
+    # 0. defense in depth: the release asset (storage KEY[108]) MUST be dUSDC.
+    padw push.108 mem_loadw_le          # [dUSDC_KEY]
+    exec.asset::key_into_faucet_id      # [faucet_suffix, faucet_prefix]
+    push.DUSDC_SUF assert_eq.err="redeem release asset must be dUSDC"
+    push.DUSDC_PRE assert_eq.err="redeem release asset must be dUSDC"
+
+    # 1. read the REAL burned shares s (before receive_and_burn clobbers mem)
+    exec.read_burned_amount
+
+    # 2. read supply S BEFORE the burn (the price basis) → mem[221]
+    call.fungible::get_token_supply
+    mem_store.221
+    dropw dropw dropw drop drop drop
+
+    # 3. burn the shares the note carries (supply -= s)
+    call.fungible::receive_and_burn
+
+    # 4. V = vault value (constituents; unaffected by the burn) → mem[222]
+    call.price_oracle::compute_v
+    mem_store.222
+    dropw dropw dropw drop drop drop
+
+    # 5. release_dusdc → patch payback amount felt mem[112].
+    #    Par fallback: if the vault has no priced constituents yet (V==0, e.g.
+    #    right after a par first deposit), 1 share = $1, so release = s/100
+    #    (8-dec shares → 6-dec dUSDC). This also avoids a divide-by-V==0.
+    #    Otherwise release = s * V / S / 100 (the pro-rata NAV claim).
+    mem_load.222 eq.0
+    if.true
+        mem_load.210 push.100 swap      # [s, 100]
+        exec.math::felt_div             # [s/100]
+    else
+        mem_load.210 mem_load.222 mul   # [s*V]
+        mem_load.221 swap               # [s*V, S]
+        exec.math::felt_div             # [s*V/S]   (USD*1e8)
+        push.100 swap                   # [s*V/S, 100]
+        exec.math::felt_div             # [s*V/S/100]  (dUSDC 6-dec)
+    end
+    mem_store.112
+
+    # 6. create the private payback + move the dUSDC out (storage dUSDC
+    #    KEY[108] + patched VALUE[112]).
+    padw push.100 mem_loadw_le          # [RECIPIENT]
+    push.104 mem_load                   # [note_type, RECIPIENT]
+    push.105 mem_load                   # [tag, note_type, RECIPIENT]
+    exec.output_note::create            # [note_idx]
+
+    padw push.0.0.0 movup.7             # [note_idx, pad(7)]
+    padw push.112 mem_loadw_le          # [ASSET_VALUE, note_idx, pad(7)]
+    padw push.108 mem_loadw_le          # [ASSET_KEY, ASSET_VALUE, note_idx, pad(7)]
+    call.basic::move_asset_to_note
+    dropw dropw
+    exec.sys::truncate_stack
+end
