@@ -294,7 +294,11 @@ export function BasketTradePanel({
       Uint8Array.from(atob(built.paybackFileB64!), (c) => c.charCodeAt(0)),
     );
     try {
-      await (client as { importNoteFile?: (f: unknown) => Promise<string> }).importNoteFile?.(noteFile);
+      // Under the lock — a raw WASM client call, same double-borrow hazard as the
+      // compile if it runs concurrently with the background balance poll.
+      await runExclusive(() =>
+        (client as { importNoteFile?: (f: unknown) => Promise<string> }).importNoteFile?.(noteFile),
+      );
     } catch {
       /* already imported */
     }
