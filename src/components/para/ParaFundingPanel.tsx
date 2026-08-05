@@ -29,7 +29,7 @@ import {
   useWaitForCommit,
   useWaitForNotes,
 } from "@miden-sdk/react";
-import { type CSSProperties, useCallback, useEffect, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { createWalletClient, custom, formatUnits, http, parseUnits } from "viem";
 import { sepolia } from "viem/chains";
 import { EpochIntentSDK } from "@epoch-protocol/epoch-intents-sdk";
@@ -221,9 +221,59 @@ export function ParaFundingPanel() {
     [client, signerAccountId, runExclusive, syncState],
   );
 
+  // On mount (Deposit opened), FINISH any deposit whose note was delivered but
+  // never claimed — e.g. a prior fund whose 6-min claim window ended before Epoch
+  // delivered (the deposit-confirmation timeout on a flaky Sepolia RPC drops the
+  // intent nonce, so that fund can't track delivery and falls back to "reopen
+  // Deposit"). This makes that promise TRUE: heal the account into this store,
+  // then sweep + consume any consumable notes into the vault. No-op when there's
+  // nothing pending. Idempotent with the in-fund claim loop (a consumed note stops
+  // matching; the runExclusive lock serializes), so it can't double-spend or race.
+  const swept = useRef(false);
   useEffect(() => {
-    if (isReady && signerAccountId) refreshBalance(3);
-  }, [isReady, signerAccountId, refreshBalance]);
+    if (!isReady || !signerAccountId || !client) return;
+    if (swept.current) return;
+    swept.current = true;
+    let cancelled = false;
+    (async () => {
+      await ensureSignerAccountLoaded(client, runExclusive, signerAccountId);
+      try {
+        await runExclusive(() => syncState());
+      } catch {
+        /* mid-sync — the wait below re-syncs */
+      }
+      let inbound: string[] = [];
+      try {
+        const notes = (await waitForConsumableNotes({
+          accountId: signerAccountId,
+          minCount: 1,
+          timeoutMs: 8000,
+          intervalMs: 4000,
+        })) as
+          | Array<{ inputNoteRecord?: () => { id?: () => { toString?: () => string } } | null }>
+          | undefined;
+        inbound = (notes ?? [])
+          .map((n) => n.inputNoteRecord?.()?.id?.()?.toString?.() ?? "")
+          .filter(Boolean);
+      } catch {
+        inbound = []; // nothing delivered yet — nothing to sweep
+      }
+      for (const id of inbound) {
+        if (cancelled) return;
+        try {
+          await withProveRetry(() => consume({ accountId: signerAccountId, notes: [id] }));
+        } catch {
+          /* stray tag-colliding note (wrong target) or prover busy — skip */
+        }
+      }
+      if (!cancelled) await refreshBalance(3);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Run once when the account first becomes ready on this mount (Deposit open).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReady, signerAccountId, client]);
 
   // Read the wallet's Sepolia USDC balance (ERC-20 balanceOf) via the injected
   // provider. eth_call runs on the wallet's SELECTED chain, so switch to Sepolia
