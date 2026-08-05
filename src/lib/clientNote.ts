@@ -17,6 +17,7 @@
  */
 import navDepositNoteMasm from "./masm/nav_deposit_note.masm";
 import navRedeemNoteMasm from "./masm/nav_redeem_note.masm";
+import dripNoteMasm from "./masm/drip_note.masm";
 import mathMasm from "./masm/math.masm";
 import priceOracleMasm from "./masm/price_oracle.masm";
 
@@ -25,6 +26,12 @@ export const NAV_DEPOSIT_NOTE_MASM: string = navDepositNoteMasm;
 
 /** The `@note_script`-form NAV redeem script (0.15.x), compiled client-side. */
 export const NAV_REDEEM_NOTE_MASM: string = navRedeemNoteMasm;
+
+/**
+ * The `@note_script`-form permissionless drip request (0.15.x) — dUSDC + 5-dUSDC
+ * payout baked in. Its root (0x429409c1…) must be allowlisted on the dispenser.
+ */
+export const DRIP_NOTE_MASM: string = dripNoteMasm;
 
 /**
  * The two darwin libraries the deposit script links, statically, in the order the
@@ -55,6 +62,86 @@ export async function compileNavDepositScript(noteScript: CompileNoteScript) {
 /** Compile the NAV redeem note script in the browser (root must be allowlisted). */
 export async function compileNavRedeemScript(noteScript: CompileNoteScript) {
   return noteScript({ code: NAV_REDEEM_NOTE_MASM, libraries: NAV_NOTE_LIBRARIES });
+}
+
+/** Compile the drip request script in the browser (no darwin libs; standard only). */
+export async function compileDripScript(noteScript: CompileNoteScript) {
+  return noteScript({ code: DRIP_NOTE_MASM });
+}
+
+export interface ClientDripNote {
+  /** Drip request note bytes, base64 — emit as an own-output-note. */
+  noteB64: string;
+  /** Precomputed id of the PUBLIC P2ID payout the dispenser will create. */
+  payoutId: string;
+  noteId: string;
+}
+
+/** dUSDC the dispenser drips per request (baked into drip_note.masm), 6-dec. */
+export const DRIP_AMOUNT = 5_000_000n;
+
+/**
+ * Build a permissionless dUSDC drip request ENTIRELY client-side — the browser
+ * port of build_drip_note.rs. The note carries no asset; storage is [requester
+ * suffix, prefix, serial(4)]. Emit it as an own-output-note: the NTB runs it
+ * against the dispenser, which mints a PUBLIC P2ID payout (5 dUSDC) tagged for
+ * the requester — discovered + consumed by the wallet on sync (no payout file
+ * needed). `payoutId` is precomputed so the caller can poll for it.
+ */
+export async function buildClientDripNote(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dripScript: any,
+  params: { requester: string; dusdcFaucet: string; dispenser: string },
+): Promise<ClientDripNote> {
+  const sdk = await import("@miden-sdk/miden-sdk");
+  const {
+    AccountId,
+    NoteStorage,
+    NoteScript,
+    NoteRecipient,
+    NoteType,
+    NoteTag,
+    NoteMetadata,
+    NoteAssets,
+    FungibleAsset,
+    NetworkAccountTarget,
+    Note,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } = sdk as any;
+
+  const requester = AccountId.fromHex(params.requester);
+  const dusdc = AccountId.fromHex(params.dusdcFaucet);
+  const dispenser = AccountId.fromHex(params.dispenser);
+  const serial = randWord(sdk);
+
+  // Drip request: no asset, storage [suffix, prefix, serial(4)], attached to the
+  // dispenser network account.
+  const storage = new NoteStorage([requester.suffix(), requester.prefix(), ...serial.toFelts()]);
+  const dripNote = Note.withAttachments(
+    new NoteAssets([]),
+    new NoteMetadata(requester, NoteType.Public, NoteTag.withAccountTarget(dispenser)),
+    new NoteRecipient(randWord(sdk), dripScript, storage),
+    [new NetworkAccountTarget(dispenser).toAttachment()],
+  );
+
+  // Precompute the PUBLIC P2ID payout id (dispenser → requester, 5 dUSDC, same
+  // serial) so it matches the on-chain payout the drip creates.
+  const payoutRecipient = new NoteRecipient(
+    serial,
+    NoteScript.p2id(),
+    new NoteStorage([requester.suffix(), requester.prefix()]),
+  );
+  const payoutNote = new Note(
+    new NoteAssets([new FungibleAsset(dusdc, DRIP_AMOUNT)]),
+    new NoteMetadata(dispenser, NoteType.Public, NoteTag.withAccountTarget(requester)),
+    payoutRecipient,
+  );
+
+  return {
+    noteB64: toB64(dripNote.serialize()),
+    payoutId: payoutNote.id().toString(),
+    noteId: dripNote.id().toString(),
+  };
 }
 
 // View-call tx scripts: `call` the faucet's own procs so they run in the faucet

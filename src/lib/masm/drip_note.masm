@@ -1,0 +1,90 @@
+# DripNote — permissionless faucet request, executed by the NETWORK against the
+# dUSDC dispenser (a network account holding bridged Epoch dUSDC).
+#
+# Anyone can create this note (it is the ONE script allowlisted on the
+# dispenser). The network's NTX builder consumes it against the dispenser and
+# this script runs in the dispenser's context: it creates a PUBLIC P2ID output
+# note carrying a FIXED payout of dUSDC to the requester, TAGGED for the
+# requester's account, and moves that amount out of the dispenser's own vault.
+#
+# Why public + tagged: a private, untagged payout note is invisible to the
+# requester's wallet (MidenFi) — its sync only discovers notes tagged for its
+# account, and it can't consume a note whose details it never received. A PUBLIC
+# note records its full details on-chain and, tagged with the requester's
+# account target, is discovered + consumed by MidenFi like any standard payment.
+#
+# The payout amount + faucet are HARDCODED (templated in at deploy time), so a
+# request note can NOT ask for more than one drip — only the payout TARGET and a
+# unique SERIAL are read from the note's storage. No rate-limit by design.
+#
+# Storage (6 felts, elements 0..5):
+#   [0] target_account_id_suffix
+#   [1] target_account_id_prefix
+#   [2..5] SERIAL_NUM (unique per request, so each payout note has a fresh id)
+# Note carries NO asset.
+
+use miden::protocol::active_note
+use miden::protocol::asset
+use miden::standards::notes::p2id->p2id
+use miden::standards::note_tag
+use miden::standards::wallets::basic->wallet
+
+# Templated at deploy time (deploy_dispenser injects the real values).
+const DRIP_AMOUNT=5000000
+const DUSDC_FAUCET_PREFIX=18199311028627498257
+const DUSDC_FAUCET_SUFFIX=7513476840783009536
+
+# A public P2ID note: fully on-chain, discoverable by the requester's wallet.
+const OUTPUT_NOTE_TYPE_PUBLIC=1
+const ENABLE_CALLBACKS=0
+
+@note_script
+pub proc main
+    # write the note storage to memory at elements 0..5, drop the item count.
+    push.0 exec.active_note::get_storage
+    # => [num_storage_items]
+    drop
+    # => []
+
+    # Build the p2id::new input stack: [target_suffix, target_prefix, note_type,
+    # SERIAL_NUM]. Push SERIAL_NUM first (deepest), then note_type, then the
+    # target id felts on top.
+    mem_load.5 mem_load.4 mem_load.3 mem_load.2
+    # => [SERIAL_NUM]
+    push.OUTPUT_NOTE_TYPE_PUBLIC
+    # => [note_type, SERIAL_NUM]
+    mem_load.1 mem_load.0
+    # => [target_suffix, target_prefix, note_type, SERIAL_NUM]
+
+    # derive the account-target tag from the target's prefix (so the requester's
+    # wallet discovers the payout), then splice it in below the two id felts.
+    dup.1
+    # => [target_prefix, target_suffix, target_prefix, note_type, SERIAL_NUM]
+    exec.note_tag::create_account_target
+    # => [tag, target_suffix, target_prefix, note_type, SERIAL_NUM]
+    movdn.2
+    # => [target_suffix, target_prefix, tag, note_type, SERIAL_NUM]
+
+    # create the PUBLIC P2ID output note (records recipient details on-chain).
+    exec.p2id::new
+    # => [note_idx]
+
+    # arrange [note_idx, pad(7)] so move_asset_to_note gets its padding below
+    push.0.0.0.0 push.0.0.0
+    movup.7
+    # => [note_idx, pad(7)]
+
+    # build the fixed dUSDC payout asset on top.
+    # create_fungible_asset wants [enable_callbacks, faucet_suffix, faucet_prefix, amount]
+    push.DRIP_AMOUNT push.DUSDC_FAUCET_PREFIX push.DUSDC_FAUCET_SUFFIX push.ENABLE_CALLBACKS
+    exec.asset::create_fungible_asset
+    # => [ASSET_KEY, ASSET_VALUE, note_idx, pad(7)]
+
+    # move the payout out of the dispenser's vault into the output note
+    call.wallet::move_asset_to_note
+    # => [pad(16)]
+
+    # clean the stack back to base
+    dropw dropw dropw dropw
+    # => []
+end
