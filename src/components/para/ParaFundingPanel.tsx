@@ -186,6 +186,7 @@ export function ParaFundingPanel() {
   const [sepoliaUsdc, setSepoliaUsdc] = useState<bigint | null>(null);
   const [wAmount, setWAmount] = useState("1");
   const [wStage, setWStage] = useState<WStage>("idle");
+  const [minting, setMinting] = useState(false);
 
   const busy = stage !== "idle" && stage !== "done" && stage !== "error";
   const wBusy = wStage !== "idle" && wStage !== "done" && wStage !== "pending" && wStage !== "error";
@@ -318,6 +319,43 @@ export function ParaFundingPanel() {
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Self-serve test-USDC top-up: the Epoch test USDC on Sepolia has an OPEN
+  // mint(address,uint256), so the user can mint their own testnet USDC (no faucet
+  // gatekeeper) straight from their wallet, then bridge it. 18-dec token.
+  async function mintTestUsdc() {
+    if (!evmAddress) return;
+    const eth = getEth();
+    if (!eth) {
+      setError("No injected wallet found. Install MetaMask or Rabby.");
+      return;
+    }
+    setError(null);
+    setMinting(true);
+    try {
+      await switchToSepolia(eth);
+      await warmWalletGas(eth, evmAddress);
+      const amount = 1000n * 10n ** 18n; // 1000 test USDC
+      const data =
+        "0x40c10f19" +
+        evmAddress.slice(2).toLowerCase().padStart(64, "0") +
+        amount.toString(16).padStart(64, "0");
+      await eth.request({
+        method: "eth_sendTransaction",
+        params: [{ from: evmAddress, to: EPOCH_USDC_SEPOLIA.address, data }],
+      });
+      // Poll the balance until the mint lands (a few Sepolia blocks).
+      for (let i = 0; i < 8; i++) {
+        await sleep(3000);
+        const bal = await readSepoliaUsdc(evmAddress);
+        if (bal != null && bal >= amount) break;
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMinting(false);
     }
   }
 
@@ -632,10 +670,18 @@ export function ParaFundingPanel() {
           </div>
           <button
             type="button"
+            onClick={mintTestUsdc}
+            disabled={busy || minting}
+            style={sty.linkBtn}
+          >
+            {minting ? "Minting test USDC…" : "Low on test USDC? Mint 1000 →"}
+          </button>
+          <button
+            type="button"
             onClick={onFund}
-            disabled={busy || !amount || Number(amount) <= 0}
+            disabled={busy || minting || !amount || Number(amount) <= 0}
             className="nav-cta"
-            style={{ ...sty.fullBtn, opacity: busy || !amount || Number(amount) <= 0 ? 0.5 : 1 }}
+            style={{ ...sty.fullBtn, opacity: busy || minting || !amount || Number(amount) <= 0 ? 0.5 : 1 }}
           >
             {busy ? STAGE_LABEL[stage] : "Fund"}
           </button>
@@ -712,6 +758,18 @@ export function ParaFundingPanel() {
 }
 
 const sty: Record<string, CSSProperties> = {
+  linkBtn: {
+    marginTop: 10,
+    background: "none",
+    border: "none",
+    padding: 0,
+    fontSize: 12,
+    color: "var(--ink-3)",
+    textDecoration: "underline",
+    textUnderlineOffset: 2,
+    cursor: "pointer",
+    alignSelf: "flex-start",
+  },
   balanceRow: {
     marginTop: 16,
     display: "flex",
