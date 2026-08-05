@@ -48,6 +48,61 @@ export async function compileNavDepositScript(noteScript: CompileNoteScript) {
   return noteScript({ code: NAV_DEPOSIT_NOTE_MASM, libraries: NAV_NOTE_LIBRARIES });
 }
 
+// View-call tx scripts: `call` the faucet's own procs so they run in the faucet
+// account context (the same Invocation:call the deposit note uses). Executed via
+// executeProgram — a LOCAL view (no proof, no submit, no key), reading exactly
+// what the deposit note settles against.
+const SUPPLY_TX_MASM = `use miden::core::sys
+use miden::standards::faucets::fungible
+begin
+    call.fungible::get_token_supply
+    exec.sys::truncate_stack
+end
+`;
+const COMPUTE_V_TX_MASM = `use miden::core::sys
+use darwin::price_oracle
+begin
+    call.price_oracle::compute_v
+    exec.sys::truncate_stack
+end
+`;
+
+/** Live NAV state of a basket faucet: supply S and vault value V (USD*1e8). */
+export interface FaucetNav {
+  supply: bigint;
+  vaultValue: bigint;
+}
+
+/**
+ * Read a NAV faucet's live S (get_token_supply) and V (compute_v) ON-CHAIN,
+ * fully client-side — the browser equivalent of nav_status.rs. `client` is the
+ * @miden-sdk MidenClient. Imports the faucet's public state, then runs the two
+ * proc roots as local view calls. These are the exact values the deposit note
+ * settles against, so feeding them to computeMintAmount predicts the mint
+ * felt-exact (par only holds while S==0 — a fresh faucet's first deposit).
+ */
+export async function readFaucetNav(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
+  faucetId: string,
+): Promise<FaucetNav> {
+  const sdk = await import("@miden-sdk/miden-sdk");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { AccountId } = sdk as any;
+  const faucet = AccountId.fromHex(faucetId);
+  await client.accounts.getOrImport(faucetId); // fetch the faucet's public state
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const felt0 = (arr: any): bigint => {
+    const f = arr.at ? arr.at(0) : arr[0];
+    return BigInt(f.asInt ? f.asInt() : f.toString());
+  };
+  const supplyScript = await client.compile.txScript({ code: SUPPLY_TX_MASM });
+  const supply = felt0(await client.transactions.executeProgram({ account: faucet, script: supplyScript }));
+  const vScript = await client.compile.txScript({ code: COMPUTE_V_TX_MASM, libraries: NAV_NOTE_LIBRARIES });
+  const vaultValue = felt0(await client.transactions.executeProgram({ account: faucet, script: vScript }));
+  return { supply, vaultValue };
+}
+
 // A random note serial (Word of 4 felts) with the high bit cleared, matching the
 // native rand_word (& 0xFFFF_FFFE_FFFF_FFFF) so every felt is in-field.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

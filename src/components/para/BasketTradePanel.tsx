@@ -32,7 +32,12 @@ import { formatUnits, parseUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { basketDecimals, isNavBasket } from "../../lib/basketFaucets";
-import { buildClientDepositNote, compileNavDepositScript, computeMintAmount } from "../../lib/clientNote";
+import {
+  buildClientDepositNote,
+  compileNavDepositScript,
+  computeMintAmount,
+  readFaucetNav,
+} from "../../lib/clientNote";
 import { liveDccBalance } from "../../lib/dccBalance";
 
 // Decentralization flag: build the confidential deposit note ENTIRELY in the
@@ -42,7 +47,9 @@ import { liveDccBalance } from "../../lib/dccBalance";
 // target the test faucet whose allowlist includes the client-compiled root.
 const CLIENT_NOTE_BUILD = process.env.NEXT_PUBLIC_CLIENT_NOTE === "1";
 // Test NAV faucet deployed 2026-08-05, allowlisting the client @note_script root
-// 0x4c7980e6…. Fresh (supply 0) → a first deposit takes the par-value path.
+// 0x4c7980e6…. The client reads its live S/V on-chain (readFaucetNav) so any
+// deposit — not just the first — predicts the mint felt-exact. Swap for the
+// production faucet once it allowlists the client root.
 const CLIENT_TEST_FAUCET = "0x6a1410b5a60850d15812b56a0f506d";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -383,18 +390,18 @@ export function BasketTradePanel({
       let presynced: boolean;
       if (CLIENT_NOTE_BUILD) {
         // Decentralized path: compile + build the confidential note IN THE BROWSER
-        // (no /api/confidential-note). Targets the fresh test faucet whose allowlist
-        // includes the client-compiled root; supply 0 → the on-chain note takes the
-        // par-value path, so par shares = net matches what the network mints (needed
-        // for the payback P2ID to reconstruct + consume). Sync runs in parallel.
-        const [navScript, ps] = await Promise.all([
-          compileNavDepositScript(noteScript),
-          runExclusive(() => syncState())
-            .then(() => true)
-            .catch(() => false),
-        ]);
-        presynced = ps;
-        const mintAmount = computeMintAmount(amountBase, 0n, 0n);
+        // (no /api/confidential-note). Reads the faucet's LIVE S/V on-chain so the
+        // predicted mint = net*S/V matches what the network settles (the payback
+        // P2ID must reconstruct to the exact minted amount to be consumable). All
+        // WASM/store ops run under one runExclusive lock; presynced so the emit
+        // skips its own sync.
+        const navScript = await compileNavDepositScript(noteScript);
+        const nav = await runExclusive(async () => {
+          await syncState();
+          return readFaucetNav(client, CLIENT_TEST_FAUCET);
+        });
+        presynced = true;
+        const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
         built = await buildClientDepositNote(navScript, {
           faucet: CLIENT_TEST_FAUCET,
           sender: signerAccountId,
