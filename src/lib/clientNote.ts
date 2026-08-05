@@ -63,6 +63,23 @@ function randWord(sdk: any) {
   return sdk.Word.newFromFelts(felts);
 }
 
+// DCC mint fee = 30 bps; the on-chain note uses net = D*100*(10000-30)/10000.
+const FEE_COMPLEMENT = 9970n;
+
+/**
+ * The exact shares the network will mint for `amount` dUSDC, from the faucet's
+ * live `supply` (S) and vault value `V` (both from /api/nav-status). Mirrors
+ * send_nav_deposit.rs / the on-chain note byte-for-byte:
+ *   net = amount * 100 * (10000 - fee_bps) / 10000        (USD*1e8, after fee)
+ *   shares = (S == 0 || V == 0) ? net : net * S / V        (integer division)
+ * Integer division matches the note's `felt_div` for these in-field operands.
+ */
+export function computeMintAmount(amount: bigint, supply: bigint, vaultValue: bigint): bigint {
+  const net = (amount * 100n * FEE_COMPLEMENT) / 10000n;
+  if (supply > 0n && vaultValue > 0n) return (net * supply) / vaultValue;
+  return net;
+}
+
 export interface ClientDepositParams {
   /** Basket faucet (network account) the note targets, hex. */
   faucet: string;
