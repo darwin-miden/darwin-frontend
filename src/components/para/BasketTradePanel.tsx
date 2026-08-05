@@ -31,7 +31,7 @@ import { type CSSProperties, useCallback, useEffect, useState, useSyncExternalSt
 import { formatUnits, parseUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
-import { basketDecimals, isNavBasket } from "../../lib/basketFaucets";
+import { basketDecimals, basketFaucetId, isNavBasket } from "../../lib/basketFaucets";
 import {
   buildClientDepositNote,
   compileNavDepositScript,
@@ -46,10 +46,11 @@ import { liveDccBalance } from "../../lib/dccBalance";
 // the client path is proven E2E against a 0.15.x faucet. When set, DCC buys
 // target the test faucet whose allowlist includes the client-compiled root.
 const CLIENT_NOTE_BUILD = process.env.NEXT_PUBLIC_CLIENT_NOTE === "1";
-// Test NAV faucet deployed 2026-08-05, allowlisting the client @note_script root
-// 0x4c7980e6…. The client reads its live S/V on-chain (readFaucetNav) so any
-// deposit — not just the first — predicts the mint felt-exact. Swap for the
-// production faucet once it allowlists the client root.
+// Fallback faucet if a basket isn't in the table — the 2026-08-05 test faucet,
+// which also allowlists the client @note_script root. The client-buy normally
+// targets the real basket faucet via basketFaucetId(symbol) (DCC = v20
+// 0xc1aa9945…, which allowlists the client root). The client reads live S/V
+// on-chain (readFaucetNav) so any deposit predicts the mint felt-exact.
 const CLIENT_TEST_FAUCET = "0x6a1410b5a60850d15812b56a0f506d";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -395,15 +396,16 @@ export function BasketTradePanel({
         // P2ID must reconstruct to the exact minted amount to be consumable). All
         // WASM/store ops run under one runExclusive lock; presynced so the emit
         // skips its own sync.
+        const clientFaucet = basketFaucetId(symbol) ?? CLIENT_TEST_FAUCET;
         const navScript = await compileNavDepositScript(noteScript);
         const nav = await runExclusive(async () => {
           await syncState();
-          return readFaucetNav(client, CLIENT_TEST_FAUCET);
+          return readFaucetNav(client, clientFaucet);
         });
         presynced = true;
         const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
         built = await buildClientDepositNote(navScript, {
-          faucet: CLIENT_TEST_FAUCET,
+          faucet: clientFaucet,
           sender: signerAccountId,
           recipient: signerAccountId,
           dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
