@@ -16,8 +16,8 @@
 import { useEffect, useState } from "react";
 
 import type { BasketSymbol } from "../lib/baskets";
-import { isNavBasket } from "../lib/basketFaucets";
-import { readNavStatus } from "../lib/navClient";
+import { basketFaucetId, isNavBasket } from "../lib/basketFaucets";
+import { type PragmaVerification, readNavStatus, verifyPragma } from "../lib/navClient";
 import { useNavLive } from "../lib/useNavLive";
 
 const ASSET_LABEL: Record<string, string> = {
@@ -63,6 +63,28 @@ export function LiveNavCard({ symbol }: { symbol: BasketSymbol }) {
     };
   }, [symbol, nav]);
 
+  // Independently verify the faucet feed against the LIVE Pragma oracle, fully
+  // client-side (FPI read). The heavier read runs on load + every 60s.
+  const [verify, setVerify] = useState<PragmaVerification | null>(null);
+  useEffect(() => {
+    if (!nav) return;
+    const faucet = basketFaucetId(symbol);
+    if (!faucet) return;
+    let cancelled = false;
+    const run = () =>
+      verifyPragma(faucet)
+        .then((v) => {
+          if (!cancelled) setVerify(v);
+        })
+        .catch(() => {});
+    run();
+    const id = setInterval(run, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [symbol, nav]);
+
   return (
     <div
       style={{
@@ -88,6 +110,24 @@ export function LiveNavCard({ symbol }: { symbol: BasketSymbol }) {
         >
           {nav ? `NAV / ${symbol}` : "Target NAV / unit"}
         </div>
+        {nav && verify && (
+          <div
+            title={`Feed on-chain vérifié contre l'oracle Pragma ${verify.oracle}\nPragma  · WBTC $${verify.pragma.wbtc.toFixed(0)} ETH $${verify.pragma.eth.toFixed(0)} USDT $${verify.pragma.usdt.toFixed(3)}\nFeed    · WBTC ${verify.feed.wbtc} ETH ${verify.feed.eth} USDT ${verify.feed.usdt}`}
+            style={{
+              marginTop: 5,
+              fontFamily: "var(--font-mono-stack)",
+              fontSize: 10.5,
+              letterSpacing: "0.03em",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              color: verify.verified ? "#1d7a3a" : "#a06a14",
+            }}
+          >
+            <span style={{ fontSize: 12 }}>{verify.verified ? "✓" : "⚠"}</span>
+            {verify.verified ? "prix vérifié · Pragma" : "écart vs Pragma"}
+          </div>
+        )}
         <div
           style={{
             fontSize: 26,

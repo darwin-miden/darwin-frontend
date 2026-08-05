@@ -11,7 +11,82 @@
  */
 import { basketFaucetId } from "./basketFaucets";
 import { buildClientDripNote, type ClientDripNote, compileDripScript, readFaucetNav } from "./clientNote";
+import pragmaOracleMasm from "./masm/pragma_oracle.masm";
 import { EPOCH_DUSDC_FAUCET_ID } from "./midenConstants";
+
+// Pragma oracle on Miden testnet (astraly-labs/pragma-miden). The client reads
+// its medians on-chain via FPI and checks the faucet feed matches — so an
+// operator can't inject a price that deviates from the decentralized oracle.
+const PRAGMA_ORACLE = "0x7ad4aa02b1816c117e32853e210c28";
+const PRAGMA_PUBLISHER = "0x6d37b2d4aedd697140338bb31c67e3";
+const PRAGMA_ENTRIES_SLOT = "pragma::publisher::entries";
+const DARWIN_FEED_SLOT = "darwin::price::feed";
+// pair index prefix + Pragma decimals (BTC/ETH/DAI=8, USDT=6).
+const PRAGMA_PAIRS: Record<string, [number, number]> = { wbtc: [3, 8], eth: [2, 8], usdt: [4, 6] };
+
+export interface PragmaVerification {
+  /** Live Pragma medians (USD), read on-chain by the browser. */
+  pragma: { wbtc: number; eth: number; usdt: number };
+  /** The faucet's on-chain feed the NAV notes settle against. */
+  feed: { wbtc: number; eth: number; usdt: number };
+  /** True when the feed matches Pragma within tolerance. */
+  verified: boolean;
+  oracle: string;
+}
+
+/**
+ * Verify the basket faucet's price feed against the LIVE Pragma oracle, entirely
+ * client-side: FPI-read each pair's median from the oracle + read the faucet's
+ * feed slot, and compare (orchestrator convention: feed = round(usd) for
+ * wbtc/eth, round(usd*100) for usdt). Detects operator price-injection on-chain.
+ * Returns null if the read fails (e.g. Pragma publisher rotated).
+ */
+export async function verifyPragma(faucetId: string): Promise<PragmaVerification | null> {
+  try {
+    const client = await getReadClient();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sdk = (await import("@miden-sdk/miden-sdk")) as any;
+    const { AccountId, Word, Felt, AccountStorageRequirements } = sdk;
+    const SlotAndKeys = sdk.SlotAndKeys ?? sdk.getWrappedSdk().SlotAndKeys;
+    for (const id of [PRAGMA_ORACLE, PRAGMA_PUBLISHER, faucetId]) await client.accounts.getOrImport(id);
+
+    const readMedian = async (prefix: number, decimals: number): Promise<number> => {
+      const fw = Word.newFromFelts([new Felt(0n), new Felt(0n), new Felt(0n), new Felt(BigInt(prefix))]);
+      const storage = AccountStorageRequirements.fromSlotAndKeysArray([new SlotAndKeys(PRAGMA_ENTRIES_SLOT, [fw])]);
+      const script = await client.compile.txScript({
+        code: `use oracle_component::oracle_module\nuse miden::core::sys\nbegin\n    push.0.0.0.${prefix}\n    call.oracle_module::get_median\n    exec.sys::truncate_stack\nend\n`,
+        libraries: [{ namespace: "oracle_component::oracle_module", code: pragmaOracleMasm, linking: "dynamic" }],
+      });
+      const out = await client.transactions.executeProgram({
+        account: AccountId.fromHex(PRAGMA_ORACLE),
+        script,
+        foreignAccounts: [{ id: AccountId.fromHex(PRAGMA_PUBLISHER), storage }, { id: AccountId.fromHex(PRAGMA_ORACLE) }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const f = (i: number): bigint => { const x = out.at ? out.at(i) : out[i]; return BigInt(x.asInt ? x.asInt() : x.toString()); };
+      return f(0) === 0n ? 0 : Number(f(1)) / 10 ** decimals;
+    };
+
+    const pragma = {
+      wbtc: await readMedian(...PRAGMA_PAIRS.wbtc),
+      eth: await readMedian(...PRAGMA_PAIRS.eth),
+      usdt: await readMedian(...PRAGMA_PAIRS.usdt),
+    };
+    const acct = await client.accounts.get(faucetId);
+    const item = acct.storage().getItem(DARWIN_FEED_SLOT);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ff = (item.toFelts ? item.toFelts() : item).map((x: any) => Number(BigInt(x.asInt ? x.asInt() : x.toString())));
+    const feed = { wbtc: ff[0], eth: ff[1], usdt: ff[2] };
+    const within = (a: number, b: number, tol = 0.03) => (b === 0 ? a === 0 : Math.abs(a - b) / b <= tol);
+    const verified =
+      within(feed.wbtc, Math.round(pragma.wbtc)) &&
+      within(feed.eth, Math.round(pragma.eth)) &&
+      within(feed.usdt, Math.round(pragma.usdt * 100));
+    return { pragma, feed, verified, oracle: PRAGMA_ORACLE };
+  } catch {
+    return null;
+  }
+}
 
 /** Permissionless dUSDC dispenser (network account, allowlists the client drip
  * root 0x429409c1). Redeployed 2026-08-05 with both native + client roots. */
