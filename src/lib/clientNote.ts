@@ -169,6 +169,58 @@ export interface FaucetNav {
   vaultValue: bigint;
 }
 
+/** Signature of the `txScript` compiler from `useCompile()`. */
+type CompileTxScript = (opts: {
+  code: string;
+  libraries?: Array<{ namespace: string; code: string; linking: "static" | "dynamic" }>;
+}) => Promise<unknown>;
+
+/** Signature of `execute` from `useExecuteProgram()` — returns the 16-felt stack. */
+type ExecuteProgram = (opts: {
+  accountId: string;
+  script: unknown;
+  skipSync?: boolean;
+}) => Promise<{ stack: bigint[] }>;
+
+/** Pre-compiled NAV-read scripts (supply + compute_v). */
+export interface NavReadScripts {
+  supplyScript: unknown;
+  vScript: unknown;
+}
+
+/**
+ * Compile the two NAV-read tx scripts in the BROWSER via `useCompile().txScript`.
+ * Split from the exec step because the compiler does NOT self-lock — the caller
+ * runs this inside runExclusive, while the exec (readFaucetNavBrowser) runs
+ * OUTSIDE it (useExecuteProgram self-locks; nesting would deadlock).
+ */
+export async function compileNavReadScripts(txScript: CompileTxScript): Promise<NavReadScripts> {
+  const [supplyScript, vScript] = await Promise.all([
+    txScript({ code: SUPPLY_TX_MASM }),
+    txScript({ code: COMPUTE_V_TX_MASM, libraries: NAV_NOTE_LIBRARIES }),
+  ]);
+  return { supplyScript, vScript };
+}
+
+/**
+ * Browser equivalent of `readFaucetNav`, using the flat web-client hooks instead
+ * of the Node wrapper API (`client.accounts/compile/transactions` don't exist on
+ * the WebClient). Runs the pre-compiled scripts as local view calls via
+ * `useExecuteProgram` — which self-locks, so this MUST be called OUTSIDE any
+ * runExclusive block. The faucet account must already be imported (do it under
+ * the lock beforehand, e.g. via ensureSignerAccountLoaded).
+ */
+export async function readFaucetNavBrowser(
+  executeProgram: ExecuteProgram,
+  faucetId: string,
+  scripts: NavReadScripts,
+): Promise<FaucetNav> {
+  const supplyRes = await executeProgram({ accountId: faucetId, script: scripts.supplyScript, skipSync: true });
+  const vRes = await executeProgram({ accountId: faucetId, script: scripts.vScript, skipSync: true });
+  const top = (r: { stack: bigint[] }): bigint => BigInt(r.stack?.[0] ?? 0n);
+  return { supply: top(supplyRes), vaultValue: top(vRes) };
+}
+
 /**
  * Read a NAV faucet's live S (get_token_supply) and V (compute_v) ON-CHAIN,
  * fully client-side — the browser equivalent of nav_status.rs. `client` is the

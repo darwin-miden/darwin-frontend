@@ -23,6 +23,7 @@ import {
   clearMidenStorage,
   useCompile,
   useConsume,
+  useExecuteProgram,
   useExportStore,
   useMiden,
   useSyncState,
@@ -38,10 +39,11 @@ import {
   buildClientDepositNote,
   buildClientRedeemNote,
   compileNavDepositScript,
+  compileNavReadScripts,
   compileNavRedeemScript,
   computeMintAmount,
   computeReleaseAmount,
-  readFaucetNav,
+  readFaucetNavBrowser,
 } from "../../lib/clientNote";
 import { liveDccBalance } from "../../lib/dccBalance";
 
@@ -223,12 +225,18 @@ export function BasketTradePanel({
   const { exportStore } = useExportStore() as unknown as {
     exportStore: () => Promise<string | Uint8Array>;
   };
-  // Compile the confidential note script client-side (decentralized note-building).
-  const { noteScript } = useCompile() as unknown as {
+  // Compile the confidential note + NAV-read scripts client-side (decentralized
+  // note-building). noteScript/txScript (useCompile) do NOT self-lock — we wrap
+  // them in runExclusive ourselves.
+  const { noteScript, txScript } = useCompile() as unknown as {
     noteScript: (o: {
       code: string;
       libraries?: Array<{ namespace: string; code: string; linking: "static" | "dynamic" }>;
     }) => Promise<{ root: () => { toHex: () => string } }>;
+    txScript: (o: {
+      code: string;
+      libraries?: Array<{ namespace: string; code: string; linking: "static" | "dynamic" }>;
+    }) => Promise<unknown>;
   };
   const { execute: executeTx } = useTransaction() as unknown as {
     execute: (o: {
@@ -236,6 +244,16 @@ export function BasketTradePanel({
       skipSync?: boolean;
       request: () => unknown;
     }) => Promise<{ transactionId?: { toString?: () => string } } | null>;
+  };
+  // executeProgram (useExecuteProgram) DOES self-lock via runExclusive internally,
+  // so it must be called OUTSIDE our runExclusive blocks (nesting the non-reentrant
+  // lock would deadlock). Returns the 16-felt stack as bigint[]; stack[0] is top.
+  const { execute: executeProgram } = useExecuteProgram() as unknown as {
+    execute: (o: {
+      accountId: string;
+      script: unknown;
+      skipSync?: boolean;
+    }) => Promise<{ stack: bigint[] }>;
   };
 
   const [dusdc, setDusdc] = useState<bigint | null>(null);
@@ -474,29 +492,33 @@ export function BasketTradePanel({
         // skips its own sync. Any failure falls back to the proven server build.
         try {
           const clientFaucet = basketFaucetId(symbol) ?? CLIENT_TEST_FAUCET;
-          // EVERYTHING that touches the WASM client — compiling the note script
-          // (createCodeBuilder), syncing, reading the faucet NAV, building the note
-          // — MUST run inside ONE runExclusive lock. The compile was previously
-          // OUTSIDE the lock, so a background sync (the "keep cash live" balance
-          // poll, also on this WASM client) could run concurrently and double-borrow
-          // an internal RefCell → "already borrowed" panic that HANGS the build at
-          // "Building your order…" forever and poisons the WASM instance (no
-          // recovery, needs reload). Serializing the whole build fixes it.
-          built = await runExclusive(async () => {
-            const navScript = await compileNavDepositScript(noteScript);
+          // Split by lock discipline (both compilers and executeProgram touch the
+          // same WASM client, so they can never run concurrently — a concurrent
+          // borrow panics an internal RefCell and hangs forever):
+          //  · compile (noteScript/txScript) does NOT self-lock → wrap in runExclusive
+          //    so the background "keep cash live" sync can't race it.
+          //  · executeProgram DOES self-lock (its own runExclusive) → call it OUTSIDE
+          //    ours; nesting the non-reentrant lock would deadlock.
+          const prep = await runExclusive(async () => {
             await syncState();
-            const nav = await readFaucetNav(client, clientFaucet);
-            const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
-            return buildClientDepositNote(navScript, {
-              faucet: clientFaucet,
-              sender: signerAccountId,
-              recipient: signerAccountId,
-              dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
-              amount: amountBase,
-              mintAmount,
-            });
+            return {
+              navScript: await compileNavDepositScript(noteScript),
+              navRead: await compileNavReadScripts(txScript),
+            };
           });
-          presynced = true;
+          // Import the faucet's public state (flat web-client import, under the lock).
+          await ensureSignerAccountLoaded(client, runExclusive, clientFaucet);
+          const nav = await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
+          const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
+          built = await buildClientDepositNote(prep.navScript, {
+            faucet: clientFaucet,
+            sender: signerAccountId,
+            recipient: signerAccountId,
+            dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
+            amount: amountBase,
+            mintAmount,
+          });
+          presynced = false; // let the emit re-sync (state may have moved during the read)
         } catch (e) {
           console.warn("[client-buy] client note-build failed; falling back to server", e);
           built = undefined;
@@ -562,24 +584,26 @@ export function BasketTradePanel({
         // build on any error.
         try {
           const clientFaucet = basketFaucetId(symbol) ?? CLIENT_TEST_FAUCET;
-          // Serialize the WHOLE build (compile + sync + NAV read + note build) under
-          // ONE lock — the compile (createCodeBuilder) must not run concurrently with
-          // a background sync on the same WASM client, or an internal RefCell
-          // double-borrow panics and hangs the build. See the matching note in onBuy.
-          built = await runExclusive(async () => {
-            const redeemScript = await compileNavRedeemScript(noteScript);
+          // Compile under the lock; executeProgram outside it (self-locks). Same
+          // lock discipline as onBuy — see the detailed note there.
+          const prep = await runExclusive(async () => {
             await syncState();
-            const nav = await readFaucetNav(client, clientFaucet);
-            const release = computeReleaseAmount(sharesBase, nav.supply, nav.vaultValue);
-            return buildClientRedeemNote(redeemScript, {
-              faucet: clientFaucet,
-              redeemer: signerAccountId,
-              dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
-              shares: sharesBase,
-              release,
-            });
+            return {
+              redeemScript: await compileNavRedeemScript(noteScript),
+              navRead: await compileNavReadScripts(txScript),
+            };
           });
-          presynced = true;
+          await ensureSignerAccountLoaded(client, runExclusive, clientFaucet);
+          const nav = await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
+          const release = computeReleaseAmount(sharesBase, nav.supply, nav.vaultValue);
+          built = await buildClientRedeemNote(prep.redeemScript, {
+            faucet: clientFaucet,
+            redeemer: signerAccountId,
+            dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
+            shares: sharesBase,
+            release,
+          });
+          presynced = false;
         } catch (e) {
           console.warn("[client-sell] client note-build failed; falling back to server", e);
           built = undefined;
