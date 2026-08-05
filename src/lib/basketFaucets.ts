@@ -31,17 +31,16 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   // nav_deposit and nav_redeem notes. See darwin-relay send_nav_deposit /
   // send_nav_redeem.
   DCC: {
-    // v20 NAV faucet — same deploy_v12 build + compute_v symmetric-watermark
-    // model as v18, PLUS it allowlists the client @note_script root
-    // 0x4c7980e6… so the browser can build + emit the confidential deposit note
-    // itself (fully client-side, no /api/confidential-note). Still allowlists the
-    // native nav_deposit/redeem/set_feed/seed roots, so the server path keeps
-    // working during transition. The relay orchestrator (launchd, every 3 min)
-    // pushes live CoinGecko prices via set_feed and seeds 40/40/20 WBTC/ETH/USDT
-    // per deposit — repointed to this faucet at cutover.
-    // Supersedes v18 (0x357559089dcdeaf13bb9e53964aff6, native-root only) and v17
-    // (0x33800b5c) — see darwin-relay asm/lib/price_oracle.masm.
-    id: "0xc1aa9945171e31f1576843928a5acd",
+    // v21 NAV faucet — same deploy_v12 build + symmetric-watermark compute_v as
+    // v18/v20, allowlisting BOTH client @note_script roots so the browser builds
+    // + emits BOTH the confidential deposit (root 0x4c7980e6…) AND the redeem
+    // (root 0xab55aad9…) itself — fully client-side, no /api/confidential-note or
+    // /api/confidential-redeem. Native nav_deposit/redeem/set_feed/seed roots also
+    // allowlisted, so the server fallback still works. Orchestrator (launchd,
+    // every 3 min) pushes CoinGecko prices via set_feed + seeds 40/40/20 per
+    // deposit. Supersedes v20 (0xc1aa9945…, deposit client root only), v18
+    // (0x357559…) and v17 (0x33800b5c) — see darwin-relay asm/lib/price_oracle.masm.
+    id: "0x817d64eeebf13311754879c8c7db31",
     decimals: 8,
     nav: true,
   },
