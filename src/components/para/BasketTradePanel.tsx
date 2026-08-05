@@ -34,8 +34,11 @@ import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { basketDecimals, basketFaucetId, isNavBasket } from "../../lib/basketFaucets";
 import {
   buildClientDepositNote,
+  buildClientRedeemNote,
   compileNavDepositScript,
+  compileNavRedeemScript,
   computeMintAmount,
+  computeReleaseAmount,
   readFaucetNav,
 } from "../../lib/clientNote";
 import { liveDccBalance } from "../../lib/dccBalance";
@@ -470,26 +473,63 @@ export function BasketTradePanel({
       if (sharesBase <= 0n) throw new Error("Enter an amount of shares to sell.");
 
       setSellStage("building");
-      // Overlap the pre-emit sync with the server note-build (same as buy).
-      const [r, presynced] = await Promise.all([
-        fetch("/api/confidential-redeem", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sender: signerAccountId,
-            recipient: signerAccountId,
-            basket: symbol,
-            amount: sharesBase.toString(),
+      let built: BuiltNote | undefined;
+      let presynced = false;
+
+      // The proven server redeem — used when the client path is off, and the
+      // automatic fallback if client-side building throws.
+      const redeemViaServer = async (): Promise<BuiltNote> => {
+        const [r, ps] = await Promise.all([
+          fetch("/api/confidential-redeem", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sender: signerAccountId,
+              recipient: signerAccountId,
+              basket: symbol,
+              amount: sharesBase.toString(),
+            }),
           }),
-        }),
-        runExclusive(() => syncState())
-          .then(() => true)
-          .catch(() => false),
-      ]);
-      const built = (await r.json()) as BuiltNote;
-      if (!r.ok || !built.noteB64 || !built.paybackFileB64 || !built.paybackId) {
-        throw new Error(built.error ?? `confidential-redeem API ${r.status}`);
+          runExclusive(() => syncState())
+            .then(() => true)
+            .catch(() => false),
+        ]);
+        presynced = ps;
+        const server = (await r.json()) as BuiltNote;
+        if (!r.ok || !server.noteB64 || !server.paybackFileB64 || !server.paybackId) {
+          throw new Error(server.error ?? `confidential-redeem API ${r.status}`);
+        }
+        return server;
+      };
+
+      if (CLIENT_NOTE_BUILD) {
+        // Decentralized redeem: build the burn note IN THE BROWSER (no
+        // /api/confidential-redeem). Reads live S/V so the released dUSDC =
+        // shares*V/S/100 matches what the network settles (the payback must
+        // reconstruct at the exact released amount). Falls back to the server
+        // build on any error.
+        try {
+          const clientFaucet = basketFaucetId(symbol) ?? CLIENT_TEST_FAUCET;
+          const redeemScript = await compileNavRedeemScript(noteScript);
+          const nav = await runExclusive(async () => {
+            await syncState();
+            return readFaucetNav(client, clientFaucet);
+          });
+          presynced = true;
+          const release = computeReleaseAmount(sharesBase, nav.supply, nav.vaultValue);
+          built = await buildClientRedeemNote(redeemScript, {
+            faucet: clientFaucet,
+            redeemer: signerAccountId,
+            dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
+            shares: sharesBase,
+            release,
+          });
+        } catch (e) {
+          console.warn("[client-sell] client note-build failed; falling back to server", e);
+          built = undefined;
+        }
       }
+      if (!built) built = await redeemViaServer();
       // Returns once the redeem note is emitted on-chain; the burn + dUSDC release
       // then settle in the background (see emitThenSettle).
       await emitThenSettle(built, "sell", presynced);
