@@ -45,7 +45,10 @@ import { liveDccBalance } from "../../lib/dccBalance";
 // /api/confidential-note. Gated so the validated server path stays default until
 // the client path is proven E2E against a 0.15.x faucet. When set, DCC buys
 // target the test faucet whose allowlist includes the client-compiled root.
-const CLIENT_NOTE_BUILD = process.env.NEXT_PUBLIC_CLIENT_NOTE === "1";
+// Client-side note-building is the default now (the decentralized path); set
+// NEXT_PUBLIC_CLIENT_NOTE=0 to force the legacy server route. Any client-path
+// failure falls back to the server build automatically (see onBuy).
+const CLIENT_NOTE_BUILD = process.env.NEXT_PUBLIC_CLIENT_NOTE !== "0";
 // Fallback faucet if a basket isn't in the table — the 2026-08-05 test faucet,
 // which also allowlists the client @note_script root. The client-buy normally
 // targets the real basket faucet via basketFaucetId(symbol) (DCC = v20
@@ -387,32 +390,12 @@ export function BasketTradePanel({
       if (amountBase <= 0n) throw new Error("Enter an amount to buy.");
 
       setBuyStage("building");
-      let built: BuiltNote;
-      let presynced: boolean;
-      if (CLIENT_NOTE_BUILD) {
-        // Decentralized path: compile + build the confidential note IN THE BROWSER
-        // (no /api/confidential-note). Reads the faucet's LIVE S/V on-chain so the
-        // predicted mint = net*S/V matches what the network settles (the payback
-        // P2ID must reconstruct to the exact minted amount to be consumable). All
-        // WASM/store ops run under one runExclusive lock; presynced so the emit
-        // skips its own sync.
-        const clientFaucet = basketFaucetId(symbol) ?? CLIENT_TEST_FAUCET;
-        const navScript = await compileNavDepositScript(noteScript);
-        const nav = await runExclusive(async () => {
-          await syncState();
-          return readFaucetNav(client, clientFaucet);
-        });
-        presynced = true;
-        const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
-        built = await buildClientDepositNote(navScript, {
-          faucet: clientFaucet,
-          sender: signerAccountId,
-          recipient: signerAccountId,
-          dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
-          amount: amountBase,
-          mintAmount,
-        });
-      } else {
+      let built: BuiltNote | undefined;
+      let presynced = false;
+
+      // The proven server note-build — used when the client path is disabled, and
+      // as the automatic fallback if client-side building throws.
+      const buildViaServer = async (): Promise<BuiltNote> => {
         // Overlap the pre-emit sync with the server note-build: both take ~2s, so
         // running them together lets the emit skip its own ~1.8s sync (skipSync).
         const [r, ps] = await Promise.all([
@@ -435,8 +418,39 @@ export function BasketTradePanel({
         if (!r.ok || !server.noteB64 || !server.paybackFileB64 || !server.paybackId) {
           throw new Error(server.error ?? `confidential-note API ${r.status}`);
         }
-        built = server;
+        return server;
+      };
+
+      if (CLIENT_NOTE_BUILD) {
+        // Decentralized path: compile + build the confidential note IN THE BROWSER
+        // (no /api/confidential-note). Reads the faucet's LIVE S/V on-chain so the
+        // predicted mint = net*S/V matches what the network settles (the payback
+        // P2ID must reconstruct to the exact minted amount to be consumable). All
+        // WASM/store ops run under one runExclusive lock; presynced so the emit
+        // skips its own sync. Any failure falls back to the proven server build.
+        try {
+          const clientFaucet = basketFaucetId(symbol) ?? CLIENT_TEST_FAUCET;
+          const navScript = await compileNavDepositScript(noteScript);
+          const nav = await runExclusive(async () => {
+            await syncState();
+            return readFaucetNav(client, clientFaucet);
+          });
+          presynced = true;
+          const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
+          built = await buildClientDepositNote(navScript, {
+            faucet: clientFaucet,
+            sender: signerAccountId,
+            recipient: signerAccountId,
+            dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
+            amount: amountBase,
+            mintAmount,
+          });
+        } catch (e) {
+          console.warn("[client-buy] client note-build failed; falling back to server", e);
+          built = undefined;
+        }
       }
+      if (!built) built = await buildViaServer();
       // Returns once the deposit is emitted on-chain; the mint + claim then settle
       // in the background (see emitThenSettle).
       await emitThenSettle(built, "buy", presynced);
