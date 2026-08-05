@@ -159,19 +159,9 @@ export function FaucetPanel() {
     if (asset.faucetId === EPOCH_DUSDC_FAUCET_ID) {
       if (!address) return;
       try {
-        const resp = await fetch("/api/drip-note", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ requester: address }),
-        });
-        const data = await resp.json();
-        if (!resp.ok || !data.noteB64) {
-          setDrips((s) => ({
-            ...s,
-            [asset.symbol]: { kind: "err", message: data.error ?? `HTTP ${resp.status}` },
-          }));
-          return;
-        }
+        // Build the drip request ENTIRELY client-side (no /api/drip-note).
+        const { buildDripRequest, DRIP_DISPENSER_ID } = await import("../lib/navClient");
+        const data = await buildDripRequest(address);
         const b64ToBytes = (b: string) => Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
         const { Note, NoteArray, TransactionRequestBuilder } = await import(
           "@miden-sdk/miden-sdk"
@@ -180,7 +170,7 @@ export function FaucetPanel() {
         const txReq = new TransactionRequestBuilder()
           .withOwnOutputNotes(new NoteArray([dripNote]))
           .build();
-        const midenTx = Transaction.createCustomTransaction(address, data.dispenser, txReq);
+        const midenTx = Transaction.createCustomTransaction(address, DRIP_DISPENSER_ID, txReq);
         await wallet.requestTransaction!(midenTx);
         setDrips((s) => ({
           ...s,
@@ -188,7 +178,7 @@ export function FaucetPanel() {
             kind: "minted",
             txId: data.noteId,
             noteId: data.payoutId,
-            noteBytes: data.payoutNoteB64,
+            noteBytes: undefined, // public payout — claimed by id, no bytes
           },
         }));
       } catch (e) {

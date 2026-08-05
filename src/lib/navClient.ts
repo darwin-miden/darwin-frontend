@@ -10,7 +10,12 @@
  * is created lazily + memoized so the WASM only loads when NAV is first shown.
  */
 import { basketFaucetId } from "./basketFaucets";
-import { readFaucetNav } from "./clientNote";
+import { buildClientDripNote, type ClientDripNote, compileDripScript, readFaucetNav } from "./clientNote";
+import { EPOCH_DUSDC_FAUCET_ID } from "./midenConstants";
+
+/** Permissionless dUSDC dispenser (network account, allowlists the client drip
+ * root 0x429409c1). Redeployed 2026-08-05 with both native + client roots. */
+export const DRIP_DISPENSER_ID = "0x0a4f9215997556b16ad7b3faacbbf2";
 
 /** Same shape /api/nav-status used to return. */
 export interface NavStatus {
@@ -57,4 +62,31 @@ export async function readNavStatus(symbol: string): Promise<NavStatus | null> {
     vaultValueUsdX1e8: vaultValue.toString(),
     navPerShareUsd,
   };
+}
+
+/**
+ * Build a permissionless dUSDC drip request fully client-side — replaces
+ * /api/drip-note. Compiles the drip script via the read-only client (no wallet)
+ * and returns the request note (emit from the user's wallet) + the precomputed
+ * PUBLIC payout id (poll/consume once the dispenser mints it).
+ */
+export async function buildDripRequest(requester: string): Promise<ClientDripNote> {
+  const client = await getReadClient();
+  // Normalize hex or bech32 → canonical account id string.
+  let id = requester;
+  if (!/^0x[0-9a-fA-F]+$/.test(requester)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sdk = (await import("@miden-sdk/miden-sdk")) as any;
+    try {
+      id = sdk.AccountId.fromBech32(requester).toString();
+    } catch {
+      id = sdk.Address.fromBech32(requester).accountId().toString();
+    }
+  }
+  const script = await compileDripScript((opts) => client.compile.noteScript(opts));
+  return buildClientDripNote(script, {
+    requester: id,
+    dusdcFaucet: EPOCH_DUSDC_FAUCET_ID,
+    dispenser: DRIP_DISPENSER_ID,
+  });
 }

@@ -78,15 +78,9 @@ export function MidenDusdcFaucetPanel() {
         }
       }
 
-      const resp = await fetch("/api/drip-note", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ requester }),
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data.noteB64) {
-        throw new Error(data.error ?? `HTTP ${resp.status}`);
-      }
+      // Build the drip request ENTIRELY client-side (no /api/drip-note).
+      const { buildDripRequest, DRIP_DISPENSER_ID } = await import("../lib/navClient");
+      const data = await buildDripRequest(requester);
       const b64ToBytes = (b: string) =>
         Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
       const { Note, NoteArray, TransactionRequestBuilder } = await import(
@@ -100,7 +94,7 @@ export function MidenDusdcFaucetPanel() {
         .withOwnOutputNotes(new NoteArray([dripNote]))
         .build();
       await wallet.requestTransaction!(
-        Transaction.createCustomTransaction(address, data.dispenser, txReq),
+        Transaction.createCustomTransaction(address, DRIP_DISPENSER_ID, txReq),
       );
 
       // 2. Wait for the network to create the PUBLIC payout, polling the NODE
