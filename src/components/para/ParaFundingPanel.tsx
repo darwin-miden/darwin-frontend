@@ -49,6 +49,7 @@ import {
   submitRedeemIntent,
   usdcSepoliaBaseUnits,
 } from "../../lib/epoch";
+import { ensureSignerAccountLoaded } from "../../lib/ensureAccount";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const SEPOLIA_HEX = "0xaa36a7"; // 11155111
@@ -353,6 +354,11 @@ export function ParaFundingPanel() {
       // consumable notes (e.g. an earlier delivery whose consume had stalled) are
       // swept opportunistically in the same pass, so a stall never strands dUSDC.
       setStage("receiving");
+      // Fresh-store self-heal: on a new origin (the Vercel app vs the Mac) the
+      // deterministic public account may not be in this browser's store yet, so
+      // consume would throw "account data wasn't found". Re-import it from chain
+      // before claiming. No-op once tracked. See lib/ensureAccount.ts.
+      await ensureSignerAccountLoaded(client, runExclusive, signerAccountId);
       const norm = (s: string) => s.toLowerCase().replace(/^0x/, "");
       const wantId = epochNoteId ? norm(epochNoteId as string) : null;
       const claimDeadline = Date.now() + 6 * 60_000;

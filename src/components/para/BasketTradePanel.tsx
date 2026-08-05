@@ -31,6 +31,7 @@ import { type CSSProperties, useCallback, useEffect, useState, useSyncExternalSt
 import { formatUnits, parseUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
+import { ensureSignerAccountLoaded } from "../../lib/ensureAccount";
 import { basketDecimals, basketFaucetId, isNavBasket } from "../../lib/basketFaucets";
 import {
   buildClientDepositNote,
@@ -387,6 +388,10 @@ export function BasketTradePanel({
     if (!signerAccountId || !client) return;
     setError(null);
     try {
+      // Fresh-store self-heal (new origin / cleared storage) — re-import the
+      // deterministic public account before the emit touches it, else executeTx/
+      // consume throw "account data wasn't found". No-op once tracked.
+      await ensureSignerAccountLoaded(client, runExclusive, signerAccountId);
       // dUSDC is 6-dec; the note carries dUSDC base units drained from the vault.
       let amountBase = parseUnits(buyAmount || "0", EPOCH_USDC_SEPOLIA.midenDecimals);
       if (dusdc != null && amountBase > dusdc) amountBase = dusdc; // never over-spend
@@ -467,6 +472,9 @@ export function BasketTradePanel({
     if (!signerAccountId || !client) return;
     setError(null);
     try {
+      // Fresh-store self-heal — see onBuy. Import the account before the redeem
+      // emit touches it.
+      await ensureSignerAccountLoaded(client, runExclusive, signerAccountId);
       // Shares are basketDecimals-dec; the redeem note carries the shares to burn.
       let sharesBase = parseUnits(sellAmount || "0", shareDecimals);
       if (shares != null && sharesBase > shares) sharesBase = shares; // never over-sell

@@ -17,6 +17,7 @@ import { useMiden, useSigner, useSyncState } from "@miden-sdk/react";
 import { formatUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
+import { ensureSignerAccountLoaded } from "../../lib/ensureAccount";
 import { BASKETS } from "../../lib/baskets";
 import { DepositMethods } from "./DepositMethods";
 import { BasketTradePanel } from "./BasketTradePanel";
@@ -123,6 +124,21 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
       await new Promise((r) => setTimeout(r, 1500));
     }
   }, [client, signerAccountId, runExclusive, syncState]);
+
+  // Self-heal the signer account into a fresh local store (new browser / cleared
+  // storage / a DIFFERENT ORIGIN like the Vercel deploy vs the Mac). The account
+  // is public + deterministic, so if it's missing locally we re-import its
+  // on-chain state — otherwise a later claim throws "account data wasn't found".
+  // Runs once per account, BEFORE the first balance read (which then sees it).
+  const healed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isReady || !signerAccountId || !client) return;
+    if (healed.current === signerAccountId) return;
+    healed.current = signerAccountId;
+    void ensureSignerAccountLoaded(client, runExclusive, signerAccountId).finally(() =>
+      refreshBalance(),
+    );
+  }, [isReady, signerAccountId, client, runExclusive, refreshBalance]);
 
   useEffect(() => {
     if (isReady && signerAccountId) refreshBalance();
