@@ -470,21 +470,29 @@ export function BasketTradePanel({
         // skips its own sync. Any failure falls back to the proven server build.
         try {
           const clientFaucet = basketFaucetId(symbol) ?? CLIENT_TEST_FAUCET;
-          const navScript = await compileNavDepositScript(noteScript);
-          const nav = await runExclusive(async () => {
+          // EVERYTHING that touches the WASM client — compiling the note script
+          // (createCodeBuilder), syncing, reading the faucet NAV, building the note
+          // — MUST run inside ONE runExclusive lock. The compile was previously
+          // OUTSIDE the lock, so a background sync (the "keep cash live" balance
+          // poll, also on this WASM client) could run concurrently and double-borrow
+          // an internal RefCell → "already borrowed" panic that HANGS the build at
+          // "Building your order…" forever and poisons the WASM instance (no
+          // recovery, needs reload). Serializing the whole build fixes it.
+          built = await runExclusive(async () => {
+            const navScript = await compileNavDepositScript(noteScript);
             await syncState();
-            return readFaucetNav(client, clientFaucet);
+            const nav = await readFaucetNav(client, clientFaucet);
+            const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
+            return buildClientDepositNote(navScript, {
+              faucet: clientFaucet,
+              sender: signerAccountId,
+              recipient: signerAccountId,
+              dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
+              amount: amountBase,
+              mintAmount,
+            });
           });
           presynced = true;
-          const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
-          built = await buildClientDepositNote(navScript, {
-            faucet: clientFaucet,
-            sender: signerAccountId,
-            recipient: signerAccountId,
-            dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
-            amount: amountBase,
-            mintAmount,
-          });
         } catch (e) {
           console.warn("[client-buy] client note-build failed; falling back to server", e);
           built = undefined;
@@ -550,20 +558,24 @@ export function BasketTradePanel({
         // build on any error.
         try {
           const clientFaucet = basketFaucetId(symbol) ?? CLIENT_TEST_FAUCET;
-          const redeemScript = await compileNavRedeemScript(noteScript);
-          const nav = await runExclusive(async () => {
+          // Serialize the WHOLE build (compile + sync + NAV read + note build) under
+          // ONE lock — the compile (createCodeBuilder) must not run concurrently with
+          // a background sync on the same WASM client, or an internal RefCell
+          // double-borrow panics and hangs the build. See the matching note in onBuy.
+          built = await runExclusive(async () => {
+            const redeemScript = await compileNavRedeemScript(noteScript);
             await syncState();
-            return readFaucetNav(client, clientFaucet);
+            const nav = await readFaucetNav(client, clientFaucet);
+            const release = computeReleaseAmount(sharesBase, nav.supply, nav.vaultValue);
+            return buildClientRedeemNote(redeemScript, {
+              faucet: clientFaucet,
+              redeemer: signerAccountId,
+              dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
+              shares: sharesBase,
+              release,
+            });
           });
           presynced = true;
-          const release = computeReleaseAmount(sharesBase, nav.supply, nav.vaultValue);
-          built = await buildClientRedeemNote(redeemScript, {
-            faucet: clientFaucet,
-            redeemer: signerAccountId,
-            dusdcFaucet: EPOCH_USDC_SEPOLIA.midenFaucetId,
-            shares: sharesBase,
-            release,
-          });
         } catch (e) {
           console.warn("[client-sell] client note-build failed; falling back to server", e);
           built = undefined;
