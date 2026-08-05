@@ -218,7 +218,18 @@ export async function readFaucetNavBrowser(
   const supplyRes = await executeProgram({ accountId: faucetId, script: scripts.supplyScript, skipSync: true });
   const vRes = await executeProgram({ accountId: faucetId, script: scripts.vScript, skipSync: true });
   const top = (r: { stack: bigint[] }): bigint => BigInt(r.stack?.[0] ?? 0n);
-  return { supply: top(supplyRes), vaultValue: top(vRes) };
+  const supply = top(supplyRes);
+  const vaultValue = top(vRes);
+  // Safety net: an empty read (both 0) means either the faucet isn't synced, the
+  // client couldn't run the view call, or the stack ordering isn't what we expect.
+  // Any of those would mint against a wrong NAV — so bail and let the caller fall
+  // back to the (proven) server build instead of stranding funds in a bad note.
+  // A live basket always has supply>0; a genuinely-fresh faucet (both 0) is also
+  // correctly handled server-side, so this is safe either way.
+  if (supply === 0n && vaultValue === 0n) {
+    throw new Error("empty NAV read (faucet unsynced or unexpected stack shape) — using server build");
+  }
+  return { supply, vaultValue };
 }
 
 /**
