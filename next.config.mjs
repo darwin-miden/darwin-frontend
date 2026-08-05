@@ -32,6 +32,12 @@ const nextConfig = {
       topLevelAwait: true,
       layers: true,
     };
+    // Import .masm files as raw source strings so the confidential note scripts
+    // can be compiled CLIENT-SIDE (via useCompile) — the first step of moving
+    // note-building off the server.
+    config.module = config.module || {};
+    config.module.rules = config.module.rules || [];
+    config.module.rules.push({ test: /\.masm$/, type: "asset/source" });
     // The @getpara SDK references a pile of OPTIONAL peer packages (account-
     // abstraction plugins, non-EVM wallet connectors, Farcaster, React-Native
     // storage, pino-pretty) that we don't install. Their Vite setup tree-shakes
