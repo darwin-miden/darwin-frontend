@@ -72,6 +72,7 @@ import {
 } from "../lib/trustlessController";
 import { liveDccBalance, readDccBalance, stashDccBalance } from "../lib/dccBalance";
 import { basketDecimals, isNavBasket } from "../lib/basketFaucets";
+import { readNavStatus } from "../lib/navClient";
 import { autoBackupWallet, restoreFromBackup } from "../lib/walletBackup";
 import { decryptBytes, encryptBytes } from "../lib/storeBackup";
 import {
@@ -646,8 +647,7 @@ export function TrustlessRedeemPanel({
   useEffect(() => {
     if (!isNavBasket(basket?.symbol ?? "DCC")) return;
     let cancelled = false;
-    fetch(`/api/nav-status?basket=${basket?.symbol ?? "DCC"}`)
-      .then((r) => (r.ok ? r.json() : null))
+    readNavStatus(basket?.symbol ?? "DCC")
       .then((d) => {
         if (cancelled || !d) return;
         const n = Number(d.navPerShareUsd);

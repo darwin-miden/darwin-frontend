@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 
 import type { BasketSymbol } from "../lib/baskets";
 import { isNavBasket } from "../lib/basketFaucets";
+import { readNavStatus } from "../lib/navClient";
 import { useNavLive } from "../lib/useNavLive";
 
 const ASSET_LABEL: Record<string, string> = {
@@ -47,8 +48,7 @@ export function LiveNavCard({ symbol }: { symbol: BasketSymbol }) {
     if (!nav) return;
     let cancelled = false;
     const load = () =>
-      fetch(`/api/nav-status?basket=${symbol}`)
-        .then((r) => (r.ok ? r.json() : null))
+      readNavStatus(symbol)
         .then((d) => {
           if (cancelled || !d) return;
           const n = Number(d.navPerShareUsd);

@@ -42,6 +42,7 @@ import {
 } from "../lib/trustlessController";
 import { readActivity, timeAgo, type Activity } from "../lib/activityLog";
 import { NAV_BASKETS, basketDecimals } from "../lib/basketFaucets";
+import { readNavStatus } from "../lib/navClient";
 
 // Minimal ERC-20 balanceOf — reads the connected wallet's Sepolia USDC.
 const ERC20_BALANCE_ABI = [
@@ -111,8 +112,7 @@ export function PortfolioView() {
     // NAV-per-share for NAV baskets (on-chain vault value / supply) so a
     // position is priced as shares × NAV, tracking the vault — not 1:1.
     for (const sym of NAV_BASKETS) {
-      fetch(`/api/nav-status?basket=${sym}`)
-        .then((r) => (r.ok ? r.json() : null))
+      readNavStatus(sym)
         .then((d) => {
           if (!d) return;
           const nav = Number(d.navPerShareUsd);
