@@ -397,6 +397,7 @@ export async function buildClientDepositNote(
     NetworkAccountTarget,
     Note,
     NoteFile,
+    OutputNote,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } = sdk as any;
 
@@ -467,7 +468,7 @@ export async function buildClientDepositNote(
 
   const out = D("serialize", () => ({
     noteB64: toB64(depositNote.serialize()),
-    paybackFileB64: toB64(NoteFile.fromOutputNote(paybackNote).serialize()),
+    paybackFileB64: toB64(NoteFile.fromOutputNote(OutputNote.full(paybackNote)).serialize()),
     noteId: depositNote.id().toString(),
     paybackId: paybackNote.id().toString(),
   }));
@@ -516,6 +517,7 @@ export async function buildClientRedeemNote(
     NetworkAccountTarget,
     Note,
     NoteFile,
+    OutputNote,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } = sdk as any;
 
@@ -564,7 +566,7 @@ export async function buildClientRedeemNote(
 
   return {
     noteB64: toB64(redeemNote.serialize()),
-    paybackFileB64: toB64(NoteFile.fromOutputNote(paybackNote).serialize()),
+    paybackFileB64: toB64(NoteFile.fromOutputNote(OutputNote.full(paybackNote)).serialize()),
     noteId: redeemNote.id().toString(),
     paybackId: paybackNote.id().toString(),
   };
