@@ -537,11 +537,6 @@ export function BasketTradePanel({
             ? await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead)
             : await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
           const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
-          // [fpi-diag] one-line receipt so a single browser run confirms the read
-          // resolved (S,V) and the predicted mint — remove once validated live.
-          console.log(
-            `[client-buy]${fpi ? "[fpi]" : ""} nav S=${nav.supply} V=${nav.vaultValue} amount=${amountBase} mint=${mintAmount}`,
-          );
           built = await buildClientDepositNote(prep.navScript, {
             faucet: clientFaucet,
             sender: signerAccountId,
