@@ -483,7 +483,11 @@ export function BasketTradePanel({
         return server;
       };
 
-      if (CLIENT_NOTE_BUILD) {
+      // The client build is NAV-specific (its note scripts + on-chain compute_v read
+      // only exist on NAV faucets). Legacy 1:1 baskets (DAG/DCO) have no compute_v →
+      // executeProgram throws push_procedure_index — so those go straight to the
+      // server build. Gate the client path on isNavBasket.
+      if (CLIENT_NOTE_BUILD && isNavBasket(symbol)) {
         // Decentralized path: compile + build the confidential note IN THE BROWSER
         // (no /api/confidential-note). Reads the faucet's LIVE S/V on-chain so the
         // predicted mint = net*S/V matches what the network settles (the payback
@@ -576,7 +580,11 @@ export function BasketTradePanel({
         return server;
       };
 
-      if (CLIENT_NOTE_BUILD) {
+      // The client build is NAV-specific (its note scripts + on-chain compute_v read
+      // only exist on NAV faucets). Legacy 1:1 baskets (DAG/DCO) have no compute_v →
+      // executeProgram throws push_procedure_index — so those go straight to the
+      // server build. Gate the client path on isNavBasket.
+      if (CLIENT_NOTE_BUILD && isNavBasket(symbol)) {
         // Decentralized redeem: build the burn note IN THE BROWSER (no
         // /api/confidential-redeem). Reads live S/V so the released dUSDC =
         // shares*V/S/100 matches what the network settles (the payback must
