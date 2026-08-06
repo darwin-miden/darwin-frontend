@@ -412,27 +412,14 @@ export async function buildClientDepositNote(
   // felt still yields a valid recipient digest (so the note id matches + import
   // finds it) but makes the minted note UN-consumable — the P2ID script asserts
   // exactly 2 storage items.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const D = <T,>(label: string, fn: () => T): T => {
-    try {
-      return fn();
-    } catch (e) {
-      console.log(`[diag] deposit FAIL @ ${label}: ${String((e as { message?: string })?.message ?? e).slice(0, 150)}`);
-      throw e;
-    }
-  };
   const paybackSerial = randWord(sdk);
   const p2idStorage = mkStorage(sdk, [recipient.suffix(), recipient.prefix()]);
-  const paybackRecipient = D("paybackRecipient", () => new NoteRecipient(paybackSerial, NoteScript.p2id(), p2idStorage));
+  const paybackRecipient = new NoteRecipient(paybackSerial, NoteScript.p2id(), p2idStorage);
   const paybackTag = NoteTag.withAccountTarget(recipient);
-  const paybackNote = D(
-    "paybackNote",
-    () =>
-      new Note(
-        new NoteAssets([new FungibleAsset(faucet, params.mintAmount)]),
-        new NoteMetadata(faucet, NoteType.Private, paybackTag),
-        paybackRecipient,
-      ),
+  const paybackNote = new Note(
+    new NoteAssets([new FungibleAsset(faucet, params.mintAmount)]),
+    new NoteMetadata(faucet, NoteType.Private, paybackTag),
+    paybackRecipient,
   );
 
   // Deposit note storage = 9 felts the on-chain script reads at offsets 100..108:
@@ -447,33 +434,27 @@ export async function buildClientDepositNote(
     new Felt(1n), // fee_factor
     new Felt(1n), // nav_scale
   ];
-  // `navScript` was compiled by useCompile() in the web-client's WASM context (a
-  // worker), so it isn't recognized as a NoteScript of THIS freshly-imported sdk
-  // instance → `new NoteRecipient(..., navScript, ...)` throws "expected instance of
-  // rh". Normalize it by round-tripping through this sdk's (de)serializer. Best-
-  // effort: if it's already the right instance, this is a harmless no-op.
+  // navScript may be compiled in the web-client's worker WASM instance; rebind it
+  // to this sdk instance so the NoteRecipient constructor accepts it (no-op locally).
   const navScriptLocal = normalizeScript(NoteScript, navScript);
   const depositRecipient = new NoteRecipient(randWord(sdk), navScriptLocal, mkStorage(sdk, inputs));
 
   // Public note carrying the dUSDC collateral, tagged + attached to the network
   // faucet so the NTB drains it + mints shares.
-  const depositNote = D("depositNote(withAttachments)", () =>
-    Note.withAttachments(
-      new NoteAssets([new FungibleAsset(dusdc, params.amount)]),
-      new NoteMetadata(sender, NoteType.Public, NoteTag.withAccountTarget(faucet)),
-      depositRecipient,
-      [new NetworkAccountTarget(faucet).toAttachment()],
-    ),
+  const depositNote = Note.withAttachments(
+    new NoteAssets([new FungibleAsset(dusdc, params.amount)]),
+    new NoteMetadata(sender, NoteType.Public, NoteTag.withAccountTarget(faucet)),
+    depositRecipient,
+    [new NetworkAccountTarget(faucet).toAttachment()],
   );
 
-  const out = D("serialize", () => ({
+  return {
     noteB64: toB64(depositNote.serialize()),
+    // NoteFile.fromOutputNote wants an OutputNote — wrap the Note via OutputNote.full.
     paybackFileB64: toB64(NoteFile.fromOutputNote(OutputNote.full(paybackNote)).serialize()),
     noteId: depositNote.id().toString(),
     paybackId: paybackNote.id().toString(),
-  }));
-  console.log(`[diag] deposit BUILD OK noteId=${out.noteId?.slice(0, 12)} paybackId=${out.paybackId?.slice(0, 12)}`);
-  return out;
+  };
 }
 
 export interface ClientRedeemParams {
