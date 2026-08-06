@@ -1,0 +1,38 @@
+# Darwin Pragma FPI price loader — reads the 3 DCC constituent medians from the
+# live Pragma oracle via execute_foreign_procedure (the NTB lazy-loads Pragma).
+#   mem[230]=wbtc eff=median/1e8   mem[231]=eth eff=median/1e8   mem[232]=usdt eff=median/1e4
+# Pragma get_median frame: [pair_prefix, suffix=0, amount=0, 0, pad12], then root(4), id(2).
+use miden::protocol::tx
+use miden::core::sys
+use darwin::math
+
+const PRAGMA_PRE = 8850886096234572817
+const PRAGMA_SUF = 9093477099503364096
+const ROOT = 0xaa3a12d4e9de2dad37c50dba93809b9c17226d512e642d3d620c77088a85da71
+
+#! Load all three effective prices into mem[230..232]. Inputs: []  Output: [].
+pub proc load_prices
+    # --- wbtc (pair 3), /1e8 → mem[230] ---
+    padw padw padw push.0.0.0.3
+    push.ROOT push.PRAGMA_PRE.PRAGMA_SUF
+    exec.tx::execute_foreign_procedure
+    push.1 assert_eq.err="pragma wbtc not tracked"
+    mem_store.229 dropw dropw dropw drop drop
+    push.100000000 push.229 mem_load exec.math::felt_div mem_store.230
+
+    # --- eth (pair 2), /1e8 → mem[231] ---
+    padw padw padw push.0.0.0.2
+    push.ROOT push.PRAGMA_PRE.PRAGMA_SUF
+    exec.tx::execute_foreign_procedure
+    push.1 assert_eq.err="pragma eth not tracked"
+    mem_store.229 dropw dropw dropw drop drop
+    push.100000000 push.229 mem_load exec.math::felt_div mem_store.231
+
+    # --- usdt (pair 4), /1e4 → mem[232] ---
+    padw padw padw push.0.0.0.4
+    push.ROOT push.PRAGMA_PRE.PRAGMA_SUF
+    exec.tx::execute_foreign_procedure
+    push.1 assert_eq.err="pragma usdt not tracked"
+    mem_store.229 dropw dropw dropw drop drop
+    push.10000 push.229 mem_load exec.math::felt_div mem_store.232
+end

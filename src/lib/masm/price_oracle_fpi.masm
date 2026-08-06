@@ -1,0 +1,112 @@
+# Darwin price-oracle + NAV component for a basket faucet-network account.
+#
+# Holds the four constituent EFFECTIVE prices in one storage Word, pushed by a
+# trusted Darwin oracle account (never by a depositor). "Effective price" folds
+# in each constituent's decimals: effective_price_i = price_usd_i * 1e8 /
+# 10^decimals_i, so value_i (USD*1e8) = holdings_base_i * effective_price_i.
+#
+# Slot: darwin::price::feed = [p_wbtc, p_eth, p_usdt, p_dai].
+#
+# CONTEXT: get_feed/set_feed/compute_v read/write the ACTIVE account (storage
+# slot + vault balances). Those reads only work inside the account context, so
+# these are COMPONENT procs that MUST be `call`ed by the note (not `exec`ed) —
+# exactly like fungible::get_token_supply. The DCC constituent faucet ids are
+# baked in so compute_v can read the vault holdings.
+
+use miden::protocol::active_account
+use miden::protocol::native_account
+use miden::protocol::asset
+
+const PRICE_FEED_SLOT = word("darwin::price::feed")
+
+# DCC constituents (suffix, prefix).
+const WBTC_SUF = 3171782462109906944
+const WBTC_PRE = 917502632741447985
+const ETH_SUF = 1518721424524472064
+const ETH_PRE = 11403571646052128113
+const USDT_SUF = 2211680137277199360
+const USDT_PRE = 1268386108394174481
+
+# dUSDC collateral faucet (suffix, prefix) — same id the deposit note drains.
+const DUSDC_SUF = 7513476840783009536
+const DUSDC_PRE = 18199311028627498257
+
+#! Reads the effective-price feed word.
+#! Outputs: [p_wbtc, p_eth, p_usdt, p_dai]
+pub proc get_feed
+    push.PRICE_FEED_SLOT[0..2]
+    exec.active_account::get_item
+end
+
+#! Writes the effective-price feed word.
+#! Inputs: [p_wbtc, p_eth, p_usdt, p_dai]
+pub proc set_feed
+    push.PRICE_FEED_SLOT[0..2]
+    exec.native_account::set_item
+    dropw
+end
+
+#! Vault balance of one fungible faucet in the active account, by faucet
+#! (suffix, prefix). get_balance takes the full ASSET_KEY (a Word), so build a
+#! zero-amount fungible asset for the faucet and read its key.
+#! Inputs:  [suffix, prefix]
+#! Outputs: [balance]
+proc balance_of
+    # [suffix, prefix]. create_fungible_key builds the vault key WITHOUT
+    # validating the (foreign) constituent faucet — create_fungible_asset does
+    # validate, which triggers UnknownAccountProcedure on a non-active faucet.
+    push.0                                   # [enable_cb=0, suffix, prefix]
+    exec.asset::create_fungible_key          # [ASSET_KEY]
+    exec.active_account::get_balance         # [balance]
+end
+
+#! Computes the DCC vault value V (USD*1e8) = the priced constituent holdings
+#! PLUS the vault's UN-CONVERTED dUSDC cash at par.
+#!
+#!   V = Σ H_i * effective_price_i  +  max(0, D - W) * 100
+#!
+#! where D = the vault's dUSDC balance and W = feed[3] (the "converted"
+#! watermark: the cash the orchestrator has already mirrored into constituents).
+#! Counting only the UN-converted cash (D - W) keeps a fresh deposit's value in
+#! NAV immediately — no dilution while the orchestrator catches up — WITHOUT
+#! double-counting the already-converted cash (which is already represented by
+#! the constituent holdings). feed[3] previously held p_dai, dead weight for DCC.
+#! The prices/watermark are stashed in memory so the balance builds don't disturb
+#! them on the stack.
+#! Outputs: [V]
+pub proc compute_v
+    push.PRICE_FEED_SLOT[0..2]
+    exec.active_account::get_item            # [pw, pe, pu, W]
+    # mem_storew needs a WORD-ALIGNED address (multiple of 4); 236 = 4*59.
+    mem_storew_le.236 dropw                  # feed → 236..239 (239 = W), []
+
+    push.WBTC_PRE push.WBTC_SUF exec.balance_of   # [Hw]
+    push.230 mem_load mul                    # [Hw*pw]
+    push.ETH_PRE push.ETH_SUF exec.balance_of     # [He, Hw*pw]
+    push.231 mem_load mul add                # [He*pe + Hw*pw]
+    push.USDT_PRE push.USDT_SUF exec.balance_of   # [Hu, sum]
+    push.232 mem_load mul add                # [Csum]  (priced constituent value)
+
+    # V = Csum + UN-converted cash, where unconverted = max(0, D - W) * 100.
+    # W = feed[3] (mem 239) is the cash the orchestrator has already mirrored into
+    # constituents; that portion is represented by Csum, so only the NOT-YET-
+    # mirrored cash (D - W) is added at par. This is SYMMETRIC: Csum has no max
+    # floor, so V rises AND falls with the live prices — real two-way crypto
+    # exposure. A fresh deposit's cash lands in NAV immediately (D > W until the
+    # orchestrator mirrors it) with no dilution and no double-count. Degrades to
+    # cash-only (V = D*100) when the feed/holdings are unset (Csum = 0, W = 0).
+    # Clamp pattern (dup.1 dup.1 gte / sub) mirrors network_redeem_note.masm.
+    push.DUSDC_PRE push.DUSDC_SUF exec.balance_of  # [D, Csum]
+    push.239 mem_load                              # [W, D, Csum]
+    dup.1 dup.1 gte                                # [D>=W, W, D, Csum]
+    if.true
+        sub                                        # [D-W, Csum]
+    else
+        drop drop push.0                           # D < W → unconverted = 0
+    end
+    push.100 mul                                   # [unconverted*100, Csum]
+    add                                            # [V, <entry-frame felt>]
+
+    # A `call`ed proc must return a 16-deep stack; drop the extra entry felt.
+    swap drop                                      # [V]
+end

@@ -23,6 +23,12 @@ export type BasketFaucet = {
   decimals: number;
   /** NAV-priced (true) vs legacy flat 1:1 dUSDC (false). */
   nav: boolean;
+  /**
+   * FPI-priced (true): the NAV note reads Pragma medians live via
+   * execute_foreign_procedure — no keeper feed. Uses the *_fpi note scripts +
+   * pragma_fpi lib. Implies nav: true.
+   */
+  fpi?: boolean;
 };
 
 export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
@@ -47,6 +53,15 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   // Legacy 1:1 confidential faucets — not yet migrated to NAV.
   DAG: { id: "0x2fe3469cccf61a710d321df38c4ca1", decimals: 6, nav: false },
   DCO: { id: "0xf1a4752b3689beb110eebec647df20", decimals: 6, nav: false },
+  // FPI test basket — v13 faucet with the price_oracle_fpi component; its NAV note
+  // reads Pragma medians LIVE via execute_foreign_procedure (no keeper price push).
+  // Allowlists the browser FPI deposit (0xba6080…) + redeem (0xce6244…) roots.
+  DCF: {
+    id: "0x42a122b9a3f7a31171af414436c901",
+    decimals: 8,
+    nav: true,
+    fpi: true,
+  },
 };
 
 /** Faucet id for a basket, or undefined if unknown. */
@@ -60,6 +75,10 @@ export const basketDecimals = (symbol: string): number =>
 /** True when a basket is NAV-priced (shares × live NAV, not flat 1:1). */
 export const isNavBasket = (symbol: string): boolean =>
   BASKET_FAUCETS[symbol]?.nav ?? false;
+
+/** True when a basket prices via FPI Pragma reads (uses the *_fpi note scripts). */
+export const isFpiBasket = (symbol: string): boolean =>
+  BASKET_FAUCETS[symbol]?.fpi ?? false;
 
 /** Symbols of the NAV-priced baskets. */
 export const NAV_BASKETS: string[] = Object.keys(BASKET_FAUCETS).filter(

@@ -1,0 +1,136 @@
+# v11 NAV-priced confidential deposit note — executed BY THE NETWORK against
+# the DCC basket faucet-network account.
+#
+# Prices basket-token SHARES at the live NAV of the vault's REAL constituent
+# holdings:
+#   1. Require + drain exactly one dUSDC collateral asset (amount D_base).
+#   2. net = D_base * 100 * (10000 - fee_bps) / 10000            (USD*1e8, after fee)
+#   3. If supply S == 0 (first deposit): shares = net              (par, 1 share = $1).
+#      Else: V = Σ get_balance(constituent_i) * effective_price_i  (USD*1e8)
+#            shares = net * S / V.
+#   4. mint_and_send(shares) → a PRIVATE P2ID note to the depositor's wallet.
+#
+# SECURITY: shares bound on-chain to the real drained dUSDC, real supply, real
+# holdings; only per-unit prices come from the trusted oracle feed (not the
+# emitter). Changing this script changes its root (re-allowlist required).
+#
+# INVOCATION: get_token_supply is a faucet-component proc with `Invocation:
+# call` — it MUST be `call`ed so its internal active_account::get_item runs in
+# the faucet account context (using `exec` stalls NTB execution).
+
+use miden::core::sys
+use miden::protocol::active_note
+use miden::protocol::active_account
+use miden::protocol::asset
+use miden::protocol::asset::ASSET_VALUE_MEMORY_OFFSET
+use miden::protocol::asset::ASSET_SIZE
+use miden::standards::wallets::basic
+use miden::standards::faucets::fungible
+use darwin::math
+use darwin::price_oracle
+use darwin::pragma_fpi
+
+const FEE_COMPLEMENT = 9970
+const DUSDC_SUF = 7513476840783009536
+const DUSDC_PRE = 18199311028627498257
+
+@locals(64)
+proc read_collateral_amount
+    locaddr.0 exec.active_note::get_assets
+    push.1 assert_eq.err="nav deposit note must carry exactly one collateral asset"
+    padw locaddr.0 mem_loadw_le
+    exec.asset::key_into_faucet_id
+    push.DUSDC_SUF assert_eq.err="nav deposit collateral must be dUSDC"
+    push.DUSDC_PRE assert_eq.err="nav deposit collateral must be dUSDC"
+    padw locaddr.0 add.ASSET_VALUE_MEMORY_OFFSET mem_loadw_le
+    exec.asset::fungible_value_into_amount
+    mem_store.210
+end
+
+@locals(2048)
+proc drain_collateral_into_faucet
+    locaddr.0 exec.active_note::get_assets
+    mul.ASSET_SIZE locaddr.0 dup movdn.2 add    padw padw movup.9
+    dup dup.10 neq
+    while.true
+        dup movdn.9
+        add.ASSET_VALUE_MEMORY_OFFSET mem_loadw_le swapw
+        dup.8 mem_loadw_le
+        padw padw swapdw
+        call.basic::receive_asset
+        dropw dropw
+        movup.8 add.ASSET_SIZE dup
+        dup.10 neq
+    end
+    drop dropw dropw drop
+end
+
+@note_script
+pub proc main
+    push.100 exec.active_note::get_storage
+    drop drop
+
+    exec.read_collateral_amount
+
+    # supply S → mem[221]; clear the get_token_supply pad word. (The drain adds
+    # dUSDC, never shares, so S is the same before/after it.)
+    call.fungible::get_token_supply
+    mem_store.221
+    dropw dropw dropw drop drop drop
+
+    # V (PRE-deposit) → mem[222], computed BEFORE draining the deposit in. Since
+    # compute_v now counts the vault's UN-converted dUSDC, pricing AFTER the drain
+    # would count this very deposit in its own price — under-minting and diluting.
+    # Pricing pre-drain also keeps the note's V identical to the off-chain
+    # builder's (which reads compute_v before the note runs). compute_v runs
+    # inside a `call`ed component proc so its feed-slot + vault-balance reads
+    # execute in the account context; it returns [V] padded to 16.
+    # Load live Pragma prices via FPI (mem[230..232]) BEFORE compute_v reads them.
+    exec.pragma_fpi::load_prices
+    call.price_oracle::compute_v
+    mem_store.222
+    dropw dropw dropw drop drop drop
+
+    # drain the deposit into the vault (AFTER pricing).
+    exec.drain_collateral_into_faucet
+
+    # net = D_base * 100 * FEE_COMPLEMENT / 10000  → mem[220]
+    mem_load.210 push.100 mul
+    push.FEE_COMPLEMENT mul
+    push.10000 swap
+    exec.math::felt_div
+    mem_store.220
+
+    # shares: par value on first deposit (S==0) OR a degenerate zero-value vault
+    # (V==0), else net * S / V. The V==0 guard mirrors the redeem note and avoids
+    # a divide-by-zero revert if the faucet is unseeded/unpriced with S>0.
+    mem_load.221 eq.0
+    if.true
+        mem_load.220
+    else
+        mem_load.222 eq.0
+        if.true
+            mem_load.220
+        else
+            # shares = net * S / V   (V = mem[222], the pre-deposit vault value)
+            mem_load.221 mem_load.220 mul
+            mem_load.222 swap
+            exec.math::felt_div
+        end
+    end
+
+    exec.active_account::get_id
+    push.0
+    exec.asset::create_fungible_asset
+    mem_storew_le.200 dropw
+    mem_storew_le.204 dropw
+
+    padw push.100 mem_loadw_le
+    push.104 mem_load
+    push.105 mem_load
+    padw push.204 mem_loadw_le
+    padw push.200 mem_loadw_le
+    call.fungible::mint_and_send
+
+    exec.sys::truncate_stack
+end

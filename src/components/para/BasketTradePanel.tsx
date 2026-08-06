@@ -34,13 +34,15 @@ import { formatUnits, parseUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { ensureSignerAccountLoaded } from "../../lib/ensureAccount";
-import { basketDecimals, basketFaucetId, isNavBasket } from "../../lib/basketFaucets";
+import { basketDecimals, basketFaucetId, isFpiBasket, isNavBasket } from "../../lib/basketFaucets";
 import {
   buildClientDepositNote,
   buildClientRedeemNote,
   compileNavDepositScript,
+  compileNavDepositScriptFpi,
   compileNavReadScripts,
   compileNavRedeemScript,
+  compileNavRedeemScriptFpi,
   computeMintAmount,
   computeReleaseAmount,
   readFaucetNavBrowser,
@@ -506,13 +508,24 @@ export function BasketTradePanel({
           const prep = await runExclusive(async () => {
             await syncState();
             return {
-              navScript: await compileNavDepositScript(noteScript),
+              navScript: await (isFpiBasket(symbol)
+                ? compileNavDepositScriptFpi(noteScript)
+                : compileNavDepositScript(noteScript)),
               navRead: await compileNavReadScripts(txScript),
             };
           });
           // Import the faucet's public state (flat web-client import, under the lock).
           await ensureSignerAccountLoaded(client, runExclusive, clientFaucet);
-          const nav = await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
+          // FPI faucet: compute_v is priced ON-CHAIN via Pragma (the note runs
+          // load_prices). The client read can't load Pragma locally yet, so a fresh
+          // faucet reads empty — treat it as par (S=0 → mint = net, exactly what the
+          // on-chain note produces). [S>0 client-side FPI read: follow-up.]
+          const nav = isFpiBasket(symbol)
+            ? await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead).catch(() => ({
+                supply: 0n,
+                vaultValue: 0n,
+              }))
+            : await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
           const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
           built = await buildClientDepositNote(prep.navScript, {
             faucet: clientFaucet,
@@ -597,7 +610,9 @@ export function BasketTradePanel({
           const prep = await runExclusive(async () => {
             await syncState();
             return {
-              redeemScript: await compileNavRedeemScript(noteScript),
+              redeemScript: await (isFpiBasket(symbol)
+                ? compileNavRedeemScriptFpi(noteScript)
+                : compileNavRedeemScript(noteScript)),
               navRead: await compileNavReadScripts(txScript),
             };
           });

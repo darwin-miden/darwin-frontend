@@ -20,6 +20,11 @@ import navRedeemNoteMasm from "./masm/nav_redeem_note.masm";
 import dripNoteMasm from "./masm/drip_note.masm";
 import mathMasm from "./masm/math.masm";
 import priceOracleMasm from "./masm/price_oracle.masm";
+// FPI variants (trustless price via Pragma execute_foreign_procedure — no keeper).
+import navDepositNoteFpiMasm from "./masm/nav_deposit_note_fpi.masm";
+import navRedeemNoteFpiMasm from "./masm/nav_redeem_note_fpi.masm";
+import priceOracleFpiMasm from "./masm/price_oracle_fpi.masm";
+import pragmaFpiMasm from "./masm/pragma_fpi.masm";
 
 /** The `@note_script`-form NAV deposit script (0.15.x), compiled client-side. */
 export const NAV_DEPOSIT_NOTE_MASM: string = navDepositNoteMasm;
@@ -43,6 +48,18 @@ export const NAV_NOTE_LIBRARIES = [
   { namespace: "darwin::price_oracle", code: priceOracleMasm, linking: "static" as const },
 ];
 
+/**
+ * FPI-basket libraries: the note reads live Pragma medians via
+ * execute_foreign_procedure (pragma_fpi) and prices against them (price_oracle_fpi
+ * sources prices from FPI memory, not the keeper feed). math first (referenced by
+ * both), then the FPI price oracle + the pragma FPI loader.
+ */
+export const NAV_NOTE_FPI_LIBRARIES = [
+  { namespace: "darwin::math", code: mathMasm, linking: "static" as const },
+  { namespace: "darwin::price_oracle", code: priceOracleFpiMasm, linking: "static" as const },
+  { namespace: "darwin::pragma_fpi", code: pragmaFpiMasm, linking: "static" as const },
+];
+
 /** Signature of the `noteScript` compiler from `useCompile()`. */
 type CompileNoteScript = (opts: {
   code: string;
@@ -62,6 +79,21 @@ export async function compileNavDepositScript(noteScript: CompileNoteScript) {
 /** Compile the NAV redeem note script in the browser (root must be allowlisted). */
 export async function compileNavRedeemScript(noteScript: CompileNoteScript) {
   return noteScript({ code: NAV_REDEEM_NOTE_MASM, libraries: NAV_NOTE_LIBRARIES });
+}
+
+/** FPI-basket note scripts (trustless Pragma price, no keeper). Roots differ from
+ *  the feed-based notes, so the FPI faucet must allowlist THESE roots. */
+export const NAV_DEPOSIT_NOTE_FPI_MASM: string = navDepositNoteFpiMasm;
+export const NAV_REDEEM_NOTE_FPI_MASM: string = navRedeemNoteFpiMasm;
+
+/** Compile the FPI NAV deposit note (reads Pragma live via execute_foreign_procedure). */
+export async function compileNavDepositScriptFpi(noteScript: CompileNoteScript) {
+  return noteScript({ code: NAV_DEPOSIT_NOTE_FPI_MASM, libraries: NAV_NOTE_FPI_LIBRARIES });
+}
+
+/** Compile the FPI NAV redeem note. */
+export async function compileNavRedeemScriptFpi(noteScript: CompileNoteScript) {
+  return noteScript({ code: NAV_REDEEM_NOTE_FPI_MASM, libraries: NAV_NOTE_FPI_LIBRARIES });
 }
 
 /** Compile the drip request script in the browser (no darwin libs; standard only). */

@@ -64,6 +64,11 @@ const FLAVOUR: Record<
     risk: "conservative",
     riskColor: "#3a6aa0",
   },
+  DCF: {
+    tagline: "TEST — NAV priced live via Pragma FPI, no keeper.",
+    risk: "test",
+    riskColor: "#176b5d",
+  },
 };
 
 export default async function BasketDetailPage({

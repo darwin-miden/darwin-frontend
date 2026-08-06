@@ -115,7 +115,7 @@ export const ASSET_FAUCET_BY_ID: Record<string, AssetFaucet> =
   );
 
 // ─── Basket-token faucets ────────────────────────────────────────────
-export type BasketSymbol = "DCC" | "DAG" | "DCO";
+export type BasketSymbol = "DCC" | "DAG" | "DCO" | "DCF";
 
 export interface BasketFaucet {
   symbol: BasketSymbol;
@@ -123,16 +123,20 @@ export interface BasketFaucet {
   decimals: number;
 }
 
+// DCF (FPI test basket) has no self-custody token faucet; it points to its Para/NAV
+// faucet just to satisfy the exhaustive map (the self-custody path never uses DCF).
 const BASKET_TOKEN_FAUCETS_V014: Record<BasketSymbol, BasketFaucet> = {
   DCC: { symbol: "DCC", id: "0x2066f2da1f91ba202af5251d39101c", decimals: 8 },
   DAG: { symbol: "DAG", id: "0xfb6811fd6399df206d44f62800620d", decimals: 8 },
   DCO: { symbol: "DCO", id: "0xbe4efc6729eb3220423b7d6d6a0942", decimals: 8 },
+  DCF: { symbol: "DCF", id: "0x42a122b9a3f7a31171af414436c901", decimals: 8 },
 };
 
 const BASKET_TOKEN_FAUCETS_V015: Record<BasketSymbol, BasketFaucet> = {
   DCC: { symbol: "DCC", id: "0x4eb76287e07e90714a86ae2b89d700", decimals: 8 },
   DAG: { symbol: "DAG", id: "0xed4219cb5ebf3d911c27dc6b24baa2", decimals: 8 },
   DCO: { symbol: "DCO", id: "0xc58107b160df13d1157b707e3f0a3d", decimals: 8 },
+  DCF: { symbol: "DCF", id: "0x42a122b9a3f7a31171af414436c901", decimals: 8 },
 };
 
 export const BASKET_TOKEN_FAUCETS: Record<BasketSymbol, BasketFaucet> = USE_V015

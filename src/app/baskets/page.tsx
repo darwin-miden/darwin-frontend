@@ -39,6 +39,11 @@ const BASKET_FLAVOUR: Record<
     risk: "conservative",
     riskColor: "#3a6aa0",
   },
+  DCF: {
+    tagline: "TEST — live Pragma FPI, no keeper",
+    risk: "test",
+    riskColor: "#176b5d",
+  },
 };
 
 export default function BasketsPage() {
