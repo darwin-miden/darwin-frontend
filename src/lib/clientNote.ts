@@ -283,12 +283,26 @@ function randWord(sdk: any) {
 // it to the local instance. No-op if it's already local (or lacks serialize).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizeScript(NoteScriptCls: any, script: any): any {
+  const cname = script?.constructor?.name;
+  const hasSer = typeof script?.serialize === "function";
+  let instBefore = "?";
   try {
-    if (script?.serialize && NoteScriptCls?.deserialize) {
-      return NoteScriptCls.deserialize(script.serialize());
-    }
+    instBefore = String(script instanceof NoteScriptCls);
   } catch {
-    /* fall through — use the original script */
+    /* instanceof can throw across wasm instances */
+  }
+  try {
+    if (hasSer && typeof NoteScriptCls?.deserialize === "function") {
+      const bytes = script.serialize();
+      const rebound = NoteScriptCls.deserialize(bytes);
+      console.log(
+        `[diag] normalize OK cname=${cname} hadSer=${hasSer} instBefore=${instBefore} bytes=${bytes?.length} instAfter=${String(rebound instanceof NoteScriptCls)}`,
+      );
+      return rebound;
+    }
+    console.log(`[diag] normalize SKIP cname=${cname} hasSer=${hasSer} hasDeser=${typeof NoteScriptCls?.deserialize} inst=${instBefore}`);
+  } catch (e) {
+    console.log(`[diag] normalize THREW cname=${cname} err=${String((e as { message?: string })?.message ?? e).slice(0, 140)}`);
   }
   return script;
 }
@@ -400,14 +414,34 @@ export async function buildClientDepositNote(
   // felt still yields a valid recipient digest (so the note id matches + import
   // finds it) but makes the minted note UN-consumable — the P2ID script asserts
   // exactly 2 storage items.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const D = <T,>(label: string, fn: () => T): T => {
+    try {
+      return fn();
+    } catch (e) {
+      console.log(`[diag] deposit FAIL @ ${label}: ${String((e as { message?: string })?.message ?? e).slice(0, 150)}`);
+      throw e;
+    }
+  };
+  try {
+    const p2 = NoteScript.p2id();
+    console.log(`[diag] p2id cname=${p2?.constructor?.name} inst=${String(p2 instanceof NoteScript)}`);
+  } catch (e) {
+    console.log(`[diag] p2id threw ${String((e as { message?: string })?.message ?? e).slice(0, 80)}`);
+  }
+
   const paybackSerial = randWord(sdk);
-  const p2idStorage = new NoteStorage([recipient.suffix(), recipient.prefix()]);
-  const paybackRecipient = new NoteRecipient(paybackSerial, NoteScript.p2id(), p2idStorage);
+  const p2idStorage = D("p2idStorage", () => new NoteStorage([recipient.suffix(), recipient.prefix()]));
+  const paybackRecipient = D("paybackRecipient", () => new NoteRecipient(paybackSerial, NoteScript.p2id(), p2idStorage));
   const paybackTag = NoteTag.withAccountTarget(recipient);
-  const paybackNote = new Note(
-    new NoteAssets([new FungibleAsset(faucet, params.mintAmount)]),
-    new NoteMetadata(faucet, NoteType.Private, paybackTag),
-    paybackRecipient,
+  const paybackNote = D(
+    "paybackNote",
+    () =>
+      new Note(
+        new NoteAssets([new FungibleAsset(faucet, params.mintAmount)]),
+        new NoteMetadata(faucet, NoteType.Private, paybackTag),
+        paybackRecipient,
+      ),
   );
 
   // Deposit note storage = 9 felts the on-chain script reads at offsets 100..108:
@@ -428,23 +462,30 @@ export async function buildClientDepositNote(
   // rh". Normalize it by round-tripping through this sdk's (de)serializer. Best-
   // effort: if it's already the right instance, this is a harmless no-op.
   const navScriptLocal = normalizeScript(NoteScript, navScript);
-  const depositRecipient = new NoteRecipient(randWord(sdk), navScriptLocal, new NoteStorage(inputs));
+  const depositRecipient = D(
+    "depositRecipient(navScript)",
+    () => new NoteRecipient(randWord(sdk), navScriptLocal, new NoteStorage(inputs)),
+  );
 
   // Public note carrying the dUSDC collateral, tagged + attached to the network
   // faucet so the NTB drains it + mints shares.
-  const depositNote = Note.withAttachments(
-    new NoteAssets([new FungibleAsset(dusdc, params.amount)]),
-    new NoteMetadata(sender, NoteType.Public, NoteTag.withAccountTarget(faucet)),
-    depositRecipient,
-    [new NetworkAccountTarget(faucet).toAttachment()],
+  const depositNote = D("depositNote(withAttachments)", () =>
+    Note.withAttachments(
+      new NoteAssets([new FungibleAsset(dusdc, params.amount)]),
+      new NoteMetadata(sender, NoteType.Public, NoteTag.withAccountTarget(faucet)),
+      depositRecipient,
+      [new NetworkAccountTarget(faucet).toAttachment()],
+    ),
   );
 
-  return {
+  const out = D("serialize", () => ({
     noteB64: toB64(depositNote.serialize()),
     paybackFileB64: toB64(NoteFile.fromOutputNote(paybackNote).serialize()),
     noteId: depositNote.id().toString(),
     paybackId: paybackNote.id().toString(),
-  };
+  }));
+  console.log(`[diag] deposit BUILD OK noteId=${out.noteId?.slice(0, 12)} paybackId=${out.paybackId?.slice(0, 12)}`);
+  return out;
 }
 
 export interface ClientRedeemParams {
