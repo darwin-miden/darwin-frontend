@@ -116,7 +116,7 @@ export async function buildClientDripNote(
 
   // Drip request: no asset, storage [suffix, prefix, serial(4)], attached to the
   // dispenser network account.
-  const storage = new NoteStorage([requester.suffix(), requester.prefix(), ...serial.toFelts()]);
+  const storage = mkStorage(sdk, [requester.suffix(), requester.prefix(), ...serial.toFelts()]);
   const dripNote = Note.withAttachments(
     new NoteAssets([]),
     new NoteMetadata(requester, NoteType.Public, NoteTag.withAccountTarget(dispenser)),
@@ -129,7 +129,7 @@ export async function buildClientDripNote(
   const payoutRecipient = new NoteRecipient(
     serial,
     NoteScript.p2id(),
-    new NoteStorage([requester.suffix(), requester.prefix()]),
+    mkStorage(sdk, [requester.suffix(), requester.prefix()]),
   );
   const payoutNote = new Note(
     new NoteAssets([new FungibleAsset(dusdc, DRIP_AMOUNT)]),
@@ -281,30 +281,27 @@ function randWord(sdk: any) {
 // instance; a constructor from a freshly `import()`-ed sdk rejects it with
 // "expected instance of rh". Round-trip through this sdk's (de)serializer to rebind
 // it to the local instance. No-op if it's already local (or lacks serialize).
+// A NoteScript from useCompile() may be bound to the web-client's worker WASM
+// instance; round-trip through this sdk's (de)serializer to rebind it. No-op if it's
+// already local or lacks serialize.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizeScript(NoteScriptCls: any, script: any): any {
-  const cname = script?.constructor?.name;
-  const hasSer = typeof script?.serialize === "function";
-  let instBefore = "?";
   try {
-    instBefore = String(script instanceof NoteScriptCls);
-  } catch {
-    /* instanceof can throw across wasm instances */
-  }
-  try {
-    if (hasSer && typeof NoteScriptCls?.deserialize === "function") {
-      const bytes = script.serialize();
-      const rebound = NoteScriptCls.deserialize(bytes);
-      console.log(
-        `[diag] normalize OK cname=${cname} hadSer=${hasSer} instBefore=${instBefore} bytes=${bytes?.length} instAfter=${String(rebound instanceof NoteScriptCls)}`,
-      );
-      return rebound;
+    if (typeof script?.serialize === "function" && typeof NoteScriptCls?.deserialize === "function") {
+      return NoteScriptCls.deserialize(script.serialize());
     }
-    console.log(`[diag] normalize SKIP cname=${cname} hasSer=${hasSer} hasDeser=${typeof NoteScriptCls?.deserialize} inst=${instBefore}`);
-  } catch (e) {
-    console.log(`[diag] normalize THREW cname=${cname} err=${String((e as { message?: string })?.message ?? e).slice(0, 140)}`);
+  } catch {
+    /* fall through — use the original script */
   }
   return script;
+}
+
+// NoteStorage requires a FeltArray, NOT a plain Felt[]. A plain array throws
+// "expected instance of rh" in the browser's st WASM build (the node build coerced
+// silently, which is why this only failed in the browser). Always wrap.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mkStorage(sdk: any, felts: any[]): any {
+  return new sdk.NoteStorage(new sdk.FeltArray(felts));
 }
 
 // DCC mint fee = 30 bps; the on-chain note uses net = D*100*(10000-30)/10000.
@@ -423,15 +420,8 @@ export async function buildClientDepositNote(
       throw e;
     }
   };
-  try {
-    const p2 = NoteScript.p2id();
-    console.log(`[diag] p2id cname=${p2?.constructor?.name} inst=${String(p2 instanceof NoteScript)}`);
-  } catch (e) {
-    console.log(`[diag] p2id threw ${String((e as { message?: string })?.message ?? e).slice(0, 80)}`);
-  }
-
   const paybackSerial = randWord(sdk);
-  const p2idStorage = D("p2idStorage", () => new NoteStorage([recipient.suffix(), recipient.prefix()]));
+  const p2idStorage = mkStorage(sdk, [recipient.suffix(), recipient.prefix()]);
   const paybackRecipient = D("paybackRecipient", () => new NoteRecipient(paybackSerial, NoteScript.p2id(), p2idStorage));
   const paybackTag = NoteTag.withAccountTarget(recipient);
   const paybackNote = D(
@@ -462,10 +452,7 @@ export async function buildClientDepositNote(
   // rh". Normalize it by round-tripping through this sdk's (de)serializer. Best-
   // effort: if it's already the right instance, this is a harmless no-op.
   const navScriptLocal = normalizeScript(NoteScript, navScript);
-  const depositRecipient = D(
-    "depositRecipient(navScript)",
-    () => new NoteRecipient(randWord(sdk), navScriptLocal, new NoteStorage(inputs)),
-  );
+  const depositRecipient = new NoteRecipient(randWord(sdk), navScriptLocal, mkStorage(sdk, inputs));
 
   // Public note carrying the dUSDC collateral, tagged + attached to the network
   // faucet so the NTB drains it + mints shares.
@@ -539,7 +526,7 @@ export async function buildClientRedeemNote(
   // Private P2ID payback carrying the ACTUAL released dUSDC (canonical 2-felt
   // storage — see buildClientDepositNote).
   const paybackSerial = randWord(sdk);
-  const p2idStorage = new NoteStorage([redeemer.suffix(), redeemer.prefix()]);
+  const p2idStorage = mkStorage(sdk, [redeemer.suffix(), redeemer.prefix()]);
   const paybackRecipient = new NoteRecipient(paybackSerial, NoteScript.p2id(), p2idStorage);
   const paybackTag = NoteTag.withAccountTarget(redeemer);
   const paybackNote = new Note(
@@ -565,7 +552,7 @@ export async function buildClientRedeemNote(
   ];
   // Rebind the hook-compiled script to this sdk instance — see normalizeScript.
   const redeemScriptLocal = normalizeScript(NoteScript, redeemScript);
-  const redeemRecipient = new NoteRecipient(randWord(sdk), redeemScriptLocal, new NoteStorage(inputs));
+  const redeemRecipient = new NoteRecipient(randWord(sdk), redeemScriptLocal, mkStorage(sdk, inputs));
 
   // Public note carrying the shares to burn, tagged + attached to the faucet.
   const redeemNote = Note.withAttachments(
