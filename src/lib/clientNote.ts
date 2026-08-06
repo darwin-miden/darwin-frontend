@@ -308,24 +308,68 @@ export async function compileNavReadScriptsFpi(txScript: CompileTxScript): Promi
 }
 
 /**
+ * Pragma's single testnet publisher account for the CURRENT oracle iteration.
+ * get_median reads its `pragma::publisher::entries` map, keyed by the pair word
+ * [0,0,0,index], so a local FPI read must supply it as a foreign account carrying
+ * those keys. Verbatim from darwin-relay/pragma/read_pragma.rs (the working Rust
+ * reader) — Pragma rotates both the oracle and publisher between iterations, so
+ * these two constants move together.
+ */
+export const PRAGMA_PUBLISHER_ID = "0x6d37b2d4aedd697140338bb31c67e3";
+
+/** Pragma's publisher entries storage-map slot. */
+const PRAGMA_ENTRIES_SLOT = "pragma::publisher::entries";
+
+/**
+ * DCC constituent Pragma pair indices, in the order pragma_fpi.masm::load_prices
+ * reads them: WBTC=3, ETH=2, USDT=4. The read must expose the publisher's entries
+ * for exactly these pairs (a get_median for an un-exposed pair can't resolve its
+ * get_map_item and the FPI read faults).
+ */
+const FPI_PAIR_INDICES = [3n, 2n, 4n];
+
+/**
+ * The foreign-account descriptors get_median needs for a LOCAL FPI read: the
+ * oracle (no storage requirement — AccountStorageRequirements::default) plus the
+ * publisher, with its entries map keyed on each queried pair word. Mirrors
+ * read_pragma.rs's ForeignAccount setup exactly. Both accounts must already be
+ * imported (importAccountById) so the client holds their public state.
+ */
+async function pragmaFpiForeignAccounts(): Promise<unknown[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sdk = (await import("@miden-sdk/miden-sdk")) as any;
+  const keys = FPI_PAIR_INDICES.map(
+    (idx) => new sdk.Word(new BigUint64Array([0n, 0n, 0n, idx])),
+  );
+  const entriesReq = sdk.AccountStorageRequirements.fromSlotAndKeysArray([
+    new sdk.SlotAndKeys(PRAGMA_ENTRIES_SLOT, keys),
+  ]);
+  return [
+    { id: PRAGMA_PUBLISHER_ID, storage: entriesReq },
+    PRAGMA_ORACLE_ID, // oracle needs no storage req (default) — see read_pragma.rs
+  ];
+}
+
+/**
  * FPI variant of {@link readFaucetNavBrowser}. The compute_v view runs
- * execute_foreign_procedure against Pragma, so the oracle account MUST be supplied
- * to the local execution via `foreignAccounts` (a local view call can't lazily
- * load foreign accounts the way the on-chain NTB does). Returns the exact S and
- * Pragma-priced V the on-chain note settles against — no par fallback needed at
+ * execute_foreign_procedure(get_median) against Pragma, which reads the oracle AND
+ * its publisher's entries — so BOTH must be supplied to the local execution via
+ * `foreignAccounts` with the right storage requirements (a local view call can't
+ * lazily load foreign accounts the way the on-chain NTB does). Returns the exact S
+ * and Pragma-priced V the on-chain note settles against — no par fallback needed at
  * S>0. Like the feed read, an all-zero result throws so the caller can fall back.
  */
 export async function readFaucetNavBrowserFpi(
   executeProgram: ExecuteProgram,
   faucetId: string,
   scripts: NavReadScripts,
-  pragmaId: string = PRAGMA_ORACLE_ID,
 ): Promise<FaucetNav> {
+  const foreignAccounts = await pragmaFpiForeignAccounts();
   const supplyRes = await executeProgram({ accountId: faucetId, script: scripts.supplyScript, skipSync: true });
   const vRes = await executeProgram({
     accountId: faucetId,
     script: scripts.vScript,
-    foreignAccounts: [pragmaId],
+    foreignAccounts,
     skipSync: true,
   });
   const top = (r: { stack: bigint[] }): bigint => BigInt(r.stack?.[0] ?? 0n);

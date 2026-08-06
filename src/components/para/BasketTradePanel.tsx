@@ -47,6 +47,7 @@ import {
   computeMintAmount,
   computeReleaseAmount,
   PRAGMA_ORACLE_ID,
+  PRAGMA_PUBLISHER_ID,
   readFaucetNavBrowser,
   readFaucetNavBrowserFpi,
 } from "../../lib/clientNote";
@@ -528,11 +529,19 @@ export function BasketTradePanel({
           // thus mint = net*S/V — is felt-exact at ANY S, matching whatever the on-chain
           // note settles against. Pragma's public state must be importable for the
           // local FPI read, so import it first (no-op once tracked).
-          if (fpi) await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_ORACLE_ID);
+          if (fpi) {
+            await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_ORACLE_ID);
+            await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_PUBLISHER_ID);
+          }
           const nav = fpi
             ? await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead)
             : await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
           const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
+          // [fpi-diag] one-line receipt so a single browser run confirms the read
+          // resolved (S,V) and the predicted mint — remove once validated live.
+          console.log(
+            `[client-buy]${fpi ? "[fpi]" : ""} nav S=${nav.supply} V=${nav.vaultValue} amount=${amountBase} mint=${mintAmount}`,
+          );
           built = await buildClientDepositNote(prep.navScript, {
             faucet: clientFaucet,
             sender: signerAccountId,
@@ -629,7 +638,10 @@ export function BasketTradePanel({
           // FPI: read V via the exact load_prices + compute_v sequence with Pragma
           // supplied as a foreign account, so release = shares*V/S/100 is felt-exact
           // (see onBuy for the full rationale). Import Pragma's state first.
-          if (fpi) await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_ORACLE_ID);
+          if (fpi) {
+            await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_ORACLE_ID);
+            await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_PUBLISHER_ID);
+          }
           const nav = fpi
             ? await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead)
             : await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
