@@ -120,7 +120,7 @@ export async function buildClientDripNote(
   const dripNote = Note.withAttachments(
     new NoteAssets([]),
     new NoteMetadata(requester, NoteType.Public, NoteTag.withAccountTarget(dispenser)),
-    new NoteRecipient(randWord(sdk), dripScript, storage),
+    new NoteRecipient(randWord(sdk), normalizeScript(NoteScript, dripScript), storage),
     [new NetworkAccountTarget(dispenser).toAttachment()],
   );
 
@@ -277,6 +277,22 @@ function randWord(sdk: any) {
   return sdk.Word.newFromFelts(felts);
 }
 
+// A NoteScript from useCompile() is bound to the web-client's (worker) WASM
+// instance; a constructor from a freshly `import()`-ed sdk rejects it with
+// "expected instance of rh". Round-trip through this sdk's (de)serializer to rebind
+// it to the local instance. No-op if it's already local (or lacks serialize).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeScript(NoteScriptCls: any, script: any): any {
+  try {
+    if (script?.serialize && NoteScriptCls?.deserialize) {
+      return NoteScriptCls.deserialize(script.serialize());
+    }
+  } catch {
+    /* fall through — use the original script */
+  }
+  return script;
+}
+
 // DCC mint fee = 30 bps; the on-chain note uses net = D*100*(10000-30)/10000.
 const FEE_COMPLEMENT = 9970n;
 
@@ -406,7 +422,13 @@ export async function buildClientDepositNote(
     new Felt(1n), // fee_factor
     new Felt(1n), // nav_scale
   ];
-  const depositRecipient = new NoteRecipient(randWord(sdk), navScript, new NoteStorage(inputs));
+  // `navScript` was compiled by useCompile() in the web-client's WASM context (a
+  // worker), so it isn't recognized as a NoteScript of THIS freshly-imported sdk
+  // instance → `new NoteRecipient(..., navScript, ...)` throws "expected instance of
+  // rh". Normalize it by round-tripping through this sdk's (de)serializer. Best-
+  // effort: if it's already the right instance, this is a harmless no-op.
+  const navScriptLocal = normalizeScript(NoteScript, navScript);
+  const depositRecipient = new NoteRecipient(randWord(sdk), navScriptLocal, new NoteStorage(inputs));
 
   // Public note carrying the dUSDC collateral, tagged + attached to the network
   // faucet so the NTB drains it + mints shares.
@@ -500,7 +522,9 @@ export async function buildClientRedeemNote(
     ...releaseAsset.vaultKey().toFelts(), // 108..111 dUSDC KEY
     ...releaseAsset.intoWord().toFelts(), // 112..115 dUSDC VALUE (amount patched on-chain)
   ];
-  const redeemRecipient = new NoteRecipient(randWord(sdk), redeemScript, new NoteStorage(inputs));
+  // Rebind the hook-compiled script to this sdk instance — see normalizeScript.
+  const redeemScriptLocal = normalizeScript(NoteScript, redeemScript);
+  const redeemRecipient = new NoteRecipient(randWord(sdk), redeemScriptLocal, new NoteStorage(inputs));
 
   // Public note carrying the shares to burn, tagged + attached to the faucet.
   const redeemNote = Note.withAttachments(
