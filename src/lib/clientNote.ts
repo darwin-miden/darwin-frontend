@@ -211,8 +211,19 @@ type CompileTxScript = (opts: {
 type ExecuteProgram = (opts: {
   accountId: string;
   script: unknown;
+  /** Foreign accounts referenced by the script (e.g. Pragma for an FPI read). */
+  foreignAccounts?: (string | unknown)[];
   skipSync?: boolean;
 }) => Promise<{ stack: bigint[] }>;
+
+/**
+ * Pragma oracle account on Miden testnet — the foreign account the FPI note reads
+ * medians from via execute_foreign_procedure. Its id is hardcoded in
+ * pragma_fpi.masm (PRAGMA_PRE/SUF). A LOCAL FPI read must supply it to
+ * executeProgram's `foreignAccounts` (the network's NTB loads it lazily on-chain;
+ * a local view call can't, so we provide it explicitly).
+ */
+export const PRAGMA_ORACLE_ID = "0x7ad4aa02b1816c117e32853e210c28";
 
 /** Pre-compiled NAV-read scripts (supply + compute_v). */
 export interface NavReadScripts {
@@ -260,6 +271,68 @@ export async function readFaucetNavBrowser(
   // correctly handled server-side, so this is safe either way.
   if (supply === 0n && vaultValue === 0n) {
     throw new Error("empty NAV read (faucet unsynced or unexpected stack shape) — using server build");
+  }
+  return { supply, vaultValue };
+}
+
+/**
+ * The FPI compute_v view. The deposit note prices at V by running two ops before
+ * it drains the collateral: `exec.pragma_fpi::load_prices` (reads the 3 live
+ * medians via execute_foreign_procedure into mem[230..232]) then
+ * `call.price_oracle::compute_v` (the faucet's own FPI oracle, which sources
+ * prices from that memory). Reproducing that EXACT sequence here yields the exact
+ * pre-deposit V the note settles against — so even at S>0 the client mint
+ * prediction is felt-exact (matching whatever the on-chain note computes, whether
+ * or not the exec→call boundary shares memory: identical MASM ⇒ identical V).
+ */
+const COMPUTE_V_FPI_TX_MASM = `use miden::core::sys
+use darwin::pragma_fpi
+use darwin::price_oracle
+begin
+    exec.pragma_fpi::load_prices
+    call.price_oracle::compute_v
+    exec.sys::truncate_stack
+end
+`;
+
+/**
+ * FPI variant of {@link compileNavReadScripts}: the compute_v view links the FPI
+ * libraries (pragma_fpi + the FPI price oracle) and runs load_prices first.
+ */
+export async function compileNavReadScriptsFpi(txScript: CompileTxScript): Promise<NavReadScripts> {
+  const [supplyScript, vScript] = await Promise.all([
+    txScript({ code: SUPPLY_TX_MASM }),
+    txScript({ code: COMPUTE_V_FPI_TX_MASM, libraries: NAV_NOTE_FPI_LIBRARIES }),
+  ]);
+  return { supplyScript, vScript };
+}
+
+/**
+ * FPI variant of {@link readFaucetNavBrowser}. The compute_v view runs
+ * execute_foreign_procedure against Pragma, so the oracle account MUST be supplied
+ * to the local execution via `foreignAccounts` (a local view call can't lazily
+ * load foreign accounts the way the on-chain NTB does). Returns the exact S and
+ * Pragma-priced V the on-chain note settles against — no par fallback needed at
+ * S>0. Like the feed read, an all-zero result throws so the caller can fall back.
+ */
+export async function readFaucetNavBrowserFpi(
+  executeProgram: ExecuteProgram,
+  faucetId: string,
+  scripts: NavReadScripts,
+  pragmaId: string = PRAGMA_ORACLE_ID,
+): Promise<FaucetNav> {
+  const supplyRes = await executeProgram({ accountId: faucetId, script: scripts.supplyScript, skipSync: true });
+  const vRes = await executeProgram({
+    accountId: faucetId,
+    script: scripts.vScript,
+    foreignAccounts: [pragmaId],
+    skipSync: true,
+  });
+  const top = (r: { stack: bigint[] }): bigint => BigInt(r.stack?.[0] ?? 0n);
+  const supply = top(supplyRes);
+  const vaultValue = top(vRes);
+  if (supply === 0n && vaultValue === 0n) {
+    throw new Error("empty FPI NAV read (faucet unsynced or Pragma unavailable) — using server build");
   }
   return { supply, vaultValue };
 }

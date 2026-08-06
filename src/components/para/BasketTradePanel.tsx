@@ -41,11 +41,14 @@ import {
   compileNavDepositScript,
   compileNavDepositScriptFpi,
   compileNavReadScripts,
+  compileNavReadScriptsFpi,
   compileNavRedeemScript,
   compileNavRedeemScriptFpi,
   computeMintAmount,
   computeReleaseAmount,
+  PRAGMA_ORACLE_ID,
   readFaucetNavBrowser,
+  readFaucetNavBrowserFpi,
 } from "../../lib/clientNote";
 import { liveDccBalance } from "../../lib/dccBalance";
 
@@ -505,26 +508,29 @@ export function BasketTradePanel({
           //    so the background "keep cash live" sync can't race it.
           //  · executeProgram DOES self-lock (its own runExclusive) → call it OUTSIDE
           //    ours; nesting the non-reentrant lock would deadlock.
+          const fpi = isFpiBasket(symbol);
           const prep = await runExclusive(async () => {
             await syncState();
             return {
-              navScript: await (isFpiBasket(symbol)
+              navScript: await (fpi
                 ? compileNavDepositScriptFpi(noteScript)
                 : compileNavDepositScript(noteScript)),
-              navRead: await compileNavReadScripts(txScript),
+              navRead: await (fpi
+                ? compileNavReadScriptsFpi(txScript)
+                : compileNavReadScripts(txScript)),
             };
           });
           // Import the faucet's public state (flat web-client import, under the lock).
           await ensureSignerAccountLoaded(client, runExclusive, clientFaucet);
-          // FPI faucet: compute_v is priced ON-CHAIN via Pragma (the note runs
-          // load_prices). The client read can't load Pragma locally yet, so a fresh
-          // faucet reads empty — treat it as par (S=0 → mint = net, exactly what the
-          // on-chain note produces). [S>0 client-side FPI read: follow-up.]
-          const nav = isFpiBasket(symbol)
-            ? await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead).catch(() => ({
-                supply: 0n,
-                vaultValue: 0n,
-              }))
+          // FPI faucet: compute_v is priced ON-CHAIN via Pragma (execute_foreign_
+          // procedure). The read reproduces the note's exact load_prices + compute_v
+          // sequence with the Pragma oracle supplied as a foreign account, so V — and
+          // thus mint = net*S/V — is felt-exact at ANY S, matching whatever the on-chain
+          // note settles against. Pragma's public state must be importable for the
+          // local FPI read, so import it first (no-op once tracked).
+          if (fpi) await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_ORACLE_ID);
+          const nav = fpi
+            ? await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead)
             : await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
           const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
           built = await buildClientDepositNote(prep.navScript, {
@@ -607,17 +613,26 @@ export function BasketTradePanel({
           const clientFaucet = basketFaucetId(symbol) ?? CLIENT_TEST_FAUCET;
           // Compile under the lock; executeProgram outside it (self-locks). Same
           // lock discipline as onBuy — see the detailed note there.
+          const fpi = isFpiBasket(symbol);
           const prep = await runExclusive(async () => {
             await syncState();
             return {
-              redeemScript: await (isFpiBasket(symbol)
+              redeemScript: await (fpi
                 ? compileNavRedeemScriptFpi(noteScript)
                 : compileNavRedeemScript(noteScript)),
-              navRead: await compileNavReadScripts(txScript),
+              navRead: await (fpi
+                ? compileNavReadScriptsFpi(txScript)
+                : compileNavReadScripts(txScript)),
             };
           });
           await ensureSignerAccountLoaded(client, runExclusive, clientFaucet);
-          const nav = await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
+          // FPI: read V via the exact load_prices + compute_v sequence with Pragma
+          // supplied as a foreign account, so release = shares*V/S/100 is felt-exact
+          // (see onBuy for the full rationale). Import Pragma's state first.
+          if (fpi) await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_ORACLE_ID);
+          const nav = fpi
+            ? await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead)
+            : await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
           const release = computeReleaseAmount(sharesBase, nav.supply, nav.vaultValue);
           built = await buildClientRedeemNote(prep.redeemScript, {
             faucet: clientFaucet,
