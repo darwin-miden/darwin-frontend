@@ -56,17 +56,6 @@ export const BASKETS: readonly Basket[] = [
       { faucetAlias: "darwin-dai", targetWeightBps: 4000, pragmaPair: "DAI/USD" },
     ],
   },
-  {
-    name: "Core Crypto (FPI test)",
-    symbol: "DCF",
-    description:
-      "TEST basket — NAV priced by reading Pragma LIVE on-chain via FPI (no keeper). Same 40/40/20 as Core Crypto.",
-    constituents: [
-      { faucetAlias: "darwin-wbtc", targetWeightBps: 4000, pragmaPair: "WBTC/USD" },
-      { faucetAlias: "darwin-eth", targetWeightBps: 4000, pragmaPair: "ETH/USD" },
-      { faucetAlias: "darwin-usdt", targetWeightBps: 2000, pragmaPair: "USDT/USD" },
-    ],
-  },
 ] as const;
 
 export function basketBySymbol(symbol: BasketSymbol): Basket {
