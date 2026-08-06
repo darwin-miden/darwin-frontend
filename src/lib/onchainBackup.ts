@@ -26,6 +26,13 @@ import { SET_USER_POSITION_MAST } from "./trustlessController";
 // Distinctive constant in the basket_suffix slot — real faucet suffixes are
 // AccountId-derived and never take this value. (Fits in a Felt, < Goldilocks p.)
 export const BACKUP_MAGIC = 0xda2b1cead0c0ffeen; // "darwin backup"-ish sentinel
+
+// The NETWORK backup controller (deploy_backup_controller, 2026-08-06). The browser
+// emits backup_write notes (root 0xb5237847…) the NTB applies to its slot-10 — the
+// server-free write path (no Mac relay). Reads (readOnchainBackup) target the same
+// controller. Distinct from TRUSTLESS_CONTROLLER_HEX (the public v8-noauth used by
+// the Mac-relay path).
+export const BACKUP_NETWORK_CONTROLLER_HEX = "0x1544a01a5a9abe7127116eefb671a9";
 // chunkIndex reserved for the meta/count entry (way above any real chunk count).
 export const BACKUP_META_INDEX = 0xffffffffn;
 

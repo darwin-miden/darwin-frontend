@@ -76,12 +76,17 @@ import { readNavStatus } from "../lib/navClient";
 import { autoBackupWallet, restoreFromBackup } from "../lib/walletBackup";
 import { decryptBytes, encryptBytes } from "../lib/storeBackup";
 import {
+  BACKUP_NETWORK_CONTROLLER_HEX,
   gunzip,
   gzip,
   readOnchainBackup,
   warmOnchainBackup,
   writeOnchainBackupViaMac,
 } from "../lib/onchainBackup";
+import {
+  compileBackupWriteScript,
+  writeOnchainBackupViaNetwork,
+} from "../lib/clientNote";
 import { backupAuthTypedData } from "../lib/backupAuthMessage";
 import { logActivity } from "../lib/activityLog";
 
@@ -397,7 +402,7 @@ export function TrustlessRedeemPanel({
   const { waitForConsumableNotes } = useWaitForNotes();
   const { waitForCommit } = useWaitForCommit();
   const { runExclusive, client } = useMiden();
-  const { txScript: compileTxScript } = useCompile();
+  const { txScript: compileTxScript, noteScript: compileNoteScript } = useCompile();
   const { execute: executeTx } = useTransaction();
   // Backup & restore are INVISIBLE + automatic — no buttons, no prompts, nothing
   // for the user to see (src/lib/walletBackup.ts): auto-backup after every
@@ -601,12 +606,115 @@ export function TrustlessRedeemPanel({
       }
       return r;
     };
+
+    // NETWORK-write variant: the same export→encrypt→write→read→decrypt round-trip,
+    // but the WRITE is SERVER-FREE — the browser emits backup_write network notes the
+    // NTB applies to the BACKUP_NETWORK_CONTROLLER (no Mac relay). Run in the console:
+    //   await window.__darwinBackupNetworkTest()
+    const wn = window as unknown as {
+      __darwinBackupNetworkTest?: () => Promise<Record<string, unknown>>;
+    };
+    wn.__darwinBackupNetworkTest = async () => {
+      const r: Record<string, unknown> = {};
+      const log = (m: string) => {
+        try {
+          console.log("[nettest] " + m);
+        } catch {
+          /* noop */
+        }
+      };
+      try {
+        const { AccountId } = await import("@miden-sdk/miden-sdk");
+        const cAny = client as unknown as {
+          exportAccountFile: (id: unknown) => Promise<{ serialize: () => Uint8Array }>;
+        };
+        // Backup KEY from a throwaway EVM identity; the SIGNER is a fresh private
+        // wallet that emits the network notes (client-managed key).
+        const { privateKeyToAccount } = await import("viem/accounts");
+        const testEvm = privateKeyToAccount(
+          "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+        ).address;
+        const { suffix, prefix } = evmToUserIdFelts(testEvm);
+
+        log("compiling backup_write note-script…");
+        const backupScript = await runExclusive(() =>
+          compileBackupWriteScript(compileNoteScript),
+        );
+
+        const seed = crypto.getRandomValues(new Uint8Array(32));
+        const acct = (await createWallet({
+          initSeed: seed,
+          storageMode: "private",
+          authScheme: AUTH_SCHEME_FALCON_ENUM_VALUE as never,
+        })) as unknown as { id: () => { toString: () => string } };
+        const walletId = acct.id().toString();
+        r.signer = walletId;
+        log(`signer wallet ${walletId}`);
+
+        const file = await cAny.exportAccountFile(AccountId.fromHex(walletId));
+        const fileBytes = file.serialize();
+        r.fileBytes = fileBytes.length;
+        const key = await crypto.subtle.generateKey(
+          { name: "AES-GCM", length: 256 },
+          true,
+          ["encrypt", "decrypt"],
+        );
+        const enc = await encryptBytes(key, await gzip(fileBytes));
+        r.encBytes = enc.length;
+
+        log("emitting backup network notes (no Mac relay)…");
+        const t0 = performance.now();
+        r.nWords = await writeOnchainBackupViaNetwork({
+          client,
+          runExclusive,
+          backupScript,
+          signer: walletId,
+          controller: BACKUP_NETWORK_CONTROLLER_HEX,
+          suffix,
+          prefix,
+          encryptedBytes: enc,
+        });
+        r.emitMs = Math.round(performance.now() - t0);
+        log(`emitted ${r.nWords} words in ${r.emitMs}ms; waiting for NTB + reading back…`);
+
+        // The NTB consumes the notes over several blocks — poll longer than the Mac
+        // test (that write was already committed on return).
+        let readBack: Uint8Array | null = null;
+        const t1 = performance.now();
+        for (let a = 0; a < 20; a++) {
+          await warmOnchainBackup(suffix, prefix, BACKUP_NETWORK_CONTROLLER_HEX);
+          const rb = await readOnchainBackup(suffix, prefix, BACKUP_NETWORK_CONTROLLER_HEX);
+          if (rb && rb.length === enc.length && rb.every((b, i) => b === enc[i])) {
+            readBack = rb;
+            break;
+          }
+          log(`read ${a + 1}: ${rb ? rb.length : "null"}B (want ${enc.length})`);
+          await new Promise((res) => setTimeout(res, 6000));
+        }
+        r.readMs = Math.round(performance.now() - t1);
+        r.onchainEqual = !!readBack;
+        if (!readBack) {
+          r.ok = false;
+          return r;
+        }
+        const back = await gunzip(await decryptBytes(key, readBack));
+        r.decryptEqual =
+          back.length === fileBytes.length && back.every((b, i) => b === fileBytes[i]);
+        r.ok = r.onchainEqual === true && r.decryptEqual === true;
+      } catch (e) {
+        r.error = e instanceof Error ? (e.stack ?? e.message) : String(e);
+        r.ok = false;
+      }
+      return r;
+    };
+
     return () => {
       const g = window as unknown as Record<string, unknown>;
       delete g.__darwinBackupSelfTest;
       delete g.__darwinBackupFullTest;
+      delete g.__darwinBackupNetworkTest;
     };
-  }, [client, createWallet]);
+  }, [client, createWallet, runExclusive, compileNoteScript]);
 
   const [stage, setStage] = useState<Stage>("idle");
   const [walletId, setWalletId] = useState<string | null>(null);

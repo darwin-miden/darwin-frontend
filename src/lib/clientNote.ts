@@ -25,6 +25,10 @@ import navDepositNoteFpiMasm from "./masm/nav_deposit_note_fpi.masm";
 import navRedeemNoteFpiMasm from "./masm/nav_redeem_note_fpi.masm";
 import priceOracleFpiMasm from "./masm/price_oracle_fpi.masm";
 import pragmaFpiMasm from "./masm/pragma_fpi.masm";
+// Server-free network backup: the browser-compiled backup_write note + the pack
+// helpers/keys it shares with the on-chain backup read.
+import backupWriteNoteMasm from "./masm/backup_write_note.masm";
+import { BACKUP_META_INDEX, packBytesToWords } from "./onchainBackup";
 
 /** The `@note_script`-form NAV deposit script (0.15.x), compiled client-side. */
 export const NAV_DEPOSIT_NOTE_MASM: string = navDepositNoteMasm;
@@ -451,6 +455,156 @@ function normalizeScript(NoteScriptCls: any, script: any): any {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mkStorage(sdk: any, felts: any[]): any {
   return new sdk.NoteStorage(new sdk.FeltArray(felts));
+}
+
+/** Chunk-Words per backup note — MUST match backup_write_note.masm's unrolled count. */
+const BACKUP_CHUNKS_PER_NOTE = 24;
+
+/**
+ * The backup_write network note-script (@note_script form), compiled client-side.
+ * It calls set_user_position by MAST root, so it links NO darwin libraries — its
+ * root (0xb5237847…) matches the deployed backup controller's allowlist.
+ */
+export const BACKUP_WRITE_NOTE_MASM: string = backupWriteNoteMasm;
+
+/** Compile the backup_write note-script in the browser (no libraries). */
+export async function compileBackupWriteScript(noteScript: CompileNoteScript): Promise<unknown> {
+  return noteScript({ code: backupWriteNoteMasm });
+}
+
+/**
+ * Build the N backup network notes (serialized b64) that persist `encryptedBytes`
+ * into the backup controller's slot-10 StorageMap, keyed by (suffix, prefix) — the
+ * server-free replacement for /api/backup-write (the Mac relay).
+ *
+ * Payload = the packed chunk Words, then a meta entry [byteLen, nWords] at
+ * BACKUP_META_INDEX. Batched BACKUP_CHUNKS_PER_NOTE per note; the last note's spare
+ * slots pad with the meta entry REPEATED — idempotent (same key, same value), never
+ * a zero-index chunk (that would clobber chunk 0). Each note is a no-asset network
+ * note carrying the entries as storage inputs + a NetworkAccountTarget at the
+ * controller, so the NTB consumes it and applies the 24 set_user_position writes.
+ * Emit ALL notes in ONE tx (withOwnOutputNotes): the NTB may consume them in any
+ * order, but recovery's AES-GCM decrypt fails on a partial read, so the caller just
+ * retries until every chunk has landed.
+ */
+export async function buildBackupNotes(
+  backupScript: unknown,
+  params: {
+    signer: string;
+    controller: string;
+    suffix: bigint;
+    prefix: bigint;
+    encryptedBytes: Uint8Array;
+  },
+): Promise<{ notesB64: string[]; nWords: number }> {
+  const sdk = await import("@miden-sdk/miden-sdk");
+  const {
+    AccountId,
+    NoteScript,
+    NoteRecipient,
+    NoteType,
+    NoteTag,
+    NoteMetadata,
+    NoteAssets,
+    NetworkAccountTarget,
+    Note,
+    Felt,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } = sdk as any;
+
+  const signer = AccountId.fromHex(params.signer);
+  const controller = AccountId.fromHex(params.controller);
+  const script = normalizeScript(NoteScript, backupScript);
+
+  const words = packBytesToWords(params.encryptedBytes);
+  const meta = {
+    index: BACKUP_META_INDEX,
+    value: [BigInt(params.encryptedBytes.length), BigInt(words.length), 0n, 0n],
+  };
+  const entries: { index: bigint; value: bigint[] }[] = words.map((w, i) => ({
+    index: BigInt(i),
+    value: w,
+  }));
+  entries.push(meta);
+  while (entries.length % BACKUP_CHUNKS_PER_NOTE !== 0) entries.push(meta);
+
+  const notesB64: string[] = [];
+  for (let start = 0; start < entries.length; start += BACKUP_CHUNKS_PER_NOTE) {
+    const batch = entries.slice(start, start + BACKUP_CHUNKS_PER_NOTE);
+    // storage felts: [suffix, prefix, (index, f0, f1, f2, f3) × 24] = 122 felts,
+    // exactly the mem[100..221] layout backup_write_note.masm reads.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const felts: any[] = [new Felt(params.suffix), new Felt(params.prefix)];
+    for (const e of batch) {
+      felts.push(
+        new Felt(e.index),
+        new Felt(e.value[0] ?? 0n),
+        new Felt(e.value[1] ?? 0n),
+        new Felt(e.value[2] ?? 0n),
+        new Felt(e.value[3] ?? 0n),
+      );
+    }
+    const note = Note.withAttachments(
+      new NoteAssets([]),
+      new NoteMetadata(signer, NoteType.Public, NoteTag.withAccountTarget(controller)),
+      new NoteRecipient(randWord(sdk), script, mkStorage(sdk, felts)),
+      [new NetworkAccountTarget(controller).toAttachment()],
+    );
+    notesB64.push(toB64(note.serialize()));
+  }
+  return { notesB64, nWords: words.length };
+}
+
+/**
+ * Emit the encrypted account-file backup as network notes — the server-free
+ * replacement for writeOnchainBackupViaMac. Builds the chunk notes and submits
+ * them in ONE transaction (withOwnOutputNotes) via the client's worker-forwarded
+ * submit path (proves off the main thread → no UI freeze); the NTB then consumes
+ * each note and applies its writes to the backup controller. Returns nWords.
+ *
+ * `backupScript` must be pre-compiled by the caller via useCompile().noteScript
+ * (the WebClient has no compile namespace) — see compileBackupWriteScript.
+ */
+export async function writeOnchainBackupViaNetwork(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any;
+  runExclusive: <T>(fn: () => Promise<T>) => Promise<T>;
+  backupScript: unknown;
+  signer: string;
+  controller: string;
+  suffix: bigint;
+  prefix: bigint;
+  encryptedBytes: Uint8Array;
+}): Promise<number> {
+  // Build (WASM note construction) + submit under ONE lock: submitNewTransaction is
+  // the raw client method (the useTransaction hook is what normally self-locks), and
+  // any concurrent WASM op (e.g. the background balance poll) would double-borrow the
+  // client's RefCell and panic "already borrowed" — the same hazard as the FPI buy.
+  return params.runExclusive(async () => {
+    const { notesB64, nWords } = await buildBackupNotes(params.backupScript, {
+      signer: params.signer,
+      controller: params.controller,
+      suffix: params.suffix,
+      prefix: params.prefix,
+      encryptedBytes: params.encryptedBytes,
+    });
+    const sdk = await import("@miden-sdk/miden-sdk");
+    const {
+      AccountId,
+      Note,
+      NoteArray,
+      TransactionRequestBuilder,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } = sdk as any;
+    const notes = notesB64.map((b64) =>
+      Note.deserialize(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))),
+    );
+    const request = new TransactionRequestBuilder()
+      .withOwnOutputNotes(new NoteArray(notes))
+      .build();
+    await params.client.submitNewTransaction(AccountId.fromHex(params.signer), request);
+    return nWords;
+  });
 }
 
 // DCC mint fee = 30 bps; the on-chain note uses net = D*100*(10000-30)/10000.
