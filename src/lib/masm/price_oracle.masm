@@ -110,3 +110,55 @@ pub proc compute_v
     # A `call`ed proc must return a 16-deep stack; drop the extra entry felt.
     swap drop                                      # [V]
 end
+
+#! Same NAV as compute_v, but the three constituent prices come from the LIVE
+#! Pragma feed (loaded on-chain via FPI by pragma_fpi::load_prices) instead of the
+#! keeper-written storage slot. This removes the trusted price keeper: no off-chain
+#! actor can push a fake price to mint/redeem at a wrong NAV — the prices are read
+#! on-chain from Pragma, and a stale/untracked feed makes load_prices REVERT rather
+#! than pricing against a stale value.
+#!
+#! The prices are passed IN ON THE STACK (not via memory): compute_v is `call`ed, so
+#! it runs in a fresh memory context and cannot see the mem[230..232] the note's
+#! load_prices wrote. The note reads them back onto the stack and passes them here.
+#!
+#! Inputs:  [pw, pe, pu]   (effective prices: wbtc, eth, usdt — already /decimals)
+#! Outputs: [V]
+#!
+#! W (feed[3], the converted-cash watermark) is STILL read from the storage feed
+#! slot — it is vault bookkeeping set by the cash-mirror orchestrator, not a price,
+#! so it is a much smaller trust surface than the price feed. Making W fully
+#! trustless (derive it on-chain) is a separate follow-up; the price feed — the
+#! exploitable NAV-manipulation vector — is what FPI closes here.
+pub proc compute_v_fpi
+    # [pw, pe, pu] — stash the FPI prices into this context's memory (the note wrote
+    # them to mem[230..232] in its OWN context, invisible across the `call`).
+    mem_store.230                            # pw → 230
+    mem_store.231                            # pe → 231
+    mem_store.232                            # pu → 232
+
+    # W from the storage feed word (feed[3] = 239). The 3 storage prices (236..238)
+    # are read but ignored — FPI prices (230..232) are used instead.
+    push.PRICE_FEED_SLOT[0..2]
+    exec.active_account::get_item            # [pw_s, pe_s, pu_s, W]
+    mem_storew_le.236 dropw                  # feed → 236..239 (239 = W), []
+
+    push.WBTC_PRE push.WBTC_SUF exec.balance_of   # [Hw]
+    push.230 mem_load mul                    # [Hw*pw]        (FPI price)
+    push.ETH_PRE push.ETH_SUF exec.balance_of     # [He, Hw*pw]
+    push.231 mem_load mul add                # [He*pe + Hw*pw]
+    push.USDT_PRE push.USDT_SUF exec.balance_of   # [Hu, sum]
+    push.232 mem_load mul add                # [Csum]
+
+    push.DUSDC_PRE push.DUSDC_SUF exec.balance_of  # [D, Csum]
+    push.239 mem_load                              # [W, D, Csum]
+    dup.1 dup.1 gte                                # [D>=W, W, D, Csum]
+    if.true
+        sub                                        # [D-W, Csum]
+    else
+        drop drop push.0                           # D < W → unconverted = 0
+    end
+    push.100 mul                                   # [unconverted*100, Csum]
+    add                                            # [V, <entry-frame felt>]
+    swap drop                                      # [V]
+end

@@ -85,9 +85,12 @@ pub proc main
     # builder's (which reads compute_v before the note runs). compute_v runs
     # inside a `call`ed component proc so its feed-slot + vault-balance reads
     # execute in the account context; it returns [V] padded to 16.
-    # Load live Pragma prices via FPI (mem[230..232]) BEFORE compute_v reads them.
+    # Price the vault at the LIVE Pragma NAV, read on-chain via FPI (no price keeper).
+    # compute_v_fpi is `call`ed (fresh mem context) so hand the prices across on the
+    # stack. Stack-neutral: 3 pushed, 3 consumed, [V] returned. Matches relay root.
     exec.pragma_fpi::load_prices
-    call.price_oracle::compute_v
+    push.232 mem_load push.231 mem_load push.230 mem_load   # [pw, pe, pu]
+    call.price_oracle::compute_v_fpi
     mem_store.222
     dropw dropw dropw drop drop drop
 

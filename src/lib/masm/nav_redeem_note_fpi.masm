@@ -86,8 +86,12 @@ pub proc main
     call.fungible::receive_and_burn
 
     # 4. V = vault value (constituents; unaffected by the burn) → mem[222]
+    # Price at the LIVE Pragma NAV via FPI (no price keeper). compute_v_fpi is `call`ed
+    # (fresh mem context) so hand the prices across on the stack. Stack-neutral. Matches
+    # relay root.
     exec.pragma_fpi::load_prices
-    call.price_oracle::compute_v
+    push.232 mem_load push.231 mem_load push.230 mem_load   # [pw, pe, pu]
+    call.price_oracle::compute_v_fpi
     mem_store.222
     dropw dropw dropw drop drop drop
 
