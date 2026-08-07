@@ -32,6 +32,7 @@ import {
   useWaitForNotes,
 } from "@miden-sdk/react";
 import { autoBackupPara } from "../../lib/paraBackup";
+import { isPoisonedAccountError, POISONED_ACCOUNT_MESSAGE } from "../../lib/poisonedAccount";
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { createWalletClient, custom, formatUnits, http, parseUnits } from "viem";
 import { sepolia } from "viem/chains";
@@ -503,6 +504,10 @@ export function ParaFundingPanel() {
             claimed = true;
             break;
           } catch (e) {
+            // A commitment-mismatch here means this account is POISONED (its on-chain
+            // state was created elsewhere and never backed up) — it can NEVER be funded.
+            // Fail fast with a clear message instead of retrying for 6 minutes.
+            if (isPoisonedAccountError(e)) throw new Error(POISONED_ACCOUNT_MESSAGE);
             console.warn("[para-fund] consume skipped (stray note or prover busy)", id, e);
           }
         }

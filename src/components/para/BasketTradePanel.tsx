@@ -36,6 +36,7 @@ import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { ensureSignerAccountLoaded } from "../../lib/ensureAccount";
 import { resilientSync } from "../../lib/resilientSync";
 import { awaitRestore } from "../../lib/paraRestoreGate";
+import { isPoisonedAccountError, POISONED_ACCOUNT_MESSAGE } from "../../lib/poisonedAccount";
 import { basketDecimals, basketFaucetId, isFpiBasket, isNavBasket } from "../../lib/basketFaucets";
 import {
   buildClientDepositNote,
@@ -143,6 +144,9 @@ function isStoreCorruptError(msg: string): boolean {
 
 function prettyErr(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
+  // A poisoned (unrecoverable) private account — its on-chain state was lost, no tx can
+  // ever succeed. Say so plainly instead of a generic "prover busy, try again".
+  if (isPoisonedAccountError(e)) return POISONED_ACCOUNT_MESSAGE;
   if (/deadline|timed\s*out|timeout/i.test(msg)) {
     return "The testnet prover is busy and timed out after a few retries. Wait a moment and try again — your funds are safe.";
   }
