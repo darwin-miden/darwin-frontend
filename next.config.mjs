@@ -165,7 +165,9 @@ const nextConfig = {
         // Baseline security headers on every route.
         source: "/(.*)",
         headers: [
-          { key: "Content-Security-Policy", value: csp },
+          // Content-Security-Policy is now set PER-REQUEST in src/middleware.ts (nonce-
+          // based script-src, replacing 'unsafe-inline'). Setting it here too would emit a
+          // duplicate/older header, so it's intentionally omitted from the static headers.
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           {
