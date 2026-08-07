@@ -13,6 +13,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
+import { keyLimit, rateLimit, rateLimited } from "../../../lib/apiGuard";
+
 export const runtime = "nodejs";
 
 const MAC_API_BASE = process.env.DARWIN_MAC_API_BASE;
@@ -27,12 +29,16 @@ function safeKey(k: unknown): string | null {
 }
 
 export async function POST(req: Request) {
+  // Per-IP + per-key rate limit: each POST writes up to 30 MB to disk keyed by an
+  // arbitrary 0x-hex key, so without a cap an attacker rotates keys to fill the disk.
+  if (!rateLimit(req)) return rateLimited();
   const body = (await req.json().catch(() => null)) as
     | { key?: string; ciphertext?: string }
     | null;
   if (!body?.key || typeof body.ciphertext !== "string") {
     return NextResponse.json({ error: "missing key/ciphertext" }, { status: 400 });
   }
+  if (!keyLimit(`backup-write:${body.key}`, 20)) return rateLimited();
   if (body.ciphertext.length > MAX_CIPHERTEXT) {
     return NextResponse.json({ error: "backup too large" }, { status: 413 });
   }
@@ -61,6 +67,7 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
+  if (!rateLimit(req)) return rateLimited();
   const rawKey = new URL(req.url).searchParams.get("key") ?? "";
 
   if (MAC_API_BASE) {

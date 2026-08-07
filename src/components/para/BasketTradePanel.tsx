@@ -157,30 +157,12 @@ function prettyErr(e: unknown): string {
 // stranded by a reset — the snapshot is kept in localStorage (survives the wipe)
 // and can be re-imported to recover. Best-effort: a failed/oversized backup never
 // blocks the re-sync (the account itself is public and re-imports cleanly on reload).
-async function resetLocalCache(
-  exportStore?: () => Promise<string | Uint8Array>,
-  accountId?: string | null,
-) {
-  try {
-    if (exportStore && accountId && typeof localStorage !== "undefined") {
-      const snap = await exportStore();
-      let b64: string | null = null;
-      if (typeof snap === "string") b64 = snap;
-      else if (snap) {
-        // chunked base64 (avoid a huge spread that blows the call stack)
-        let s = "";
-        const u8 = new Uint8Array(snap);
-        for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode(...u8.subarray(i, i + 8192));
-        b64 = btoa(s);
-      }
-      // localStorage cap ~5MB; skip an oversized snapshot rather than throw.
-      if (b64 && b64.length < 3_000_000) {
-        localStorage.setItem(`darwin.para.storeBackup.${accountId}`, b64);
-      }
-    }
-  } catch {
-    /* best-effort backup — never block the re-sync */
-  }
+async function resetLocalCache() {
+  // NOTE: this used to snapshot the ENTIRE Miden store to localStorage in cleartext
+  // (`darwin.para.storeBackup.<id>`) "as a safety copy" before clearing. That blob is the
+  // confidential vault/notes, was readable by any same-origin script, and nothing ever
+  // read it back — a pure confidentiality leak with no consumer. Removed. Recovery is the
+  // on-chain encrypted backup (restorePara), not a plaintext localStorage dump.
   try {
     await clearMidenStorage();
   } catch {
@@ -1004,7 +986,7 @@ export function BasketTradePanel({
           {error.includes("TRUE on-chain balance") && (
             <button
               type="button"
-              onClick={() => resetLocalCache(exportStore, signerAccountId)}
+              onClick={() => resetLocalCache()}
               className="nav-cta"
               style={{ ...sty.fullBtn, marginTop: 8 }}
             >

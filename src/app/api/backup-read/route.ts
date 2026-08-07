@@ -17,6 +17,15 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import {
+  acquireSlot,
+  busySlot,
+  keyLimit,
+  rateLimit,
+  rateLimited,
+  releaseSlot,
+} from "../../../lib/apiGuard";
+
 export const runtime = "nodejs";
 
 const MAC_API_BASE = process.env.DARWIN_MAC_API_BASE;
@@ -188,11 +197,17 @@ function parseFelts(stdout: string): bigint[] {
 }
 
 export async function POST(req: Request) {
+  // This route spawns the backup_read binary and, on fallback, up to 12 concurrent
+  // miden-client exec subprocesses. Without the shared rate limit + concurrency slot an
+  // unauthenticated flood fork-bombs the operator host (= the whole app). keyLimit also
+  // caps per-(suffix,prefix) reads so a single target can't be hammered.
+  if (!rateLimit(req)) return rateLimited();
   const body = (await req.json().catch(() => null)) as
     | { suffix?: string; prefix?: string; controllerId?: string; warm?: boolean }
     | null;
   if (!body?.suffix || !body?.prefix)
     return jsonError("missing suffix/prefix");
+  if (!keyLimit(`backup-read:${body.suffix}:${body.prefix}`, 30)) return rateLimited();
   const controllerId = body.controllerId ?? "";
   if (!/^0x[0-9a-fA-F]{30}$/.test(controllerId))
     return jsonError("controllerId must be a Miden account hex");
@@ -219,6 +234,10 @@ export async function POST(req: Request) {
   if ([suffix, prefix].some((f) => f < 0n || f >= FELT_MAX))
     return jsonError("suffix/prefix out of field range");
 
+  // Everything below spawns subprocesses — take a global concurrency slot and release it
+  // no matter which path returns.
+  if (!acquireSlot()) return busySlot();
+  try {
   const midenHome = process.env.DARWIN_MIDEN_HOME;
   const env = midenHome ? { ...process.env, HOME: midenHome } : process.env;
 
@@ -296,5 +315,8 @@ export async function POST(req: Request) {
     return jsonError(`backup-read failed: ${String(e).slice(0, 120)}`, 500);
   } finally {
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+  } finally {
+    releaseSlot();
   }
 }

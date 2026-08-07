@@ -10,6 +10,8 @@
 import { spawn } from "node:child_process";
 import { NextResponse } from "next/server";
 
+import { acquireSlot, busySlot, rateLimit, rateLimited, releaseSlot } from "../../../lib/apiGuard";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -20,10 +22,16 @@ const BIN =
   "/Users/eden/data/darwin/repos/darwin-protocol/target/release/note_committed";
 
 export async function GET(req: Request) {
+  // Per-IP rate limit + global concurrency slot: this spawns a 15s subprocess per call,
+  // so without the shared guard an unauthenticated flood fork-bombs the operator host.
+  if (!rateLimit(req)) return rateLimited();
   const id = new URL(req.url).searchParams.get("id");
   if (!id || !/^0x[0-9a-fA-F]{64}$/.test(id)) {
     return NextResponse.json({ error: "invalid note id" }, { status: 400 });
   }
+  // Proxy path (MAC_API_BASE) doesn't spawn locally — only take a slot for the local
+  // subprocess path below.
+  if (!MAC_API_BASE && !acquireSlot()) return busySlot();
 
   // On Vercel the binary isn't present — proxy to the operator host.
   if (MAC_API_BASE) {
@@ -36,20 +44,23 @@ export async function GET(req: Request) {
     });
   }
 
-  const out = await new Promise<string>((resolve) => {
-    const child = spawn(BIN, [id]);
-    let s = "";
-    const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
-    child.stdout.on("data", (d) => (s += d.toString()));
-    child.on("error", () => {
-      clearTimeout(timer);
-      resolve("error");
+  try {
+    const out = await new Promise<string>((resolve) => {
+      const child = spawn(BIN, [id]);
+      let s = "";
+      const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
+      child.stdout.on("data", (d) => (s += d.toString()));
+      child.on("error", () => {
+        clearTimeout(timer);
+        resolve("error");
+      });
+      child.on("close", () => {
+        clearTimeout(timer);
+        resolve(s.trim());
+      });
     });
-    child.on("close", () => {
-      clearTimeout(timer);
-      resolve(s.trim());
-    });
-  });
-
-  return NextResponse.json({ committed: out.includes("committed") });
+    return NextResponse.json({ committed: out.includes("committed") });
+  } finally {
+    releaseSlot();
+  }
 }
