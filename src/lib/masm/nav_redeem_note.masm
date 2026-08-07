@@ -99,9 +99,9 @@ pub proc main
         mem_load.210 push.100 swap      # [s, 100]
         exec.math::felt_div             # [s/100]
     else
-        mem_load.210 mem_load.222 mul   # [s*V]
-        mem_load.221 swap               # [s*V, S]
-        exec.math::felt_div             # [s*V/S]   (USD*1e8)
+        # mul_div: exact 128-bit s*V / S; REVERTS if s*V ≥ 2^64 rather than the
+        # field-multiply wrap that would misprice the payout. Stack: [S, V, s] → s*V/S.
+        mem_load.210 mem_load.222 mem_load.221 exec.math::mul_div   # [s*V/S]  (USD*1e8)
         push.100 swap                   # [s*V/S, 100]
         exec.math::felt_div             # [s*V/S/100]  (dUSDC 6-dec)
     end

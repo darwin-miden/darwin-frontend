@@ -110,9 +110,11 @@ pub proc main
             mem_load.220
         else
             # shares = net * S / V   (V = mem[222], the pre-deposit vault value)
-            mem_load.221 mem_load.220 mul
-            mem_load.222 swap
-            exec.math::felt_div
+            # mul_div: exact 128-bit net*S / V (u64::widening_mul then limb division);
+            # REVERTS if net*S ≥ 2^64 instead of the field-multiply wrap that would
+            # silently over-mint. Validated in-VM (darwin-protocol tests/mul_div.rs).
+            # Stack: [V, net, S] → net*S/V.  Must match the relay note's MAST root.
+            mem_load.221 mem_load.220 mem_load.222 exec.math::mul_div
         end
     end
 
