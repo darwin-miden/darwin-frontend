@@ -16,11 +16,23 @@
  * commitment is deterministic for a given Para wallet and re-derivable on any
  * origin, so the same login always decrypts its own backup — WITHOUT a Para
  * signature (Para's MPC ECDSA is non-deterministic, unusable for a stable key).
- * NOTE (security): the commitment is public-key material; a stronger scheme would
- * derive the key from a secret only the MPC key can produce. Acceptable for the
- * testnet demo (the commitment isn't on-chain for a private account); flagged for
- * production. Storage key = the account id's (suffix, prefix), like the self-
- * custody backup, so restore reads the right slot-10 rows.
+ * Storage key = the account id's (suffix, prefix), so restore reads the right rows.
+ *
+ * ┌─ SECURITY — DEFERRED (architectural, tracked; not fixable client-side alone) ───────┐
+ * │ 1. CONFIDENTIALITY: the AES key is a deterministic function of PUBLIC key material  │
+ * │    (the pubkey commitment) and the ciphertext lives in a WORLD-READABLE controller  │
+ * │    slot keyed by the public account id. Anyone with the account id + pubkey can      │
+ * │    decrypt the vault/positions (they still can't SPEND — Para signs). Real fix:      │
+ * │    derive the key from a secret only the MPC key can produce (deterministic sig /    │
+ * │    sealed data-key). Blocked today by Para's non-deterministic ECDSA.                │
+ * │ 2. INTEGRITY: writes go to a NoAuth controller with NO ownership check, so anyone    │
+ * │    can overwrite/corrupt a victim's slot (key = victim's public id) and brick        │
+ * │    recovery. Real fix: authenticate the on-chain write (as writeOnchainBackupViaMac  │
+ * │    does with EIP-712) or bind the slot to an MPC-only signature. Needs a controller  │
+ * │    redeploy. Mitigation in place: restore VERIFIES decrypt + a version guard, so a   │
+ * │    corrupt/older backup is rejected rather than silently clobbering local state.     │
+ * │ Both couple to the pending Target A (relayer) vs B (pseudonymity) product decision.  │
+ * └────────────────────────────────────────────────────────────────────────────────────┘
  */
 
 import { encryptBytes, decryptBytes } from "./storeBackup";
@@ -127,9 +139,13 @@ export async function deriveParaBackupKey(
 
 /**
  * Read the encrypted backup back from the controller's slot-10 ENTIRELY in the
- * browser (no /api): getMapItem for the meta row + each chunk row. Returns null
- * if there is no backup for this (suffix, prefix). Key word order matches
- * backup_read.rs: [index, MAGIC, prefix, suffix].
+ * browser (no /api): getMapItem for the meta row + each chunk row. Key word order
+ * matches backup_read.rs: [index, MAGIC, prefix, suffix].
+ *
+ * Returns { bytes } where bytes is null ONLY when the backup is genuinely absent
+ * (controller materialised, meta row empty). A LOADER/read failure returns { error }
+ * instead, so callers never mistake a transient RPC blip for "no backup" and let an
+ * empty account overwrite a good on-chain backup.
  */
 export async function readOnchainBackupBrowser(
   client: AnyClient,
@@ -137,7 +153,7 @@ export async function readOnchainBackupBrowser(
   suffix: bigint,
   prefix: bigint,
   controller: string = BACKUP_CONTROLLER_HEX,
-): Promise<Uint8Array | null> {
+): Promise<{ bytes: Uint8Array | null; error?: string }> {
   const sdk = await import("@miden-sdk/miden-sdk");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { AccountId, Word } = sdk as any;
@@ -146,29 +162,37 @@ export async function readOnchainBackupBrowser(
     new Word(new BigUint64Array([index, BACKUP_MAGIC, prefix, suffix]));
   // Materialise the controller before reading its storage — same robust loader as the
   // write path (retries sync→import→sync on a fresh store). Call it OUTSIDE runExclusive
-  // (it self-locks; nesting would deadlock).
-  await ensureSignerAccountLoaded(client, runExclusive, controller);
-  return runExclusive(async () => {
-    const acct = await client.getAccount(AccountId.fromHex(controller));
-    const storage = acct?.storage?.();
-    if (!storage?.getMapItem) return null;
-    const readFelts = (w: unknown): bigint[] => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const felts = (w as any)?.toFelts ? (w as any).toFelts() : [];
-      return felts.map(feltToBig);
-    };
-    const metaW = await storage.getMapItem(SLOT, keyWord(BACKUP_META_INDEX));
-    const meta = readFelts(metaW);
-    const byteLen = Number(meta[0] ?? 0n);
-    const nWords = Number(meta[1] ?? 0n);
-    if (!byteLen || !nWords) return null;
-    const words: bigint[][] = [];
-    for (let i = 0; i < nWords; i++) {
-      const w = await storage.getMapItem(SLOT, keyWord(BigInt(i)));
-      words.push(readFelts(w));
-    }
-    return unpackWordsToBytes(words, byteLen);
-  });
+  // (it self-locks; nesting would deadlock). If it can't load, this is a READ ERROR, not
+  // an absent backup — surface it so restore doesn't silently proceed on an empty account.
+  const loaded = await ensureSignerAccountLoaded(client, runExclusive, controller);
+  if (!loaded) return { bytes: null, error: "backup controller not reachable (RPC/sync)" };
+  try {
+    return await runExclusive(async () => {
+      const acct = await client.getAccount(AccountId.fromHex(controller));
+      const storage = acct?.storage?.();
+      if (!storage?.getMapItem) {
+        return { bytes: null, error: "controller storage not materialised" };
+      }
+      const readFelts = (w: unknown): bigint[] => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const felts = (w as any)?.toFelts ? (w as any).toFelts() : [];
+        return felts.map(feltToBig);
+      };
+      const metaW = await storage.getMapItem(SLOT, keyWord(BACKUP_META_INDEX));
+      const meta = readFelts(metaW);
+      const byteLen = Number(meta[0] ?? 0n);
+      const nWords = Number(meta[1] ?? 0n);
+      if (!byteLen || !nWords) return { bytes: null }; // genuinely no backup
+      const words: bigint[][] = [];
+      for (let i = 0; i < nWords; i++) {
+        const w = await storage.getMapItem(SLOT, keyWord(BigInt(i)));
+        words.push(readFelts(w));
+      }
+      return { bytes: unpackWordsToBytes(words, byteLen) };
+    });
+  } catch (e) {
+    return { bytes: null, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /**
@@ -282,46 +306,75 @@ export async function autoBackupPara(params: {
 }
 
 /**
- * Restore the private account on a fresh origin: read the on-chain backup,
- * decrypt, and importAccountFile so the local account matches its on-chain
- * commitment. No-op (returns false) if there is no backup. Idempotent — a
- * re-import of an already-tracked/current account is swallowed.
+ * Restore the private account from the on-chain backup, decrypt, and OVERWRITE the
+ * local (empty or older) account with newAccount(account, overwrite=true).
+ *
+ * Result semantics (each is distinct so the caller reacts correctly):
+ *  - { restored: true }                          → local now matches the backup.
+ *  - { restored: false }                         → no backup exists yet (fresh user).
+ *  - { restored: false, error }                  → a READ/restore FAILURE (RPC blip,
+ *      decrypt, or the overwrite didn't take). NEVER treat this as "no backup" — the
+ *      caller must NOT let an empty account proceed/trade, and must retry.
+ *  - { restored: false, skipped }                → deliberately not restored because the
+ *      LOCAL account is already at or ahead of the backup (never clobber newer state).
  */
 export async function restorePara(params: {
   client: AnyClient;
   runExclusive: RunExclusive;
   walletId: string;
-}): Promise<{ restored: boolean; error?: string }> {
+}): Promise<{ restored: boolean; error?: string; skipped?: string }> {
   const { client, runExclusive, walletId } = params;
   try {
     const { suffix, prefix } = await paraBackupKeyFelts(walletId);
-    const enc = await readOnchainBackupBrowser(client, runExclusive, suffix, prefix);
-    if (!enc) return { restored: false };
+    const read = await readOnchainBackupBrowser(client, runExclusive, suffix, prefix);
+    if (read.error) return { restored: false, error: read.error }; // NOT "no backup"
+    if (!read.bytes) return { restored: false }; // genuinely no backup
     const key = await deriveParaBackupKey(client, runExclusive, walletId);
-    const fileBytes = await gunzip(await decryptBytes(key, enc));
+    const fileBytes = await gunzip(await decryptBytes(key, read.bytes));
     const sdk = await import("@miden-sdk/miden-sdk");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { AccountFile } = sdk as any;
+    const { AccountFile, AccountId } = sdk as any;
     const file = AccountFile.deserialize(fileBytes);
     const account = file.account();
-    await runExclusive(async () => {
-      // OVERWRITE the empty account the Para provider derived at login on this fresh
-      // origin. importAccountFile is a silent no-op when the id already exists
-      // ("already tracked"), so the vault stays at 0 even though restore "succeeds".
-      // newAccount(account, overwrite=true) replaces it with the backed-up state
-      // (vault, storage, nonce). The Para MPC key signs at tx time, so no local secret
-      // key is needed. Fall back to importAccountFile if the account isn't there yet.
+    const nonceOf = (a: unknown): bigint => {
       try {
-        await client.newAccount(account, true);
-      } catch (e) {
-        const m = e instanceof Error ? e.message : String(e);
-        try {
-          await client.importAccountFile(file);
-        } catch {
-          if (!/already (being )?tracked|already exist|current/i.test(m)) throw e;
-        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return feltToBig((a as any).nonce());
+      } catch {
+        return 0n;
       }
-    });
+    };
+    const backupNonce = nonceOf(account);
+
+    // VERSION GUARD: never overwrite a locally-NEWER account. If the user traded on this
+    // origin since the last backup (local nonce > backup nonce), overwriting would
+    // DESTROY the newer vault and brick the account. Skip and let the caller surface it.
+    const localBefore = await runExclusive(() =>
+      client.getAccount(AccountId.fromHex(walletId)).catch(() => null),
+    );
+    const localNonce = localBefore ? nonceOf(localBefore) : 0n;
+    if (localNonce > backupNonce) {
+      return {
+        restored: false,
+        skipped: `local account is newer than backup (local nonce ${localNonce} > backup ${backupNonce}) — not overwriting`,
+      };
+    }
+    if (localNonce === backupNonce && localNonce > 0n) {
+      return { restored: false, skipped: "local already at backup state" }; // no-op
+    }
+
+    // Local is empty (fresh origin) or strictly older → safe to overwrite.
+    await runExclusive(() => client.newAccount(account, true));
+
+    // VERIFY the overwrite actually took. Do NOT trust a swallowed error: the SDK's
+    // commitment-mismatch message literally contains "current", so a regex that ignores
+    // /current/i would report false success with the vault still at 0.
+    const localAfter = await runExclusive(() =>
+      client.getAccount(AccountId.fromHex(walletId)).catch(() => null),
+    );
+    if (!localAfter || nonceOf(localAfter) !== backupNonce) {
+      return { restored: false, error: "restore overwrite did not take (nonce mismatch after newAccount)" };
+    }
     await runExclusive(() => client.syncState()).catch(() => {});
     return { restored: true };
   } catch (e) {
@@ -418,7 +471,14 @@ export async function verifyParaBackupRoundtrip(
     const nonceBefore = await readNonce();
 
     // (1) WRITE — the browser-direct controller write.
-    const { suffix, prefix } = await paraBackupKeyFelts(walletId);
+    // SAFETY: a dummy/probe run writes to a SEPARATE throwaway slot key, NEVER the real
+    // (suffix, prefix). Otherwise the probe would overwrite the user's only recovery copy
+    // with random bytes and brick the account. We flip only LOW bits of the suffix
+    // (0x7e57 = "TEST"), which lands in a distinct slot while staying a valid field
+    // element (a full 64-bit XOR could exceed the Miden field modulus and be invalid).
+    const real = await paraBackupKeyFelts(walletId);
+    const suffix = dummyChunks ? real.suffix ^ 0x7e57n : real.suffix;
+    const prefix = real.prefix;
     let wroteWords: number;
     try {
       wroteWords = await writeParaBackupBytes({
@@ -450,7 +510,8 @@ export async function verifyParaBackupRoundtrip(
     // (2) READ-BACK — poll a few block-times for the write to commit, then read it.
     let enc: Uint8Array | null = null;
     for (let i = 0; i < 12; i++) {
-      enc = await readOnchainBackupBrowser(client, runExclusive, suffix, prefix);
+      const r = await readOnchainBackupBrowser(client, runExclusive, suffix, prefix);
+      enc = r.bytes;
       if (enc && enc.length > 0) break;
       await new Promise((r) => setTimeout(r, 3000));
     }

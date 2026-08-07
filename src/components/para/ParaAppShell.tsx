@@ -19,6 +19,8 @@ import { formatUnits } from "viem";
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { ensureSignerAccountLoaded } from "../../lib/ensureAccount";
 import { restorePara, verifyParaBackupRoundtrip } from "../../lib/paraBackup";
+import { resilientSync } from "../../lib/resilientSync";
+import { setRestoreStatus } from "../../lib/paraRestoreGate";
 
 // Private-account mode: the Para-derived Miden account is storageMode: private, so
 // its state can't self-heal from chain — it's restored from the encrypted on-chain
@@ -116,11 +118,9 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
     const { AccountId } = await import("@miden-sdk/miden-sdk");
     const faucet = AccountId.fromHex(EPOCH_USDC_SEPOLIA.midenFaucetId);
     for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await runExclusive(() => syncState());
-      } catch {
-        /* sync mid-flight — read anyway */
-      }
+      // resilientSync retries through transient replica lag ("block_to > chain tip") so a
+      // load-balanced node that's a couple blocks behind doesn't leave the balance stale.
+      await resilientSync(runExclusive, syncState);
       try {
         const acc = (await runExclusive(() =>
           (client as { getAccount: (id: unknown) => Promise<unknown> }).getAccount(
@@ -142,26 +142,49 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
   // is public + deterministic, so if it's missing locally we re-import its
   // on-chain state — otherwise a later claim throws "account data wasn't found".
   // Runs once per account, BEFORE the first balance read (which then sees it).
+  // Restore-failed banner: when restore ERRORS (not "no backup"), we must block trading
+  // and tell the user to reload — an emit against the un-restored account would be wrong.
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   const healed = useRef<string | null>(null);
   useEffect(() => {
     if (!isReady || !signerAccountId || !client) return;
     if (healed.current === signerAccountId) return;
-    healed.current = signerAccountId;
+    const acct = signerAccountId;
     void (async () => {
-      await ensureSignerAccountLoaded(client, runExclusive, signerAccountId).catch(() => {});
-      // Private /para: a private account can't re-import its state from chain (the
-      // node keeps only the commitment). Restore the account file from the encrypted
-      // on-chain backup so the LOCAL commitment matches on-chain — otherwise every
-      // tx fails ("initial commitment 0x000… does not match current 0x…"). No-op on
-      // a brand-new account (no backup yet); runs BEFORE the first trade/read.
+      await ensureSignerAccountLoaded(client, runExclusive, acct).catch(() => {});
+      // Private /para: a private account can't re-import its state from chain (the node
+      // keeps only the commitment). Restore the account file from the encrypted on-chain
+      // backup so the LOCAL state matches its commitment. Distinguish the outcomes:
+      //  · restored / skipped (local already newer or equal) → ready to trade
+      //  · no backup → genuinely fresh account, ready to trade
+      //  · error → do NOT latch (so it retries on the next render/reload), block trading
       if (PARA_PRIVATE) {
         try {
-          const r = await restorePara({ client, runExclusive, walletId: signerAccountId });
-          console.log(`[para-restore] ${r.restored ? "restored from backup" : "no backup"}${r.error ? " — " + r.error : ""}`);
+          const r = await restorePara({ client, runExclusive, walletId: acct });
+          if (r.error) {
+            console.warn(`[para-restore] FAILED (not 'no backup') — ${r.error}`);
+            setRestoreError(r.error);
+            setRestoreStatus(acct, "failed");
+            await refreshBalance();
+            return; // do NOT latch healed → retry on next effect run/reload
+          }
+          console.log(
+            `[para-restore] ${r.restored ? "restored from backup" : r.skipped ? "skipped (" + r.skipped + ")" : "no backup"}`,
+          );
+          setRestoreError(null);
+          setRestoreStatus(acct, r.restored || r.skipped ? "ready" : "none");
         } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
           console.warn("[para-restore] failed", e);
+          setRestoreError(msg);
+          setRestoreStatus(acct, "failed");
+          await refreshBalance();
+          return; // do NOT latch → retry
         }
+      } else {
+        setRestoreStatus(acct, "none"); // public build: nothing to restore, never block
       }
+      healed.current = acct; // latch ONLY on a clean outcome
       await refreshBalance();
     })();
   }, [isReady, signerAccountId, client, runExclusive, refreshBalance]);
@@ -170,12 +193,12 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
     if (isReady && signerAccountId) refreshBalance();
   }, [isReady, signerAccountId, refreshBalance]);
 
-  // DEV console self-test for the fully-client-side backup — `__darwinParaBackupTest()`.
-  // Login, then run it: writes the encrypted backup to the NoAuth controller, reads it
-  // back, decrypts + deserializes, and reports the Para nonce before/after (must be
-  // UNCHANGED — that's what makes the restore valid). No trade / funding needed. Only
-  // wired in the private build.
+  // DEV-ONLY console self-test for the backup — `__darwinParaBackupTest()`. It writes
+  // REAL txs to the controller and (dummy mode) to a throwaway slot, so it is gated on
+  // NODE_ENV: NEVER exposed on window in a production build (a "paste this in console"
+  // scam could otherwise spend prover cycles / probe the backup). Dev builds only.
   useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
     if (!PARA_PRIVATE || !client || !signerAccountId) return;
     const w = window as unknown as {
       __darwinParaBackupTest?: (dummyChunks?: number, chunksPerTx?: number) => Promise<unknown>;
@@ -308,6 +331,24 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
             </button>
           </p>
         </div>
+
+        {restoreError && (
+          <div
+            role="alert"
+            style={{
+              marginTop: 16,
+              padding: "12px 16px",
+              borderRadius: 10,
+              background: "color-mix(in srgb, var(--orange) 12%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--orange) 45%, transparent)",
+              color: "var(--ink-1)",
+              fontSize: 14,
+            }}
+          >
+            Couldn&apos;t restore your account state (node may be syncing). Please reload
+            before trading, so a trade isn&apos;t sent against an unrestored account.
+          </div>
+        )}
 
         <div
           style={{

@@ -61,6 +61,17 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   },
 };
 
+// INVARIANT: every FPI faucet MUST be nav:true. The trade flow gates the client build
+// on isNavBasket but the server no-fallback on isFpiBasket, so fund-safety relies on
+// fpi ⟹ nav. An fpi:true, nav:false entry would skip the client build AND (worse, if the
+// gate drifts) could route an FPI basket to the CoinGecko server path → mispriced,
+// unconsumable payback → stranded funds. Fail fast at module load rather than in prod.
+for (const [sym, f] of Object.entries(BASKET_FAUCETS)) {
+  if (f.fpi && !f.nav) {
+    throw new Error(`basketFaucets: ${sym} is fpi:true but nav:false — every FPI basket must be nav:true`);
+  }
+}
+
 /** Faucet id for a basket, or undefined if unknown. */
 export const basketFaucetId = (symbol: string): string | undefined =>
   BASKET_FAUCETS[symbol]?.id;

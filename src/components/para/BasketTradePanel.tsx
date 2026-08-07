@@ -29,11 +29,13 @@ import {
   useSyncState,
   useTransaction,
 } from "@miden-sdk/react";
-import { type CSSProperties, useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { type CSSProperties, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { formatUnits, parseUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { ensureSignerAccountLoaded } from "../../lib/ensureAccount";
+import { resilientSync } from "../../lib/resilientSync";
+import { awaitRestore } from "../../lib/paraRestoreGate";
 import { basketDecimals, basketFaucetId, isFpiBasket, isNavBasket } from "../../lib/basketFaucets";
 import {
   buildClientDepositNote,
@@ -379,17 +381,35 @@ export function BasketTradePanel({
   // was broken in the 2026-07 SDK (→ Mac relay) but 0.15.9 enabled FPI / foreign-account
   // reads / network notes that were all "impossible" before — so we re-test it live.
   // Fire-and-forget; a failure just logs (the local account still works this session).
+  // Refresh the on-chain backup after the account nonce advanced. Fired on BOTH the
+  // settled ("done") AND stalled ("pending") paths: the emit already advanced + committed
+  // the on-chain nonce, so a "pending" state is a valid on-chain state that must be
+  // backed up too — otherwise leaving at "pending" strands the new state unbacked (a new
+  // device would re-derive stale). Retries twice; a de-dupe ref avoids overlapping runs.
+  const backupInFlight = useRef(false);
   function backupAfterTrade() {
     if (!PARA_PRIVATE || !client || !signerAccountId) return;
-    void autoBackupPara({
-      client,
-      runExclusive,
-      compileTxScript: txScript as (o: { code: string }) => Promise<unknown>,
-      executeTx,
-      walletId: signerAccountId,
-    }).then((r) =>
-      console.log(`[para-backup] ${r.ok ? `ok (${r.nWords} words)` : "failed: " + r.error}`),
-    );
+    if (backupInFlight.current) return;
+    backupInFlight.current = true;
+    const acct = signerAccountId;
+    void (async () => {
+      try {
+        for (let i = 0; i < 2; i++) {
+          const r = await autoBackupPara({
+            client,
+            runExclusive,
+            compileTxScript: txScript as (o: { code: string }) => Promise<unknown>,
+            executeTx,
+            walletId: acct,
+          });
+          console.log(`[para-backup] ${r.ok ? `ok (${r.nWords} words)` : "failed: " + r.error}`);
+          if (r.ok) break;
+          await sleep(2000);
+        }
+      } finally {
+        backupInFlight.current = false;
+      }
+    })();
   }
 
   async function emitThenSettle(built: BuiltNote, kind: "buy" | "sell", presynced: boolean) {
@@ -436,7 +456,6 @@ export function BasketTradePanel({
           setStage("done");
           void refresh();
           onDone?.();
-          backupAfterTrade();
         } else {
           setPendingClaim({ built, kind });
           setStage("pending");
@@ -447,7 +466,12 @@ export function BasketTradePanel({
         setPendingClaim({ built, kind });
         setStage("pending");
       })
-      .finally(() => markSettling(acct, false)); // account free once the claim commits
+      .finally(() => {
+        markSettling(acct, false); // account free once the claim commits
+        // Back up regardless of done/pending: the emit already advanced + committed the
+        // on-chain nonce, so both are valid on-chain states worth preserving.
+        backupAfterTrade();
+      });
   }
 
   // Re-run a stalled claim (payback already emitted on-chain — just re-consume).
@@ -477,11 +501,27 @@ export function BasketTradePanel({
   async function onBuy() {
     if (!signerAccountId || !client) return;
     setError(null);
+    const acct = signerAccountId;
     try {
+      // Block a concurrent trade on the same sequential account: the Sell button is
+      // visible while a Buy is still BUILDING (10-30s for FPI), and two emits on one
+      // account collide on the nonce. Guard at entry and hold the flag across the build.
+      if (settlingAccounts.has(acct)) {
+        throw new Error("A trade is already in progress on this account — please wait.");
+      }
+      // Don't emit against an un-restored/failed private account (a fresh-origin restore
+      // may still be in flight, or it errored). awaitRestore returns fast once resolved.
+      if (PARA_PRIVATE) {
+        const rs = await awaitRestore(acct);
+        if (rs === "failed") {
+          throw new Error("Couldn't restore your account state — reload the page before trading.");
+        }
+      }
+      markSettling(acct, true);
       // Fresh-store self-heal (new origin / cleared storage) — re-import the
       // deterministic public account before the emit touches it, else executeTx/
       // consume throw "account data wasn't found". No-op once tracked.
-      await ensureSignerAccountLoaded(client, runExclusive, signerAccountId);
+      await ensureSignerAccountLoaded(client, runExclusive, acct);
       // dUSDC is 6-dec; the note carries dUSDC base units drained from the vault.
       let amountBase = parseUnits(buyAmount || "0", EPOCH_USDC_SEPOLIA.midenDecimals);
       if (dusdc != null && amountBase > dusdc) amountBase = dusdc; // never over-spend
@@ -582,14 +622,11 @@ export function BasketTradePanel({
                 return await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead);
               } catch (e) {
                 lastErr = e;
-                // Re-sync so the publisher's price entries can land, but SWALLOW a
-                // transient node error (e.g. "block_to > chain tip" = replica lag) so it
-                // doesn't abort the retry — the next round hits a caught-up replica.
-                try {
-                  await runExclusive(() => syncState());
-                } catch {
-                  /* transient replica lag — retry */
-                }
+                // Re-sync so the publisher's price entries can land. resilientSync retries
+                // through transient replica lag ("block_to > chain tip") internally, so a
+                // lagging node no longer aborts the read — the next round hits a caught-up
+                // replica once the sync succeeds.
+                await resilientSync(runExclusive, syncState);
                 await sleep(1500);
               }
             }
@@ -598,6 +635,14 @@ export function BasketTradePanel({
           const nav = fpi
             ? await readFpiNav()
             : await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
+          // SECURITY / FUND-SAFETY — DEFERRED (needs an on-chain note change): mintAmount
+          // is predicted from S/V read NOW, and baked as a FIXED amount into the payback
+          // P2ID that claimPayback matches by id. The on-chain note re-reads LIVE Pragma
+          // + supply ~30s later, so if the price/supply moves in that window the network
+          // mints a different amount into a payback with a different id → unmatchable →
+          // stranded. Durable fix: the note must mint the note-carried amount (bound by
+          // collateral) instead of recomputing at settlement, OR the payback must be
+          // consumable by tag/recipient rather than a fixed-amount id. Tracked.
           const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
           built = await buildClientDepositNote(prep.navScript, {
             faucet: clientFaucet,
@@ -630,6 +675,10 @@ export function BasketTradePanel({
       // in the background (see emitThenSettle).
       await emitThenSettle(built, "buy", presynced);
     } catch (e) {
+      // Clear the entry guard on any PRE-background error (build failed, gate, price
+      // sync). On success, emitThenSettle owns the flag and clears it when the
+      // background claim commits, so this only fires when nothing was handed off.
+      markSettling(acct, false);
       setError(prettyErr(e));
       setBuyStage("error");
     }
@@ -638,7 +687,18 @@ export function BasketTradePanel({
   async function onSell() {
     if (!signerAccountId || !client) return;
     setError(null);
+    const acct = signerAccountId;
     try {
+      if (settlingAccounts.has(acct)) {
+        throw new Error("A trade is already in progress on this account — please wait.");
+      }
+      if (PARA_PRIVATE) {
+        const rs = await awaitRestore(acct);
+        if (rs === "failed") {
+          throw new Error("Couldn't restore your account state — reload the page before trading.");
+        }
+      }
+      markSettling(acct, true);
       // Fresh-store self-heal — see onBuy. Import the account before the redeem
       // emit touches it.
       await ensureSignerAccountLoaded(client, runExclusive, signerAccountId);
@@ -730,14 +790,11 @@ export function BasketTradePanel({
                 return await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead);
               } catch (e) {
                 lastErr = e;
-                // Re-sync so the publisher's price entries can land, but SWALLOW a
-                // transient node error (e.g. "block_to > chain tip" = replica lag) so it
-                // doesn't abort the retry — the next round hits a caught-up replica.
-                try {
-                  await runExclusive(() => syncState());
-                } catch {
-                  /* transient replica lag — retry */
-                }
+                // Re-sync so the publisher's price entries can land. resilientSync retries
+                // through transient replica lag ("block_to > chain tip") internally, so a
+                // lagging node no longer aborts the read — the next round hits a caught-up
+                // replica once the sync succeeds.
+                await resilientSync(runExclusive, syncState);
                 await sleep(1500);
               }
             }
@@ -774,6 +831,7 @@ export function BasketTradePanel({
       // then settle in the background (see emitThenSettle).
       await emitThenSettle(built, "sell", presynced);
     } catch (e) {
+      markSettling(acct, false); // clear the entry guard on any pre-background error
       setError(prettyErr(e));
       setSellStage("error");
     }
@@ -917,9 +975,16 @@ export function BasketTradePanel({
 
       {pendingClaim && (
         <div style={{ marginTop: 16, borderTop: "1px solid var(--rule)", paddingTop: 16 }}>
+          {/* Honest copy: for an FPI basket the payback is a fixed-amount private note the
+              client pre-built at its price read; if the live Pragma price (or supply)
+              moved before the network settled, the minted amount differs and this claim
+              can't reconcile by retrying. Don't promise "nothing is lost" unconditionally.
+              The durable fix is on-chain (the note carrying the client-computed amount, or
+              a recallable/public payback) — flagged separately. */}
           <p style={sty.hint}>
-            Your {pendingClaim.kind === "buy" ? "shares were minted" : "dUSDC was released"} on-chain, but the
-            testnet prover stalled while claiming them into your account. Nothing is lost — retry the claim.
+            Your {pendingClaim.kind === "buy" ? "shares were minted" : "dUSDC was released"} on-chain and we&apos;re
+            claiming them into your account. Retry below. If the price moved while it settled the claim may not
+            reconcile automatically — if retries keep failing, your funds are on-chain and recoverable, reach out.
           </p>
           <button
             type="button"

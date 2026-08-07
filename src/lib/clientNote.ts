@@ -379,8 +379,17 @@ export async function readFaucetNavBrowserFpi(
   const top = (r: { stack: bigint[] }): bigint => BigInt(r.stack?.[0] ?? 0n);
   const supply = top(supplyRes);
   const vaultValue = top(vRes);
+  // Reject any INCONSISTENT read, not just the all-zero one. If S>0 the faucet has
+  // minted shares, so V MUST be >0 (a live vault); V==0 there means a Pragma leg
+  // resolved to 0 or the publisher wasn't synced. computeMintAmount would then price at
+  // PAR while the on-chain note prices at real NAV → mint mismatch → unconsumable
+  // payback → stranded funds. S==0 (genuinely fresh faucet, first deposit) is the only
+  // case where par is correct, and both being 0 is the unsynced case.
+  if (vaultValue === 0n && supply !== 0n) {
+    throw new Error("inconsistent FPI NAV read (S>0 but V=0 — Pragma unsynced) — retry");
+  }
   if (supply === 0n && vaultValue === 0n) {
-    throw new Error("empty FPI NAV read (faucet unsynced or Pragma unavailable) — using server build");
+    throw new Error("empty FPI NAV read (faucet unsynced or Pragma unavailable) — retry");
   }
   return { supply, vaultValue };
 }

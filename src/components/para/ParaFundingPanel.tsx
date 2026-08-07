@@ -22,13 +22,16 @@
  */
 
 import {
+  useCompile,
   useConsume,
   useMiden,
   useSend,
   useSyncState,
+  useTransaction,
   useWaitForCommit,
   useWaitForNotes,
 } from "@miden-sdk/react";
+import { autoBackupPara } from "../../lib/paraBackup";
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { createWalletClient, custom, formatUnits, http, parseUnits } from "viem";
 import { sepolia } from "viem/chains";
@@ -163,6 +166,12 @@ export function ParaFundingPanel() {
   };
   const { consume } = useConsume();
   const { sync: syncState } = useSyncState();
+  const { txScript } = useCompile() as unknown as {
+    txScript: (o: { code: string }) => Promise<unknown>;
+  };
+  const { execute: executeTx } = useTransaction() as unknown as {
+    execute: (o: { accountId: string; skipSync?: boolean; request: () => unknown }) => Promise<unknown>;
+  };
   const { waitForConsumableNotes } = useWaitForNotes();
   const { send: sendNote } = useSend() as unknown as {
     send: (a: {
@@ -514,6 +523,28 @@ export function ParaFundingPanel() {
       setAmount(""); // clear the funded amount so it doesn't linger for the next fund
       if (evmAddress) void readSepoliaUsdc(evmAddress); // Sepolia balance dropped
       await refreshBalance(6);
+      // Back up the newly-funded state. CRITICAL for private /para: the consume above
+      // advanced the on-chain nonce, so without a backup a "fund → leave" user (who
+      // never trades) re-derives an EMPTY account on a new device against a non-empty
+      // chain = permanent freeze. Fire-and-forget with one retry; failure only logs.
+      if (process.env.NEXT_PUBLIC_PARA_PRIVATE === "1" && signerAccountId && client) {
+        void (async () => {
+          for (let i = 0; i < 2; i++) {
+            const r = await autoBackupPara({
+              client,
+              runExclusive,
+              compileTxScript: txScript as (o: { code: string }) => Promise<unknown>,
+              executeTx: executeTx as never,
+              walletId: signerAccountId,
+            });
+            console.log(
+              `[para-backup][fund] ${r.ok ? `ok (${r.nWords} words)` : "failed: " + r.error}`,
+            );
+            if (r.ok) break;
+            await sleep(2000);
+          }
+        })();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStage("error");

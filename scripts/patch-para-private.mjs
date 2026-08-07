@@ -27,6 +27,8 @@ const SM_ANCHOR = "storageMode: AccountStorageMode.public()";
 const SM_REPLACE =
   'storageMode: (typeof process !== "undefined" && process.env && process.env.NEXT_PUBLIC_PARA_PRIVATE === "1") ? AccountStorageMode.private() : AccountStorageMode.public()';
 
+const failures = [];
+
 for (const p of files) {
   try {
     let s = readFileSync(p, "utf8");
@@ -55,7 +57,26 @@ for (const p of files) {
     } else {
       console.log(`[patch-para-private] already patched: ${p}`);
     }
+
+    // VERIFY both transforms are present in the final output. A silent skip (SDK
+    // republished with reformatted/reordered code so an anchor no longer matches) would
+    // otherwise ship a RANDOM account seed (funds stranded per connect) or a PUBLIC
+    // account (confidentiality lost) with no build error. Fail loudly instead.
+    if (!s.includes("accountSeed:")) failures.push(`${p}: accountSeed not applied`);
+    if (!s.includes("NEXT_PUBLIC_PARA_PRIVATE")) {
+      failures.push(`${p}: storageMode gate not applied`);
+    }
   } catch (e) {
-    console.warn(`[patch-para-private] skipped ${p}: ${e?.message ?? e}`);
+    failures.push(`${p}: ${e?.message ?? e}`);
+  }
+}
+
+if (failures.length) {
+  console.error("[patch-para-private] REQUIRED PATCH MISSING:\n  " + failures.join("\n  "));
+  // Hard-fail production/CI builds (Vercel sets NODE_ENV=production or CI=1): a missing
+  // seed/storageMode patch silently strands funds or breaks confidentiality. Locally we
+  // warn but don't block iteration.
+  if (process.env.NODE_ENV === "production" || process.env.CI || process.env.VERCEL) {
+    process.exit(1);
   }
 }
