@@ -18,6 +18,12 @@ import { formatUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { ensureSignerAccountLoaded } from "../../lib/ensureAccount";
+import { restorePara } from "../../lib/paraBackup";
+
+// Private-account mode: the Para-derived Miden account is storageMode: private, so
+// its state can't self-heal from chain — it's restored from the encrypted on-chain
+// backup instead. Gated so the public build keeps its (working) self-heal path.
+const PARA_PRIVATE = process.env.NEXT_PUBLIC_PARA_PRIVATE === "1";
 import { BASKETS } from "../../lib/baskets";
 import { DepositMethods } from "./DepositMethods";
 import { BasketTradePanel } from "./BasketTradePanel";
@@ -135,9 +141,23 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
     if (!isReady || !signerAccountId || !client) return;
     if (healed.current === signerAccountId) return;
     healed.current = signerAccountId;
-    void ensureSignerAccountLoaded(client, runExclusive, signerAccountId).finally(() =>
-      refreshBalance(),
-    );
+    void (async () => {
+      await ensureSignerAccountLoaded(client, runExclusive, signerAccountId).catch(() => {});
+      // Private /para: a private account can't re-import its state from chain (the
+      // node keeps only the commitment). Restore the account file from the encrypted
+      // on-chain backup so the LOCAL commitment matches on-chain — otherwise every
+      // tx fails ("initial commitment 0x000… does not match current 0x…"). No-op on
+      // a brand-new account (no backup yet); runs BEFORE the first trade/read.
+      if (PARA_PRIVATE) {
+        try {
+          const r = await restorePara({ client, runExclusive, walletId: signerAccountId });
+          console.log(`[para-restore] ${r.restored ? "restored from backup" : "no backup"}${r.error ? " — " + r.error : ""}`);
+        } catch (e) {
+          console.warn("[para-restore] failed", e);
+        }
+      }
+      await refreshBalance();
+    })();
   }, [isReady, signerAccountId, client, runExclusive, refreshBalance]);
 
   useEffect(() => {

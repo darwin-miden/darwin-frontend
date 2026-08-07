@@ -52,6 +52,12 @@ import {
   readFaucetNavBrowserFpi,
 } from "../../lib/clientNote";
 import { liveDccBalance } from "../../lib/dccBalance";
+import { autoBackupPara } from "../../lib/paraBackup";
+
+// Private /para: after a settled state change, refresh the encrypted on-chain
+// backup so the account is restorable on a new origin. Gated so the public build
+// (self-healing) skips it.
+const PARA_PRIVATE = process.env.NEXT_PUBLIC_PARA_PRIVATE === "1";
 
 // Decentralization flag: build the confidential deposit note ENTIRELY in the
 // browser (compile + build + emit) instead of fetching it from
@@ -364,6 +370,27 @@ export function BasketTradePanel({
   // is what makes a trade FEEL ~10s instead of ~40s: the ~30s the network needs
   // (NTB pickup + ~2 blocks + a local consume) no longer blocks the UI. Resolves
   // as soon as the emit lands — it does NOT await the background claim.
+  // Private /para: after a settled buy/sell, refresh the encrypted on-chain backup
+  // so the account (whose state lives only locally) stays restorable on a new origin.
+  // ON HOLD: the client-side write (writeOnchainBackupViaNetwork) emits a note FROM
+  // the Para account, which advances its nonce → the backup is stale by one tx and a
+  // restored account can't transact (commitment mismatch). No working client-side
+  // write exists (browser can't apply to the NoAuth controller either), so the write
+  // awaits a Mac relay (user declined) or a Miden "emit-on-behalf" primitive. Restore
+  // + read stay wired + correct for when the write lands. Fire-and-forget.
+  const BACKUP_WRITE_ON_HOLD = true;
+  function backupAfterTrade() {
+    if (BACKUP_WRITE_ON_HOLD || !PARA_PRIVATE || !client || !signerAccountId) return;
+    void autoBackupPara({
+      client,
+      runExclusive,
+      compileNoteScript: noteScript as (o: { code: string }) => Promise<unknown>,
+      walletId: signerAccountId,
+    }).then((r) =>
+      console.log(`[para-backup] ${r.ok ? `ok (${r.nWords} words)` : "failed: " + r.error}`),
+    );
+  }
+
   async function emitThenSettle(built: BuiltNote, kind: "buy" | "sell", presynced: boolean) {
     const setStage = kind === "buy" ? setBuyStage : setSellStage;
     const clearAmount = kind === "buy" ? setBuyAmount : setSellAmount;
@@ -408,6 +435,7 @@ export function BasketTradePanel({
           setStage("done");
           void refresh();
           onDone?.();
+          backupAfterTrade();
         } else {
           setPendingClaim({ built, kind });
           setStage("pending");
@@ -435,6 +463,7 @@ export function BasketTradePanel({
         setStage("done");
         await refresh();
         onDone?.();
+        backupAfterTrade();
       } else {
         setStage("pending");
       }
