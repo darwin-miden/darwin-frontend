@@ -206,15 +206,38 @@ export async function writeOnchainBackup(params: {
   encryptedBytes: Uint8Array;
   submitOne: (masmCode: string) => Promise<void>;
   onProgress?: (done: number, total: number) => void;
+  // Max set_user_position calls per tx. The browser LOCAL prover (wasm32) overflows
+  // its trace well below the native ceiling, so the client passes a small value; the
+  // Mac/native path leaves it at BACKUP_CHUNKS_PER_TX. The meta entry counts as one
+  // call, so an all-in-one-tx write needs words.length + 1 <= chunksPerTx.
+  chunksPerTx?: number;
 }): Promise<number> {
   const { suffix, prefix, encryptedBytes, submitOne, onProgress } = params;
+  const chunksPerTx = params.chunksPerTx ?? BACKUP_CHUNKS_PER_TX;
   const words = packBytesToWords(encryptedBytes);
+  const metaEntry = {
+    index: BACKUP_META_INDEX,
+    value: [BigInt(encryptedBytes.length), BigInt(words.length), 0n, 0n],
+  };
 
-  // One tx script per BACKUP_CHUNKS_PER_TX group of words.
+  // Fast path: the whole payload + meta fit in ONE tx ⇒ a single proof and NO tx
+  // chaining. That matters for an executeTx-based submitOne: with only one tx there is
+  // no second tx to hit a force-sync/mempool conflict, and a background sync can't
+  // split the write across an uncommitted boundary. Meta is LAST within the tx
+  // (set_user_position calls run in order), matching the meta-last invariant below.
+  if (words.length + 1 <= chunksPerTx) {
+    const entries = words.map((value, i) => ({ index: BigInt(i), value }));
+    entries.push(metaEntry);
+    await submitOne(buildSetBackupBatchScript(suffix, prefix, entries));
+    onProgress?.(1, 1);
+    return words.length;
+  }
+
+  // One tx script per chunksPerTx group of words.
   const chunkScripts: string[] = [];
-  for (let start = 0; start < words.length; start += BACKUP_CHUNKS_PER_TX) {
+  for (let start = 0; start < words.length; start += chunksPerTx) {
     const entries: { index: bigint; value: bigint[] }[] = [];
-    for (let i = start; i < Math.min(start + BACKUP_CHUNKS_PER_TX, words.length); i++) {
+    for (let i = start; i < Math.min(start + chunksPerTx, words.length); i++) {
       entries.push({ index: BigInt(i), value: words[i] });
     }
     chunkScripts.push(buildSetBackupBatchScript(suffix, prefix, entries));

@@ -372,19 +372,20 @@ export function BasketTradePanel({
   // as soon as the emit lands — it does NOT await the background claim.
   // Private /para: after a settled buy/sell, refresh the encrypted on-chain backup
   // so the account (whose state lives only locally) stays restorable on a new origin.
-  // ON HOLD: the client-side write (writeOnchainBackupViaNetwork) emits a note FROM
-  // the Para account, which advances its nonce → the backup is stale by one tx and a
-  // restored account can't transact (commitment mismatch). No working client-side
-  // write exists (browser can't apply to the NoAuth controller either), so the write
-  // awaits a Mac relay (user declined) or a Miden "emit-on-behalf" primitive. Restore
-  // + read stay wired + correct for when the write lands. Fire-and-forget.
-  const BACKUP_WRITE_ON_HOLD = true;
+  // The write goes to the NoAuth controller's slot-10 via txs FROM THE CONTROLLER
+  // (set_user_position batches) — the Para account never emits, so ITS nonce stays put
+  // and the restored account still matches its on-chain commitment. This depends on the
+  // browser being able to build+submit a tx for the imported NoAuth controller, which
+  // was broken in the 2026-07 SDK (→ Mac relay) but 0.15.9 enabled FPI / foreign-account
+  // reads / network notes that were all "impossible" before — so we re-test it live.
+  // Fire-and-forget; a failure just logs (the local account still works this session).
   function backupAfterTrade() {
-    if (BACKUP_WRITE_ON_HOLD || !PARA_PRIVATE || !client || !signerAccountId) return;
+    if (!PARA_PRIVATE || !client || !signerAccountId) return;
     void autoBackupPara({
       client,
       runExclusive,
-      compileNoteScript: noteScript as (o: { code: string }) => Promise<unknown>,
+      compileTxScript: txScript as (o: { code: string }) => Promise<unknown>,
+      executeTx,
       walletId: signerAccountId,
     }).then((r) =>
       console.log(`[para-backup] ${r.ok ? `ok (${r.nWords} words)` : "failed: " + r.error}`),
@@ -567,8 +568,35 @@ export function BasketTradePanel({
             // resolve the publisher's entries and the FPI read faults.
             await runExclusive(() => syncState());
           }
+          // FPI read with retry: the Pragma publisher's price ENTRIES (a storage map)
+          // sync a beat AFTER its account header on a COLD store, so the first read
+          // asserts "pragma <pair> not tracked". Re-sync + retry a few times rather than
+          // fall through to the server build — the server misprices FPI (it values V via
+          // CoinGecko, not the on-chain Pragma feed the note settles against), so its
+          // payback prediction is unconsumable and the claim hangs forever. A client
+          // read that eventually resolves is the only correct price for an FPI basket.
+          const readFpiNav = async () => {
+            let lastErr: unknown;
+            for (let i = 0; i < 8; i++) {
+              try {
+                return await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead);
+              } catch (e) {
+                lastErr = e;
+                // Re-sync so the publisher's price entries can land, but SWALLOW a
+                // transient node error (e.g. "block_to > chain tip" = replica lag) so it
+                // doesn't abort the retry — the next round hits a caught-up replica.
+                try {
+                  await runExclusive(() => syncState());
+                } catch {
+                  /* transient replica lag — retry */
+                }
+                await sleep(1500);
+              }
+            }
+            throw lastErr;
+          };
           const nav = fpi
-            ? await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead)
+            ? await readFpiNav()
             : await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
           const mintAmount = computeMintAmount(amountBase, nav.supply, nav.vaultValue);
           built = await buildClientDepositNote(prep.navScript, {
@@ -581,11 +609,23 @@ export function BasketTradePanel({
           });
           presynced = false; // let the emit re-sync (state may have moved during the read)
         } catch (e) {
-          console.warn("[client-buy] client note-build failed; falling back to server", e);
+          console.warn("[client-buy] client note-build failed", e);
           built = undefined;
         }
       }
-      if (!built) built = await buildViaServer();
+      if (!built) {
+        // NEVER fall back to the server build for an FPI basket: the server prices V via
+        // CoinGecko, not the on-chain Pragma feed the note settles against, so its mint
+        // prediction (and thus the payback P2ID it returns) can't be consumed — the claim
+        // hangs forever and the spent dUSDC is stranded. Surface a retry instead; the
+        // client read only needs the node + Pragma publisher to finish syncing.
+        if (isFpiBasket(symbol)) {
+          throw new Error(
+            "Live prices are still syncing (testnet node catching up) — please try again in a moment.",
+          );
+        }
+        built = await buildViaServer();
+      }
       // Returns once the deposit is emitted on-chain; the mint + claim then settle
       // in the background (see emitThenSettle).
       await emitThenSettle(built, "buy", presynced);
@@ -676,8 +716,35 @@ export function BasketTradePanel({
             // resolve the publisher's entries and the FPI read faults.
             await runExclusive(() => syncState());
           }
+          // FPI read with retry: the Pragma publisher's price ENTRIES (a storage map)
+          // sync a beat AFTER its account header on a COLD store, so the first read
+          // asserts "pragma <pair> not tracked". Re-sync + retry a few times rather than
+          // fall through to the server build — the server misprices FPI (it values V via
+          // CoinGecko, not the on-chain Pragma feed the note settles against), so its
+          // payback prediction is unconsumable and the claim hangs forever. A client
+          // read that eventually resolves is the only correct price for an FPI basket.
+          const readFpiNav = async () => {
+            let lastErr: unknown;
+            for (let i = 0; i < 8; i++) {
+              try {
+                return await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead);
+              } catch (e) {
+                lastErr = e;
+                // Re-sync so the publisher's price entries can land, but SWALLOW a
+                // transient node error (e.g. "block_to > chain tip" = replica lag) so it
+                // doesn't abort the retry — the next round hits a caught-up replica.
+                try {
+                  await runExclusive(() => syncState());
+                } catch {
+                  /* transient replica lag — retry */
+                }
+                await sleep(1500);
+              }
+            }
+            throw lastErr;
+          };
           const nav = fpi
-            ? await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead)
+            ? await readFpiNav()
             : await readFaucetNavBrowser(executeProgram, clientFaucet, prep.navRead);
           const release = computeReleaseAmount(sharesBase, nav.supply, nav.vaultValue);
           built = await buildClientRedeemNote(prep.redeemScript, {
@@ -689,11 +756,20 @@ export function BasketTradePanel({
           });
           presynced = false;
         } catch (e) {
-          console.warn("[client-sell] client note-build failed; falling back to server", e);
+          console.warn("[client-sell] client note-build failed", e);
           built = undefined;
         }
       }
-      if (!built) built = await redeemViaServer();
+      if (!built) {
+        // FPI: no server fallback — it misprices V (CoinGecko vs on-chain Pragma), so the
+        // released dUSDC / payback can't reconcile and the claim hangs. Retry instead.
+        if (isFpiBasket(symbol)) {
+          throw new Error(
+            "Live prices are still syncing (testnet node catching up) — please try again in a moment.",
+          );
+        }
+        built = await redeemViaServer();
+      }
       // Returns once the redeem note is emitted on-chain; the burn + dUSDC release
       // then settle in the background (see emitThenSettle).
       await emitThenSettle(built, "sell", presynced);

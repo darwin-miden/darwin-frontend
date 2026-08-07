@@ -13,12 +13,12 @@
  */
 
 import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
-import { useMiden, useSigner, useSyncState } from "@miden-sdk/react";
+import { useCompile, useMiden, useSigner, useSyncState, useTransaction } from "@miden-sdk/react";
 import { formatUnits } from "viem";
 
 import { EPOCH_USDC_SEPOLIA } from "../../lib/epoch";
 import { ensureSignerAccountLoaded } from "../../lib/ensureAccount";
-import { restorePara } from "../../lib/paraBackup";
+import { restorePara, verifyParaBackupRoundtrip } from "../../lib/paraBackup";
 
 // Private-account mode: the Para-derived Miden account is storageMode: private, so
 // its state can't self-heal from chain — it's restored from the encrypted on-chain
@@ -70,6 +70,12 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
     isReady: boolean;
   };
   const { sync: syncState } = useSyncState();
+  const { txScript } = useCompile() as unknown as {
+    txScript: (o: { code: string }) => Promise<unknown>;
+  };
+  const { execute: executeTx } = useTransaction() as unknown as {
+    execute: (o: { accountId: string; skipSync?: boolean; request: () => unknown }) => Promise<unknown>;
+  };
   // Latch the connected gate on the STICKY signerAccountId. Para's useAccount()
   // react-query key includes the injected wallet's evmAccount address/chainId, so
   // during a long sign+prove (a NAV redeem can take up to 120s on the remote
@@ -163,6 +169,36 @@ export function ParaAppShell({ onExit }: { onExit: () => void }) {
   useEffect(() => {
     if (isReady && signerAccountId) refreshBalance();
   }, [isReady, signerAccountId, refreshBalance]);
+
+  // DEV console self-test for the fully-client-side backup — `__darwinParaBackupTest()`.
+  // Login, then run it: writes the encrypted backup to the NoAuth controller, reads it
+  // back, decrypts + deserializes, and reports the Para nonce before/after (must be
+  // UNCHANGED — that's what makes the restore valid). No trade / funding needed. Only
+  // wired in the private build.
+  useEffect(() => {
+    if (!PARA_PRIVATE || !client || !signerAccountId) return;
+    const w = window as unknown as {
+      __darwinParaBackupTest?: (dummyChunks?: number, chunksPerTx?: number) => Promise<unknown>;
+    };
+    // __darwinParaBackupTest()            → back up the REAL account file
+    // __darwinParaBackupTest(1)           → write a 1-word dummy (probe the prover)
+    // __darwinParaBackupTest(1, 6)        → dummy + explicit chunks-per-tx
+    w.__darwinParaBackupTest = async (dummyChunks?: number, chunksPerTx?: number) => {
+      console.log(
+        `[para-backup-test] running (write → read-back${dummyChunks ? "" : " → deserialize"})…`,
+        { dummyChunks: dummyChunks ?? null, chunksPerTx: chunksPerTx ?? "default" },
+      );
+      const r = await verifyParaBackupRoundtrip(
+        { client, runExclusive, compileTxScript: txScript, executeTx, walletId: signerAccountId },
+        { dummyChunks, chunksPerTx },
+      );
+      console.log("[para-backup-test] verdict:", r);
+      return r;
+    };
+    return () => {
+      delete (window as unknown as { __darwinParaBackupTest?: unknown }).__darwinParaBackupTest;
+    };
+  }, [client, signerAccountId, runExclusive, txScript, executeTx]);
   useEffect(() => {
     if (!depositOpen && connected) refreshBalance();
   }, [depositOpen, connected, refreshBalance]);
