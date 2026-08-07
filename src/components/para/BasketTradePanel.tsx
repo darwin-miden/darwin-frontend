@@ -532,6 +532,11 @@ export function BasketTradePanel({
           if (fpi) {
             await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_ORACLE_ID);
             await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_PUBLISHER_ID);
+            // Warm the just-imported oracle + publisher on a COLD store (fresh
+            // private account): read_pragma.rs sync_states after importing, before
+            // execute_program. Without it, the foreign-account get_median can't
+            // resolve the publisher's entries and the FPI read faults.
+            await runExclusive(() => syncState());
           }
           const nav = fpi
             ? await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead)
@@ -636,6 +641,11 @@ export function BasketTradePanel({
           if (fpi) {
             await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_ORACLE_ID);
             await ensureSignerAccountLoaded(client, runExclusive, PRAGMA_PUBLISHER_ID);
+            // Warm the just-imported oracle + publisher on a COLD store (fresh
+            // private account): read_pragma.rs sync_states after importing, before
+            // execute_program. Without it, the foreign-account get_median can't
+            // resolve the publisher's entries and the FPI read faults.
+            await runExclusive(() => syncState());
           }
           const nav = fpi
             ? await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead)
