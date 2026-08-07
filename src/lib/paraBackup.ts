@@ -303,15 +303,26 @@ export async function restorePara(params: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { AccountFile } = sdk as any;
     const file = AccountFile.deserialize(fileBytes);
+    const account = file.account();
     await runExclusive(async () => {
+      // OVERWRITE the empty account the Para provider derived at login on this fresh
+      // origin. importAccountFile is a silent no-op when the id already exists
+      // ("already tracked"), so the vault stays at 0 even though restore "succeeds".
+      // newAccount(account, overwrite=true) replaces it with the backed-up state
+      // (vault, storage, nonce). The Para MPC key signs at tx time, so no local secret
+      // key is needed. Fall back to importAccountFile if the account isn't there yet.
       try {
-        await client.importAccountFile(file);
+        await client.newAccount(account, true);
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e);
-        if (!/already (being )?tracked|already exist|current/i.test(m)) throw e;
+        try {
+          await client.importAccountFile(file);
+        } catch {
+          if (!/already (being )?tracked|already exist|current/i.test(m)) throw e;
+        }
       }
     });
-    await runExclusive(() => client.syncState());
+    await runExclusive(() => client.syncState()).catch(() => {});
     return { restored: true };
   } catch (e) {
     return { restored: false, error: e instanceof Error ? e.message : String(e) };
