@@ -6,13 +6,9 @@
 # `u32div` for their final integer division. That op requires both
 # operands to fit in u32, which is restrictive for real on-chain
 # values. This module provides `felt_div`, a u64-safe division that
-# wraps the std-lib `miden::core::math::u64::div` procedure.
-#
-# `felt_div` accepts any two felt values whose magnitudes fit in u64
-# (the Goldilocks felt comfortably represents anything up to
-# ~1.84e19), splits each into a (lo, hi) u32 pair, calls the std-lib
-# divider, and recombines the (lo, hi) result back into a felt. The
-# round-trip is exact when both operands and the quotient fit in u64.
+# wraps the std-lib `miden::core::math::u64::div` procedure, and
+# `mul_div`, a full-precision `a*b/div` that does NOT overflow the
+# field when the intermediate product exceeds u64.
 
 use miden::core::math::u64
 
@@ -41,44 +37,118 @@ pub proc felt_div
     add                  # [result]
 end
 
-#! Computes `a * b / div` as integer division WITHOUT the field-overflow that a
-#! plain `mul` + `felt_div` suffers.
+#! Computes `a * b / div` at FULL PRECISION — the 128-bit product a*b is formed
+#! exactly and divided by `div`, so no Goldilocks field wrap can corrupt the result.
 #!
 #! Stack on entry:   [div, b, a]        (div on top, then b, then a)
 #! Stack on exit:    [a * b / div]
 #!
-#! `felt_div` is u64-safe for its *operands*, but the NAV math forms the PRODUCT
-#! `a * b` first (e.g. net * S, or s * V). A Goldilocks `mul` reduces mod p
-#! (≈ 1.845e19), so once a*b exceeds p — which happens for any real basket
-#! (net*S ≈ TVL$ × trade$ × 1e16, overflowing at TVL$×trade$ ≳ 1845) — the product
-#! wraps and the subsequent division yields silently-wrong, grindably over-minted
-#! shares. This proc instead:
-#!   1. forms the EXACT 128-bit product via std-lib `u64::widening_mul`,
-#!   2. REVERTS if that product does not fit u64 (bits 64..127 non-zero) — a safe
-#!      revert of an out-of-range trade, never a silent over-mint,
-#!   3. divides the wide product by `div` through `u64::div` on the raw limbs, so
-#!      the product is never recombined into a wrap-prone felt.
+#! Why this exists: the NAV math forms `net * S` (mint) and `s * V` (redeem) before
+#! dividing. A plain `mul` is a field multiply mod p (≈ 1.845e19); net*S ≈ TVL$ ×
+#! trade$ × 1e16 exceeds p for any real basket (TVL$×trade$ ≳ 1845), so `mul` +
+#! `felt_div` would divide a wrapped product → silently over-minted shares.
 #!
-#! The result `a*b/div` is assumed to fit a felt (it is a bounded shares/payout
-#! value in Darwin's spec scales); the caller's downstream asserts still apply.
+#! Method: form the exact 128-bit product via `u64::widening_mul` (4 u32 limbs held
+#! in frame-local memory), then a restoring, MSB-first binary long division. The
+#! running remainder and quotient stay in u64 (the remainder is always < div), so
+#! the wide product is never recombined into a wrap-prone felt.
+#!
+#! Preconditions (assert-revert, never silent):
+#!   * div != 0.
+#!   * div < 2^63  — keeps 2*rem < 2^64 so the u64 doubling never wraps. Darwin's
+#!     divisors (vault value V, supply S) are far below this (2^63 ≈ 9.2e18 base
+#!     units ≈ $92B at 1e8 scale).
+#!   * the quotient fits u64 (high 64 bits of a*b < div) — an impossibly large mint
+#!     reverts instead of wrapping the u64 accumulator.
+#! The result a*b/div is assumed to fit a felt (a bounded shares/payout value, same
+#! assumption `felt_div` already makes).
+#!
+#! Locals (u32 limbs): 0..3 = product P (LSB..MSB), 4..5 = div (lo,hi),
+#!                     8..9 = rem (lo,hi), 12..13 = q (lo,hi).
+@locals(16)
 pub proc mul_div
-    # Stack: [div, b, a]
-    movup.2              # [a, div, b]
-    u32split             # [a_lo, a_hi, div, b]
-    movup.3              # [b, a_lo, a_hi, div]
-    u32split             # [b_lo, b_hi, a_lo, a_hi, div]
-    exec.u64::widening_mul
-    # [p0, p1, p2, p3, div]  where a*b = p0 + p1·2^32 + p2·2^64 + p3·2^96
-    movup.3              # [p3, p0, p1, p2, div]
-    assertz.err="mul_div: product exceeds u64 (trade too large for this basket)"
-    movup.2              # [p2, p0, p1, div]
-    assertz.err="mul_div: product exceeds u64 (trade too large for this basket)"
-    # [p0, p1, div]  = [prod_lo, prod_hi, div], product < 2^64
-    movup.2              # [div, prod_lo, prod_hi]
-    u32split             # [div_lo, div_hi, prod_lo, prod_hi]
-    exec.u64::div        # [q_lo, q_hi]  = (prod / div)
-    swap                 # [q_hi, q_lo]
-    push.TWO_POW_32      # [2^32, q_hi, q_lo]
-    mul                  # [q_hi·2^32, q_lo]
-    add                  # [a*b/div]
+    # ---- [div, b, a] ----
+    # 1) P = a*b as a u128 (4 u32 limbs) -> locals 0..3
+    movup.2 u32split              # [a_lo, a_hi, div, b]
+    movup.3 u32split              # [b_lo, b_hi, a_lo, a_hi, div]
+    exec.u64::widening_mul        # [p0, p1, p2, p3, div]
+    loc_store.0                   # [p1, p2, p3, div]
+    loc_store.1                   # [p2, p3, div]
+    loc_store.2                   # [p3, div]
+    loc_store.3                   # [div]
+
+    # 2) div -> (div_lo, div_hi); assert div != 0 and div < 2^63.
+    u32split                      # [div_lo, div_hi]
+    dup.1 push.2147483648 u32lt assert.err="mul_div: divisor must be < 2^63"
+    dup.0 dup.2 u32or push.0 neq assert.err="mul_div: division by zero"
+    loc_store.4                   # div_lo ; [div_hi]
+    loc_store.5                   # div_hi ; []
+
+    # 3) rem = 0, q = 0
+    push.0 loc_store.8
+    push.0 loc_store.9
+    push.0 loc_store.12
+    push.0 loc_store.13
+
+    # 4) assert P_hi (limbs p2,p3 = bits 64..127) < div  -> quotient fits u64
+    loc_load.3 loc_load.2         # [p2, p3]  (P_hi = lo:p2, hi:p3)
+    loc_load.5 loc_load.4         # [div_lo, div_hi, p2, p3]
+    exec.u64::lt                  # P_hi < div ?
+    assert.err="mul_div: quotient exceeds u64 (basket too large)"
+
+    # 5) restoring long division, 128 iterations, MSB-first.
+    push.128
+    dup.0 neq.0
+    while.true
+        # top = bit 127 of P
+        loc_load.3 u32shr.31          # [top, i]
+
+        # P <<= 1  (carry bit 31 of each lower limb into the next)
+        loc_load.3 u32shl.1 loc_load.2 u32shr.31 u32or loc_store.3
+        loc_load.2 u32shl.1 loc_load.1 u32shr.31 u32or loc_store.2
+        loc_load.1 u32shl.1 loc_load.0 u32shr.31 u32or loc_store.1
+        loc_load.0 u32shl.1 loc_store.0
+        # [top, i]
+
+        # rem = 2*rem + top
+        loc_load.9 loc_load.8 loc_load.9 loc_load.8   # [rem_lo,rem_hi,rem_lo,rem_hi,top,i]
+        exec.u64::wrapping_add                         # [d_lo, d_hi, top, i]  (d = 2*rem)
+        movup.2 u32or                                  # [d_lo|top, d_hi, i]
+        loc_store.8 loc_store.9                         # rem ; [i]
+
+        # qbit = rem >= div ; if so rem -= div
+        loc_load.9 loc_load.8 loc_load.5 loc_load.4    # [div_lo,div_hi,rem_lo,rem_hi,i]
+        exec.u64::gte                                  # [ge, i]
+        if.true
+            loc_load.9 loc_load.8 loc_load.5 loc_load.4  # [div_lo,div_hi,rem_lo,rem_hi,i]
+            exec.u64::wrapping_sub                        # [r_lo, r_hi, i]
+            loc_store.8 loc_store.9                        # rem -= div ; [i]
+            push.1
+        else
+            push.0
+        end
+        # [qbit, i]
+
+        # q = 2*q + qbit
+        loc_load.13 loc_load.12 loc_load.13 loc_load.12  # [q_lo,q_hi,q_lo,q_hi,qbit,i]
+        exec.u64::wrapping_add                            # [d_lo, d_hi, qbit, i]
+        movup.2 u32or                                     # [d_lo|qbit, d_hi, i]
+        loc_store.12 loc_store.13                          # q ; [i]
+
+        sub.1
+        dup.0 neq.0
+    end
+    drop                          # drop counter
+
+    # 6) assert q < p (Goldilocks modulus 2^64-2^32+1 = [lo=1, hi=0xFFFFFFFF]) so the
+    #    felt recombine is exact — a result that can't be a felt reverts, never wraps.
+    #    (Darwin share/payout amounts are far below this; asset amounts must fit a felt.)
+    loc_load.13 loc_load.12       # [q_lo, q_hi]
+    push.4294967295 push.1        # [p_lo, p_hi, q_lo, q_hi]
+    exec.u64::lt                  # q < p ?
+    assert.err="mul_div: result exceeds field modulus"
+
+    # 7) recombine q -> felt
+    loc_load.13 loc_load.12       # [q_lo, q_hi]
+    swap push.TWO_POW_32 mul add  # [a*b/div]
 end
