@@ -12,7 +12,7 @@
     "type-check": "tsc --noEmit",
     "test:e2e": "playwright test",
     "test:csp": "playwright test e2e/csp-smoke.spec.ts",
-    "postinstall": "patch-package"
+    "postinstall": "patch-package && node scripts/patch-para-private.mjs"
   },
   "dependencies": {
     "@epoch-protocol/epoch-intents-sdk": "^1.0.32",
