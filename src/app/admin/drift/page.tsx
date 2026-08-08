@@ -31,6 +31,13 @@ const DarwinScriptsPanel = dynamic(
   { ssr: false },
 );
 
+// FPI faucet redeploy helper: shows the browser-computed FPI note roots to
+// --allow-root when deploying a new FPI faucet.
+const FpiNoteRoots = dynamic(
+  () => import("../../../components/FpiNoteRoots").then((m) => m.FpiNoteRoots),
+  { ssr: false },
+);
+
 const ORACLE_PRICES_X1E8: Record<string, bigint> = {
   "darwin-eth": 219_427_837_701n,
   "darwin-wbtc": 7_812_150_232_994n,
@@ -386,6 +393,7 @@ cargo run -p darwin-protocol-account --bin flow_b_demo -- \\
           </div>
         )}
 
+        <FpiNoteRoots />
         <DarwinScriptsPanel />
       </main>
     </>
