@@ -23,7 +23,6 @@ import priceOracleMasm from "./masm/price_oracle.masm";
 // FPI variants (trustless price via Pragma execute_foreign_procedure — no keeper).
 import navDepositNoteFpiMasm from "./masm/nav_deposit_note_fpi.masm";
 import navRedeemNoteFpiMasm from "./masm/nav_redeem_note_fpi.masm";
-import priceOracleFpiMasm from "./masm/price_oracle_fpi.masm";
 import pragmaFpiMasm from "./masm/pragma_fpi.masm";
 // Server-free network backup: the browser-compiled backup_write note + the pack
 // helpers/keys it shares with the on-chain backup read.
@@ -54,13 +53,19 @@ export const NAV_NOTE_LIBRARIES = [
 
 /**
  * FPI-basket libraries: the note reads live Pragma medians via
- * execute_foreign_procedure (pragma_fpi) and prices against them (price_oracle_fpi
- * sources prices from FPI memory, not the keeper feed). math first (referenced by
- * both), then the FPI price oracle + the pragma FPI loader.
+ * execute_foreign_procedure (pragma_fpi) and prices against them via
+ * price_oracle::compute_v_fpi. The prices are handed to compute_v_fpi ACROSS THE
+ * `call` ON THE STACK — the note writes them to mem[230..232] in its own context,
+ * but compute_v is `call`ed (fresh memory context) and cannot see that memory, so
+ * the note reads them back and pushes them. This uses the SAME consolidated
+ * `price_oracle.masm` as the keeper path (it exports both compute_v and
+ * compute_v_fpi); the old `price_oracle_fpi.masm` — whose compute_v read mem
+ * directly and therefore priced cash-only across the call — was retired.
+ * math first (referenced by both), then the price oracle + the pragma FPI loader.
  */
 export const NAV_NOTE_FPI_LIBRARIES = [
   { namespace: "darwin::math", code: mathMasm, linking: "static" as const },
-  { namespace: "darwin::price_oracle", code: priceOracleFpiMasm, linking: "static" as const },
+  { namespace: "darwin::price_oracle", code: priceOracleMasm, linking: "static" as const },
   { namespace: "darwin::pragma_fpi", code: pragmaFpiMasm, linking: "static" as const },
 ];
 
