@@ -36,17 +36,16 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   // redeem: the v12 nav faucet (deploy_v12_nav_faucet) allowlists both the
   // nav_deposit and nav_redeem notes. See darwin-relay send_nav_deposit /
   // send_nav_redeem.
+  // v13 FPI NAV faucet (deployed 2026-08-08, tx 0x9f5d1919…) with the CORRECT
+  // price_oracle::compute_v_fpi component — prices the vault at the LIVE Pragma NAV
+  // read on-chain via execute_foreign_procedure, no price keeper. The prices are
+  // handed to compute_v_fpi across the `call` ON THE STACK (the note reads the FPI
+  // mem[230..232] it loaded and pushes them). Fixes the retired price_oracle_fpi
+  // faucet (0x42a1) which read that memory across the call boundary — where it is 0
+  // — and priced cash-only. Allowlists the browser FPI deposit (0xdc67c17d…) +
+  // redeem (0xed234b74…) roots.
   DCC: {
-    // ⚠️ REDEPLOY PENDING. This faucet (0x42a1) was built with the retired
-    // `price_oracle_fpi` component, whose `compute_v` reads the FPI prices from
-    // mem[230..232] but is `call`ed (fresh memory context) so those reads are 0 →
-    // it prices the vault CASH-ONLY, ignoring the crypto constituents (V = D·100).
-    // The fix (price_oracle::compute_v_fpi, which takes the prices across the call
-    // ON THE STACK) requires a NEW faucet: deploy via deploy_v13_fpi_faucet (now
-    // wired to price_oracle.masm), --allow-root the browser's new FPI note roots,
-    // then replace this id. Until then DCC prices cash-only. Superseded the
-    // feed-based v21 (0x817d64ee…) whose keeper (nav-orchestrate) is decommissioned.
-    id: "0x42a122b9a3f7a31171af414436c901",
+    id: "0xd69113401b96d491688aa1ba6af929",
     decimals: 8,
     nav: true,
     fpi: true,
@@ -54,11 +53,9 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   // Legacy 1:1 confidential faucets — not yet migrated to NAV.
   DAG: { id: "0x2fe3469cccf61a710d321df38c4ca1", decimals: 6, nav: false },
   DCO: { id: "0xf1a4752b3689beb110eebec647df20", decimals: 6, nav: false },
-  // FPI test basket — shares the DCC faucet (0x42a1). Same ⚠️ REDEPLOY PENDING as
-  // DCC: built with the retired cash-only price_oracle_fpi component; the fix
-  // (compute_v_fpi) needs a fresh faucet + re-pointed id. See DCC above.
+  // FPI test basket — shares the live DCC FPI faucet (compute_v_fpi). See DCC above.
   DCF: {
-    id: "0x42a122b9a3f7a31171af414436c901",
+    id: "0xd69113401b96d491688aa1ba6af929",
     decimals: 8,
     nav: true,
     fpi: true,
