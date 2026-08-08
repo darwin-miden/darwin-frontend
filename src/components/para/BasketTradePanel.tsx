@@ -602,20 +602,29 @@ export function BasketTradePanel({
           // payback prediction is unconsumable and the claim hangs forever. A client
           // read that eventually resolves is the only correct price for an FPI basket.
           const readFpiNav = async () => {
+            // The public testnet RPC is LOAD-BALANCED across replicas, several of
+            // which lag behind chain tip (see resilientSync). A lagging replica has
+            // stale/absent Pragma publisher entries → get_median returns found=0 →
+            // "pragma <pair> not tracked". Each executeProgram re-fetches the Pragma
+            // foreign accounts (per their storage requirements), so retrying — with a
+            // re-sync between — eventually routes to a caught-up replica whose entries
+            // are fresh. Retry over a WINDOW (not a fixed 8) so an intermittently-fresh
+            // feed resolves rather than failing after ~12s; time-bounded so a fully-down
+            // feed still surfaces the retry message instead of hanging.
+            const deadlineMs = Date.now() + 40_000;
             let lastErr: unknown;
-            for (let i = 0; i < 8; i++) {
+            let attempt = 0;
+            do {
               try {
                 return await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead);
               } catch (e) {
                 lastErr = e;
-                // Re-sync so the publisher's price entries can land. resilientSync retries
-                // through transient replica lag ("block_to > chain tip") internally, so a
-                // lagging node no longer aborts the read — the next round hits a caught-up
-                // replica once the sync succeeds.
+                attempt += 1;
                 await resilientSync(runExclusive, syncState);
-                await sleep(1500);
+                await sleep(1200);
               }
-            }
+            } while (Date.now() < deadlineMs);
+            console.warn(`[client-buy] FPI NAV read gave up after ${attempt} attempts (~40s) — testnet replica lag`);
             throw lastErr;
           };
           const nav = fpi
@@ -770,20 +779,29 @@ export function BasketTradePanel({
           // payback prediction is unconsumable and the claim hangs forever. A client
           // read that eventually resolves is the only correct price for an FPI basket.
           const readFpiNav = async () => {
+            // The public testnet RPC is LOAD-BALANCED across replicas, several of
+            // which lag behind chain tip (see resilientSync). A lagging replica has
+            // stale/absent Pragma publisher entries → get_median returns found=0 →
+            // "pragma <pair> not tracked". Each executeProgram re-fetches the Pragma
+            // foreign accounts (per their storage requirements), so retrying — with a
+            // re-sync between — eventually routes to a caught-up replica whose entries
+            // are fresh. Retry over a WINDOW (not a fixed 8) so an intermittently-fresh
+            // feed resolves rather than failing after ~12s; time-bounded so a fully-down
+            // feed still surfaces the retry message instead of hanging.
+            const deadlineMs = Date.now() + 40_000;
             let lastErr: unknown;
-            for (let i = 0; i < 8; i++) {
+            let attempt = 0;
+            do {
               try {
                 return await readFaucetNavBrowserFpi(executeProgram, clientFaucet, prep.navRead);
               } catch (e) {
                 lastErr = e;
-                // Re-sync so the publisher's price entries can land. resilientSync retries
-                // through transient replica lag ("block_to > chain tip") internally, so a
-                // lagging node no longer aborts the read — the next round hits a caught-up
-                // replica once the sync succeeds.
+                attempt += 1;
                 await resilientSync(runExclusive, syncState);
-                await sleep(1500);
+                await sleep(1200);
               }
-            }
+            } while (Date.now() < deadlineMs);
+            console.warn(`[client-buy] FPI NAV read gave up after ${attempt} attempts (~40s) — testnet replica lag`);
             throw lastErr;
           };
           const nav = fpi
