@@ -331,11 +331,12 @@ const PRAGMA_ENTRIES_SLOT = "pragma::publisher::entries";
 
 /**
  * DCC constituent Pragma pair indices, in the order pragma_fpi.masm::load_prices
- * reads them: WBTC=3, ETH=2, USDT=4. The read must expose the publisher's entries
- * for exactly these pairs (a get_median for an un-exposed pair can't resolve its
- * get_map_item and the FPI read faults).
+ * reads them: BTC=1 (prices the dWBTC constituent — Pragma testnet publishes BTC,
+ * not WBTC, and DCC is BTC exposure), ETH=2, USDT=4. The read must expose the
+ * publisher's entries for exactly these pairs (a get_median for an un-exposed pair
+ * can't resolve its get_map_item and the FPI read faults).
  */
-const FPI_PAIR_INDICES = [3n, 2n, 4n];
+const FPI_PAIR_INDICES = [1n, 2n, 4n];
 
 /**
  * The foreign-account descriptors get_median needs for a LOCAL FPI read: the

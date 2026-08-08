@@ -1,6 +1,9 @@
 # Darwin Pragma FPI price loader — reads the 3 DCC constituent medians from the
 # live Pragma oracle via execute_foreign_procedure (the NTB lazy-loads Pragma).
-#   mem[230]=wbtc eff=median/1e8   mem[231]=eth eff=median/1e8   mem[232]=usdt eff=median/1e4
+#   mem[230]=btc eff=median/1e8    mem[231]=eth eff=median/1e8   mem[232]=usdt eff=median/1e4
+# NB: the dWBTC constituent is priced from BTC/USD (pair 1), not WBTC/USD (pair 3) —
+# Pragma testnet publishes BTC but not WBTC, and the DCC basket is BTC exposure
+# (dWBTC ≈ BTC). Same /1e8 scale (both are 6-dec crypto medians).
 # Pragma get_median frame: [pair_prefix, suffix=0, amount=0, 0, pad12], then root(4), id(2).
 use miden::protocol::tx
 use miden::core::sys
@@ -12,11 +15,11 @@ const ROOT = 0xaa3a12d4e9de2dad37c50dba93809b9c17226d512e642d3d620c77088a85da71
 
 #! Load all three effective prices into mem[230..232]. Inputs: []  Output: [].
 pub proc load_prices
-    # --- wbtc (pair 3), /1e8 → mem[230] ---
-    padw padw padw push.0.0.0.3
+    # --- btc (pair 1), /1e8 → mem[230] (prices the dWBTC constituent) ---
+    padw padw padw push.0.0.0.1
     push.ROOT push.PRAGMA_PRE.PRAGMA_SUF
     exec.tx::execute_foreign_procedure
-    push.1 assert_eq.err="pragma wbtc not tracked"
+    push.1 assert_eq.err="pragma btc not tracked"
     mem_store.229 dropw dropw dropw drop drop
     push.100000000 push.229 mem_load exec.math::felt_div mem_store.230
 

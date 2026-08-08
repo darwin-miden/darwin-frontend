@@ -36,16 +36,15 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   // redeem: the v12 nav faucet (deploy_v12_nav_faucet) allowlists both the
   // nav_deposit and nav_redeem notes. See darwin-relay send_nav_deposit /
   // send_nav_redeem.
-  // v13 FPI NAV faucet (deployed 2026-08-08, tx 0x9f5d1919…) with the CORRECT
+  // v13 FPI NAV faucet (redeployed 2026-08-08, tx 0x7bfa8e07…) with the correct
   // price_oracle::compute_v_fpi component — prices the vault at the LIVE Pragma NAV
-  // read on-chain via execute_foreign_procedure, no price keeper. The prices are
-  // handed to compute_v_fpi across the `call` ON THE STACK (the note reads the FPI
-  // mem[230..232] it loaded and pushes them). Fixes the retired price_oracle_fpi
-  // faucet (0x42a1) which read that memory across the call boundary — where it is 0
-  // — and priced cash-only. Allowlists the browser FPI deposit (0xdc67c17d…) +
-  // redeem (0xed234b74…) roots.
+  // read on-chain via execute_foreign_procedure, no price keeper. Prices are handed
+  // to compute_v_fpi across the `call` ON THE STACK. The dWBTC constituent is priced
+  // from BTC/USD (Pragma pair 1) — Pragma testnet publishes BTC, not WBTC (pair 3),
+  // and DCC is BTC exposure. Allowlists the browser FPI deposit (0x89fc782b…) +
+  // redeem (0x81f97965…) roots.
   DCC: {
-    id: "0xd69113401b96d491688aa1ba6af929",
+    id: "0x8c6f0be6889949f172043c9b73a85f",
     decimals: 8,
     nav: true,
     fpi: true,
@@ -55,7 +54,7 @@ export const BASKET_FAUCETS: Record<string, BasketFaucet> = {
   DCO: { id: "0xf1a4752b3689beb110eebec647df20", decimals: 6, nav: false },
   // FPI test basket — shares the live DCC FPI faucet (compute_v_fpi). See DCC above.
   DCF: {
-    id: "0xd69113401b96d491688aa1ba6af929",
+    id: "0x8c6f0be6889949f172043c9b73a85f",
     decimals: 8,
     nav: true,
     fpi: true,
