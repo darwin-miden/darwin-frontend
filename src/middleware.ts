@@ -7,15 +7,15 @@ import type { NextRequest } from "next/server";
  *     reachable on the public production surface. A client-side `notFound()` only fires
  *     after hydration (the prerendered HTML still serves 200), so we 404 at the edge.
  *     Left reachable under `next dev` so the operator can use it locally.
- *  2. NONCE-based Content-Security-Policy. The derived Falcon signing key lives in the
- *     browser, so the CSP is the last line of defence against an injected script
- *     exfiltrating it. `script-src` now allows ONLY a per-request nonce (+ wasm/eval for
- *     the STARK prover / dev HMR) instead of `'unsafe-inline'` — an injected inline
- *     `<script>` no longer runs. Next reads the nonce from the CSP on the request headers
- *     and stamps its own bootstrap scripts with it automatically.
+ *  2. Content-Security-Policy. `script-src` uses 'unsafe-inline' (not a nonce): Next
+ *     STATICALLY prerenders the pages (e.g. /para), and a per-request middleware nonce
+ *     cannot be injected into already-baked HTML — a nonce CSP then blocks the static
+ *     pages' inline bootstrap scripts, so React never hydrates → blank page. Allowing
+ *     inline scripts keeps the app working while the rest of the CSP (default-src 'self',
+ *     object-src/frame-ancestors 'none', a connect-src allowlist, …) still constrains it.
  */
 
-function buildCsp(nonce: string): string {
+function buildCsp(): string {
   const dev = process.env.NODE_ENV === "development";
   return [
     "default-src 'self'",
@@ -23,9 +23,9 @@ function buildCsp(nonce: string): string {
     "object-src 'none'",
     "frame-ancestors 'none'",
     "form-action 'self'",
-    // NONCE replaces 'unsafe-inline'. 'wasm-unsafe-eval' for the STARK prover; in dev also
-    // 'unsafe-eval' for React-Refresh/HMR (prod ships neither unsafe-inline nor unsafe-eval).
-    `script-src 'self' 'nonce-${nonce}' 'wasm-unsafe-eval'${dev ? " 'unsafe-eval'" : ""}`,
+    // 'unsafe-inline' (see header note — nonce CSP is incompatible with static prerender).
+    // 'wasm-unsafe-eval' for the STARK prover; dev adds 'unsafe-eval' for React-Refresh/HMR.
+    `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${dev ? " 'unsafe-eval'" : ""}`,
     // Inline `style=` attributes are used throughout (React inline styles); nonce-ing every
     // one isn't feasible, so style-src keeps 'unsafe-inline' (styles can't exfil a key).
     "style-src 'self' 'unsafe-inline'",
@@ -66,20 +66,9 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // 2) per-request nonce CSP (base64 of 16 random bytes)
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  const nonce = btoa(String.fromCharCode(...bytes));
-  const csp = buildCsp(nonce);
-
-  // Next reads the nonce from the CSP set on the REQUEST headers and applies it to its
-  // injected scripts; we also set it on the response so the browser enforces it.
-  const requestHeaders = new Headers(request.headers);
-  requestHeaders.set("x-nonce", nonce);
-  requestHeaders.set("Content-Security-Policy", csp);
-
-  const response = NextResponse.next({ request: { headers: requestHeaders } });
-  response.headers.set("Content-Security-Policy", csp);
+  // 2) Content-Security-Policy on the response.
+  const response = NextResponse.next();
+  response.headers.set("Content-Security-Policy", buildCsp());
   return response;
 }
 
